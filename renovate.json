@@ -6,61 +6,87 @@
     ":dependencyDashboard",
     ":semanticCommits"
   ],
-
   "timezone": "Europe/Berlin",
   "prHourlyLimit": 10,
   "prConcurrentLimit": 5,
   "rebaseWhen": "behind-base-branch",
   "separateMinorPatch": true,
   "rangeStrategy": "bump",
-
   "automergeType": "branch",
   "ignoreTests": true,
-
-  "labels": ["dependencies"],
-
+  "labels": [
+    "dependencies"
+  ],
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
   },
-
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"],
+    "labels": [
+      "security"
+    ],
     "automerge": true,
-    "schedule": ["at any time"]
+    "schedule": [
+      "at any time"
+    ]
   },
-
   "packageRules": [
     {
       "description": "Automatically merge minor and patch-level updates for production dependencies",
-      "matchUpdateTypes": ["minor", "patch"],
-      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchDepTypes": [
+        "dependencies"
+      ],
       "automerge": true
     },
     {
       "description": "Disable automerge for major updates",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false
     },
     {
       "description": "Group all non-major Maven dependencies",
-      "matchDatasources": ["maven"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchDatasources": [
+        "maven"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "maven non-major dependencies"
     },
     {
       "description": "Group all non-major npm production dependencies",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["dependencies"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "dependencies"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "npm production dependencies"
     },
     {
       "description": "Group all npm dev dependencies",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["devDependencies"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "npm dev dependencies"
     },
     {
@@ -71,25 +97,37 @@
     },
     {
       "description": "Pin GitHub Actions to commit SHA for security",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "pinDigests": true
     },
     {
       "description": "Security updates should merge immediately",
-      "matchUpdateTypes": ["patch"],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "matchCurrentVersion": "/.*/",
-      "matchPackagePatterns": ["*"],
       "vulnerabilityAlerts": {
         "enabled": true
       },
       "automerge": true,
-      "schedule": ["at any time"]
+      "schedule": [
+        "at any time"
+      ],
+      "matchPackageNames": [
+        "*"
+      ]
     },
     {
       "description": "Spring Boot and related dependencies",
-      "matchPackagePatterns": ["^org\\.springframework"],
-      "matchDatasources": ["maven"],
-      "groupName": "Spring Framework"
+      "matchDatasources": [
+        "maven"
+      ],
+      "groupName": "Spring Framework",
+      "matchPackageNames": [
+        "/^org\\.springframework/"
+      ]
     }
   ]
 }
