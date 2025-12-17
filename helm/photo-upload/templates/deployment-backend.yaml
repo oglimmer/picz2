@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "photo-upload.backend.fullname" . }}
+  labels:
+    {{- include "photo-upload.backend.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "photo-upload.backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "photo-upload.backend.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "photo-upload.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Values.backend.name }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: MARIADB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.host
+        - name: MARIADB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.port
+        - name: MARIADB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.name
+        - name: MARIADB_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: database.user
+        - name: MARIADB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: database.password
+        - name: JAVA_OPTS
+          value: {{ .Values.backend.javaOpts | quote }}
+        - name: FILE_UPLOAD_BASE_PATH
+          value: {{ .Values.backend.persistence.mountPath | quote }}
+        - name: APP_BASE_URL
+          value: {{ .Values.backend.baseUrl | default "https://picz2.oglimmer.com" | quote }}
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.backend.resources | nindent 10 }}
+        volumeMounts:
+        {{- if .Values.backend.persistence.enabled }}
+        - name: uploads
+          mountPath: {{ .Values.backend.persistence.mountPath }}
+        {{- end }}
+      volumes:
+      {{- if .Values.backend.persistence.enabled }}
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: {{ include "photo-upload.fullname" . }}-uploads
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for photo access (read only) -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>The app needs access to your photos to back them up.</string>
+
+    <!-- BackgroundTasks identifiers you register in code -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.oglimmer.photosync.process</string>
+        <string>com.oglimmer.photosync.refresh</string>
+    </array>
+
+    <!-- Background modes: enable in Capabilities (Xcode will manage entitlements) -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>processing</string>
+    </array>
+</dict>
+</plist>

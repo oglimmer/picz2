@@ -1,0 +1,26 @@
+http:
+  routers:
+    api-router:
+      rule: "PathPrefix(`/api`) || PathPrefix(`/swagger-ui/`) || PathPrefix(`/v3/api-docs`)"
+      service: api-service
+      entryPoints:
+        - web
+      priority: 100
+
+    web-router:
+      rule: "PathPrefix(`/`)"
+      service: web-service
+      entryPoints:
+        - web
+      priority: 1
+
+  services:
+    api-service:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:8080"
+
+    web-service:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:5173"

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: { { include "photo-upload.frontend.fullname" . } }
+  labels: { { - include "photo-upload.frontend.labels" . | nindent 4 } }
+spec:
+  type: { { .Values.frontend.service.type } }
+  ports:
+    - port: { { .Values.frontend.service.port } }
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    { { - include "photo-upload.frontend.selectorLabels" . | nindent 4 } }

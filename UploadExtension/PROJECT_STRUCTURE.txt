@@ -1,0 +1,56 @@
+photo-upload/
+│
+├── PhotoUploader.xcodeproj/          # Xcode project
+│   └── project.pbxproj               # Project configuration
+│
+├── PhotoUploader/                    # Main macOS app
+│   ├── PhotoUploaderApp.swift        # App entry point
+│   ├── ContentView.swift             # Main UI (instructions)
+│   ├── PhotoUploader.entitlements    # App permissions
+│   └── Assets.xcassets/              # App icons & assets
+│
+├── ShareExtension/                   # Share Extension
+│   ├── ShareViewController.swift     # Extension UI & logic (215 lines)
+│   ├── Info.plist                    # Extension configuration
+│   └── ShareExtension.entitlements   # Extension permissions
+│
+├── Shared/                           # Code shared between targets
+│   └── UploadService.swift           # Upload implementation (147 lines)
+│
+├── server/                           # Node.js upload server
+│   ├── server.js                     # Express server (230 lines)
+│   ├── package.json                  # Dependencies
+│   ├── test.sh                       # Test script
+│   ├── README.md                     # Server API documentation
+│   ├── .gitignore                    # Git ignore rules
+│   └── uploads/                      # Upload directory (created at runtime)
+│
+├── Documentation Files:
+│   ├── README.md                     # Main project readme
+│   ├── START.md                      # Quick start guide
+│   ├── QUICKSTART.md                 # Quick reference
+│   ├── INTEGRATION_GUIDE.md          # Full integration guide
+│   ├── TROUBLESHOOTING.md            # Common issues & solutions
+│   ├── PROJECT_SUMMARY.md            # Technical overview
+│   ├── BUILD_STATUS.md               # Build verification
+│   ├── COMPLETE.md                   # Completion summary
+│   └── PROJECT_STRUCTURE.txt         # This file
+│
+└── .gitignore                        # Git ignore rules
+
+Key Components:
+--------------
+1. PhotoUploader.app           - Main macOS application
+2. ShareExtension.appex         - Share Extension bundle
+3. UploadService               - Handles HTTP uploads
+4. Express Server              - Receives uploaded files
+
+File Count:
+-----------
+- Swift files: 5
+- JavaScript files: 1
+- Documentation: 9
+- Configuration: 5
+
+Total Lines of Code: ~600
+Documentation Pages: 9

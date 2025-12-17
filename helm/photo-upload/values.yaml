@@ -1,0 +1,140 @@
+# Default values for photo-upload
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+# Backend (API) configuration
+backend:
+  name: api
+  image:
+    repository: registry.oglimmer.com/picz2-be
+    pullPolicy: Always
+    tag: "latest"
+
+  # Base URL for Open Graph meta tags
+  baseUrl: "https://picz2.oglimmer.com"
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+  # Java-specific settings
+  javaOpts: "-Xmx1536m -Xms768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+  # Persistent volume for uploads
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    mountPath: /app/uploads
+
+# Frontend configuration
+frontend:
+  name: web
+  image:
+    repository: registry.oglimmer.com/picz2-fe
+    pullPolicy: Always
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Database configuration (external MariaDB)
+database:
+  # External database configuration
+  external:
+    enabled: true
+    host: mariadb
+    port: 3306
+    name: photoupload
+    user: photoupload
+    # Password should be set via --set or in a separate secret
+    password: "photoupload"
+
+# Ingress configuration with Traefik support
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: "oglimmer-com-dns"
+  hosts:
+    - host: picz2.oglimmer.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        # Swagger/OpenAPI endpoints
+        - path: /swagger-ui
+          pathType: Prefix
+          backend: api
+        - path: /swagger-ui.html
+          pathType: Prefix
+          backend: api
+        - path: /v3/api-docs
+          pathType: Prefix
+          backend: api
+        # Public album pages for Open Graph (must come before frontend catch-all)
+        - path: /public/album
+          pathType: Prefix
+          backend: api
+        # Frontend must be last as it's the catch-all
+        - path: /
+          pathType: Prefix
+          backend: web
+  tls:
+    - secretName: tls-picz2-ingress-dns
+      hosts:
+        - picz2.oglimmer.com
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 10001
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Image pull secrets
+imagePullSecrets:
+  - name: oglimmerregistrykey

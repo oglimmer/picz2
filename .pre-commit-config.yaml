@@ -1,0 +1,77 @@
+repos:
+  # Leaking credentials, secrets, tokens, passwords
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.29.0
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secrets scan)
+        args: ["detect", "--staged", "--redact", "--config=.gitleaks.toml"]
+
+  # Leaking credentials, secrets, tokens, passwords
+  - repo: https://github.com/trufflesecurity/truffleHog
+    rev: v3.90.13
+    hooks:
+      - id: trufflehog
+        args: ['--no-update']
+
+  # Generic hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: [--maxkb=800]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-symlinks
+      - id: forbid-submodules
+
+
+  # Run `helm lint` for charts (system or docker)
+  - repo: local
+    hooks:
+      - id: helm-lint
+        name: helm lint
+        entry: bash -c 'for d in helm/* charts/*; do [ -d "$d" ] && helm lint "$d" || true; done'
+        files: ^helm/
+        language: system
+        pass_filenames: false
+
+  # Java formatting
+  - repo: local
+    hooks:
+      - id: spotless-java
+        name: spotless (java)
+        entry: bash -c "cd server && ./mvnw spotless:check"
+        files: ^server/
+        language: system
+        types_or: [java]
+        pass_filenames: false
+
+  # Swift (iOS)
+  - repo: local
+    hooks:
+      - id: swiftlint
+        name: SwiftLint
+        entry: bash -c "cd ios/PhotoCloudSync/ && swiftlint --quiet"
+        files: ^ios/
+        language: system
+        types_or: [swift]
+      - id: swiftformat
+        name: SwiftFormat
+        entry: swiftformat --swift-version 6.2 .
+        files: ^ios/
+        language: system
+        types_or: [swift]
+        pass_filenames: false
+
+  # Node (JS/TS) – eslint + prettier via mirrors
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: bash -c "cd frontend && npm run lint && npm run type-check"
+        files: ^frontend/
+        language: system

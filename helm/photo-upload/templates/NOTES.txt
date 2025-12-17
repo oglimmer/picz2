@@ -1,0 +1,66 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get all {{ .Release.Name }}
+
+{{- if .Values.ingress.enabled }}
+
+The application is available at:
+
+{{- range .Values.ingress.hosts }}
+  {{- if .host }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+  {{- end }}
+{{- end }}
+
+{{- else }}
+
+To access the application:
+
+1. Get the frontend service URL:
+   {{- if contains "NodePort" .Values.frontend.service.type }}
+   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "photo-upload.frontend.fullname" . }})
+   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+   echo http://$NODE_IP:$NODE_PORT
+   {{- else if contains "LoadBalancer" .Values.frontend.service.type }}
+   NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+         You can watch the status by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "photo-upload.frontend.fullname" . }}'
+   export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "photo-upload.frontend.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+   echo http://$SERVICE_IP:{{ .Values.frontend.service.port }}
+   {{- else if contains "ClusterIP" .Values.frontend.service.type }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "photo-upload.frontend.fullname" . }} 8080:{{ .Values.frontend.service.port }}
+   echo "Visit http://127.0.0.1:8080 to use your application"
+   {{- end }}
+
+2. Backend API is available at:
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "photo-upload.backend.fullname" . }} 8080:{{ .Values.backend.service.port }}
+   echo "Visit http://127.0.0.1:8080/api to access the API"
+{{- end }}
+
+Database Configuration:
+  Host: {{ include "photo-upload.database.host" . }}
+  Port: {{ include "photo-upload.database.port" . }}
+  Database: {{ include "photo-upload.database.name" . }}
+
+{{- if .Values.backend.persistence.enabled }}
+
+Persistent Storage:
+  A PersistentVolumeClaim has been created for uploaded photos.
+  Size: {{ .Values.backend.persistence.size }}
+  {{- if .Values.backend.persistence.storageClass }}
+  Storage Class: {{ .Values.backend.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+To check the status of your deployment:
+
+  $ kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+To view logs:
+
+  Backend:  kubectl logs -l app.kubernetes.io/name={{ include "photo-upload.name" . }}-backend
+  Frontend: kubectl logs -l app.kubernetes.io/name={{ include "photo-upload.name" . }}-frontend

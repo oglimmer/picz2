@@ -1,0 +1,95 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":enableVulnerabilityAlerts",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+
+  "timezone": "Europe/Berlin",
+  "prHourlyLimit": 10,
+  "prConcurrentLimit": 5,
+  "rebaseWhen": "behind-base-branch",
+  "separateMinorPatch": true,
+  "rangeStrategy": "bump",
+
+  "automergeType": "branch",
+  "ignoreTests": true,
+
+  "labels": ["dependencies"],
+
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "automerge": true,
+    "schedule": ["at any time"]
+  },
+
+  "packageRules": [
+    {
+      "description": "Automatically merge minor and patch-level updates for production dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchDepTypes": ["dependencies"],
+      "automerge": true
+    },
+    {
+      "description": "Disable automerge for major updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Group all non-major Maven dependencies",
+      "matchDatasources": ["maven"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "maven non-major dependencies"
+    },
+    {
+      "description": "Group all non-major npm production dependencies",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm production dependencies"
+    },
+    {
+      "description": "Group all npm dev dependencies",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm dev dependencies"
+    },
+    {
+      "description": "Disable automerge and group pre-1.0 packages",
+      "matchCurrentVersion": "/^0\\./",
+      "automerge": false,
+      "groupName": "unstable (0.x) dependencies"
+    },
+    {
+      "description": "Pin GitHub Actions to commit SHA for security",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Security updates should merge immediately",
+      "matchUpdateTypes": ["patch"],
+      "matchCurrentVersion": "/.*/",
+      "matchPackagePatterns": ["*"],
+      "vulnerabilityAlerts": {
+        "enabled": true
+      },
+      "automerge": true,
+      "schedule": ["at any time"]
+    },
+    {
+      "description": "Spring Boot and related dependencies",
+      "matchPackagePatterns": ["^org\\.springframework"],
+      "matchDatasources": ["maven"],
+      "groupName": "Spring Framework"
+    }
+  ]
+}

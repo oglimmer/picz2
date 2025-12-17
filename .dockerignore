@@ -1,0 +1,60 @@
+# Keep build context lean; mirror .gitignore where sensible
+
+# IMPORTANT: Do NOT ignore .git — server/Dockerfile copies it to embed commit info
+!.git
+
+# OS/Editor files
+.DS_Store
+**/.DS_Store
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+*.iml
+*.iws
+*.ipr
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Build artifacts
+target/
+server/target/
+build/
+dist/
+frontend/dist/
+
+# Local data and volumes
+mariadb_data/
+uploads/
+server/uploads/
+data/
+init-db/
+
+# Logs
+*.log
+*.out
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Docker/compose and local infra files (not needed in image builds)
+compose.yml
+compose.local.yml
+traefik-local.yml
+
+# Project-specific folders not needed for image builds
+bin/
+helm/
+ios/
+UploadExtension/
+
+# Tooling caches
+.claude/
+**/.claude/
+
+# Ignore gitignore itself
+.gitignore

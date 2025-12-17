@@ -1,0 +1,70 @@
+╔═══════════════════════════════════════════════════════════╗
+║           Photo Uploader - Quick Install                 ║
+╚═══════════════════════════════════════════════════════════╝
+
+📦 INSTALLATION OPTIONS:
+
+Option 1: Automated Install (Recommended)
+  $ ./install.sh
+
+  This will:
+  ✓ Build the app
+  ✓ Install to /Applications
+  ✓ Register the Share Extension
+  ✓ Launch automatically
+
+Option 2: Release Build (For Distribution)
+  $ ./build-release.sh
+
+  Output: ./release/PhotoUploader.app
+  Then manually copy to /Applications
+
+Option 3: Manual in Xcode
+  $ open PhotoUploader.xcodeproj
+
+  Press ⌘+R to build and run
+
+═══════════════════════════════════════════════════════════
+
+📝 AFTER INSTALLATION:
+
+1. Launch Photo Uploader from Applications
+2. Configure your server URL (e.g., http://localhost:8080)
+3. Enter your credentials
+4. Open Photos.app
+5. Select photos → Share → "Upload Photos"
+
+═══════════════════════════════════════════════════════════
+
+📚 DOCUMENTATION:
+
+  README.md         - Complete user guide
+  INSTALL.md        - Detailed installation steps
+  CODE_SIGNING.md   - How to sign for distribution
+  DISTRIBUTION.md   - Release checklist
+  TROUBLESHOOTING.md - Common issues
+
+═══════════════════════════════════════════════════════════
+
+🔧 REQUIREMENTS:
+
+  • macOS 14.0+ (Sonoma or later)
+  • Xcode 15.0+ (for building)
+  • Photo upload server running
+
+═══════════════════════════════════════════════════════════
+
+💡 QUICK TEST:
+
+After installation, test immediately:
+  1. Open Photos.app
+  2. Select a photo
+  3. Click Share button
+  4. Look for "Upload Photos"
+  5. Click Upload
+
+If it doesn't appear:
+  - Restart Photos.app
+  - Check System Settings → Extensions → Sharing
+
+═══════════════════════════════════════════════════════════

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Page Title -->
+    <title th:text="${album.name} + ' - Photo'">Photo</title>
+
+    <!-- Canonical URL -->
+    <link rel="canonical" th:href="${baseUrl} + '/public/album/' + ${shareToken} + '/' + ${imageToken}">
+
+    <!-- Primary Meta Tags -->
+    <meta name="title" th:content="${description}">
+    <meta name="description" th:content="${description}">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="article">
+    <meta property="og:url" th:content="${baseUrl} + '/public/album/' + ${shareToken} + '/' + ${imageToken}">
+    <meta property="og:title" th:content="${description}">
+    <meta property="og:description" th:content="'Photo from ' + ${album.name}">
+    <meta property="og:image" th:content="${coverImageUrl}">
+    <meta property="og:image:type" th:if="${coverImageType}" th:content="${coverImageType}">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:site_name" content="Photo Gallery">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" th:content="${baseUrl} + '/public/album/' + ${shareToken} + '/' + ${imageToken}">
+    <meta name="twitter:title" th:content="${description}">
+    <meta name="twitter:description" th:content="'Photo from ' + ${album.name}">
+    <meta name="twitter:image" th:content="${coverImageUrl}">
+
+    <!-- Redirect to the Vue SPA -->
+    <script type="text/javascript">
+        // This page is primarily for social media crawlers
+        // Redirect users to the actual SPA (bots won't execute this)
+        window.location.replace('/app/public/album/' + '[[${shareToken}]]' + '/' + '[[${imageToken}]]');
+    </script>
+
+    <!-- Noscript fallback -->
+    <noscript>
+        <meta http-equiv="refresh" th:content="'0; url=/app/public/album/' + ${shareToken} + '/' + ${imageToken}">
+    </noscript>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+        }
+        h1 {
+            margin-bottom: 1rem;
+        }
+        p {
+            opacity: 0.9;
+        }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 2rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <h1 th:text="${album.name}">Loading...</h1>
+        <p th:text="${description}">Redirecting to photo...</p>
+    </div>
+</body>
+</html>
