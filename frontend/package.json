@@ -17,10 +17,10 @@
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.2",
+    "@eslint/js": "^9.39.3",
     "@types/node": "^24.10.13",
     "@vitejs/plugin-vue": "^6.0.4",
-    "eslint": "^9.39.2",
+    "eslint": "^9.39.3",
     "eslint-plugin-vue": "^10.8.0",
     "globals": "^17.3.0",
     "typescript": "^5.9.3",
