@@ -117,6 +117,7 @@ public class AnalyticsService {
     return fallbackId;
   }
 
+  @Transactional(readOnly = true)
   public AnalyticsStatsResponse getStatisticsForAlbum(Long albumId) {
     // Ensure user has access to this album
     Album album =

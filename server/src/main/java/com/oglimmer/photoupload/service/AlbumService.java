@@ -66,6 +66,7 @@ public class AlbumService {
     return convertToAlbumInfo(album);
   }
 
+  @Transactional(readOnly = true)
   public List<AlbumInfo> listAlbums() {
     User currentUser = userContext.getCurrentUser();
     return albumRepository.findByUserOrderByDisplayOrderAsc(currentUser).stream()
@@ -73,6 +74,7 @@ public class AlbumService {
         .collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public AlbumInfo getAlbum(Long albumId) {
     User currentUser = userContext.getCurrentUser();
     Album album =
@@ -293,6 +295,7 @@ public class AlbumService {
     return null;
   }
 
+  @Transactional(readOnly = true)
   public AlbumInfo getAlbumByShareToken(String shareToken) {
     Album album =
         albumRepository

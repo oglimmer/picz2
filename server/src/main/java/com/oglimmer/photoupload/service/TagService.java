@@ -29,6 +29,7 @@ public class TagService {
   private final UserContext userContext;
   private final TagMapper tagMapper;
 
+  @Transactional(readOnly = true)
   public List<TagInfo> getAllTags() {
     User currentUser = userContext.getCurrentUser();
     return tagMapper.tagsToTagInfos(tagRepository.findByUser(currentUser));

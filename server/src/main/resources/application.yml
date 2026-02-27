@@ -26,6 +26,7 @@ spring:
       pool-name: "HikariPool-PhotoUpload"
       leak-detection-threshold: 60000
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: "validate"
     show-sql: false

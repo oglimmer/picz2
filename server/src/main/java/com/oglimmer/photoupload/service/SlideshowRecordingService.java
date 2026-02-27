@@ -139,6 +139,7 @@ public class SlideshowRecordingService {
     return convertToRecordingInfo(recording);
   }
 
+  @Transactional(readOnly = true)
   public List<RecordingInfo> getAlbumRecordings(Long albumId) {
     User currentUser = userContext.getCurrentUser();
 
@@ -161,6 +162,7 @@ public class SlideshowRecordingService {
    * @param filterTag Tag name to filter by
    * @return List of recordings for the specified tag
    */
+  @Transactional(readOnly = true)
   public List<RecordingInfo> getRecordingsByAlbumAndTag(Long albumId, String filterTag) {
     User currentUser = userContext.getCurrentUser();
 
@@ -184,6 +186,7 @@ public class SlideshowRecordingService {
    * @param filterTag Optional filter tag
    * @return List of recordings
    */
+  @Transactional(readOnly = true)
   public List<RecordingInfo> getRecordingsByShareToken(String shareToken, String filterTag) {
     // Validate album exists by share token
     Album album =
@@ -207,6 +210,7 @@ public class SlideshowRecordingService {
     return recordings.stream().map(this::convertToRecordingInfo).collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public RecordingInfo getRecording(Long recordingId) {
     User currentUser = userContext.getCurrentUser();
     SlideshowRecording recording =
@@ -224,6 +228,7 @@ public class SlideshowRecordingService {
    * @param publicToken The public token
    * @return Recording info
    */
+  @Transactional(readOnly = true)
   public RecordingInfo getRecordingByPublicToken(String publicToken) {
     SlideshowRecording recording =
         slideshowRecordingRepository
@@ -240,6 +245,7 @@ public class SlideshowRecordingService {
    * @param recordingId The recording ID
    * @return Recording audio information DTO
    */
+  @Transactional(readOnly = true)
   public RecordingAudioInfo getRecordingAudioInfo(Long recordingId) {
     User currentUser = userContext.getCurrentUser();
     SlideshowRecording recording =
@@ -257,6 +263,7 @@ public class SlideshowRecordingService {
    * @param publicToken The public token
    * @return Recording audio information DTO
    */
+  @Transactional(readOnly = true)
   public RecordingAudioInfo getRecordingAudioInfoByPublicToken(String publicToken) {
     SlideshowRecording recording =
         slideshowRecordingRepository

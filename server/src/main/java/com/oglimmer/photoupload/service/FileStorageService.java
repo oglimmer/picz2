@@ -199,23 +199,31 @@ public class FileStorageService {
     // ContentId is a stable identifier from the source (e.g., iOS PHAsset.localIdentifier)
     // This is more reliable than checksum for detecting duplicates, especially for HEIC files
     if (contentId != null && !contentId.isBlank()) {
-      List<FileMetadata> existingByContentId =
-          metadataRepository.findByContentIdAndUserId(contentId, currentUser.getId());
-      if (!existingByContentId.isEmpty()) {
-        FileMetadata existing = existingByContentId.get(0);
-        if (existingByContentId.size() > 1) {
-          log.warn(
-              "⚠️ Found {} duplicate files with contentId {}, using first one",
-              existingByContentId.size(),
-              contentId);
-        }
-        log.info(
-            "⚠️ Duplicate file detected by contentId {}: {} (matches existing file: {} in album {}). Upload skipped.",
-            contentId,
-            file.getOriginalFilename(),
-            existing.getOriginalName(),
-            existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
-        return convertToFileInfo(existing);
+      FileInfo duplicateByContentId =
+          transactionTemplate.execute(
+              status -> {
+                List<FileMetadata> existingByContentId =
+                    metadataRepository.findByContentIdAndUserId(contentId, currentUser.getId());
+                if (!existingByContentId.isEmpty()) {
+                  FileMetadata existing = existingByContentId.get(0);
+                  if (existingByContentId.size() > 1) {
+                    log.warn(
+                        "⚠️ Found {} duplicate files with contentId {}, using first one",
+                        existingByContentId.size(),
+                        contentId);
+                  }
+                  log.info(
+                      "⚠️ Duplicate file detected by contentId {}: {} (matches existing file: {} in album {}). Upload skipped.",
+                      contentId,
+                      file.getOriginalFilename(),
+                      existing.getOriginalName(),
+                      existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
+                  return convertToFileInfo(existing);
+                }
+                return null;
+              });
+      if (duplicateByContentId != null) {
+        return duplicateByContentId;
       }
     }
 
@@ -223,36 +231,46 @@ public class FileStorageService {
     byte[] fileBytes = file.getBytes();
     String checksum = calculateChecksum(fileBytes);
 
-    // Check for duplicate in the same album
-    Optional<FileMetadata> existingFile =
-        metadataRepository.findByChecksumAndAlbumIdAndUserId(
-            checksum, effectiveAlbumId, currentUser.getId());
-    if (existingFile.isPresent()) {
-      FileMetadata existing = existingFile.get();
-      log.info(
-          "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
-          effectiveAlbumId,
-          file.getOriginalFilename(),
-          existing.getOriginalName());
-      return convertToFileInfo(existing);
-    }
+    // Check for duplicate by checksum (same album and other albums) in a single transaction
+    FileInfo duplicateByChecksum =
+        transactionTemplate.execute(
+            status -> {
+              // Check for duplicate in the same album
+              Optional<FileMetadata> existingFile =
+                  metadataRepository.findByChecksumAndAlbumIdAndUserId(
+                      checksum, effectiveAlbumId, currentUser.getId());
+              if (existingFile.isPresent()) {
+                FileMetadata existing = existingFile.get();
+                log.info(
+                    "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
+                    effectiveAlbumId,
+                    file.getOriginalFilename(),
+                    existing.getOriginalName());
+                return convertToFileInfo(existing);
+              }
 
-    // Check for duplicate in any other album
-    List<FileMetadata> existingInOtherAlbum = metadataRepository.findByChecksum(checksum);
-    if (!existingInOtherAlbum.isEmpty()) {
-      FileMetadata existing = existingInOtherAlbum.get(0);
-      if (existingInOtherAlbum.size() > 1) {
-        log.warn(
-            "⚠️ Found {} duplicate files with checksum {}, using first one",
-            existingInOtherAlbum.size(),
-            checksum);
-      }
-      log.info(
-          "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
-          file.getOriginalFilename(),
-          existing.getOriginalName(),
-          existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
-      return convertToFileInfo(existing);
+              // Check for duplicate in any other album
+              List<FileMetadata> existingInOtherAlbum =
+                  metadataRepository.findByChecksum(checksum);
+              if (!existingInOtherAlbum.isEmpty()) {
+                FileMetadata existing = existingInOtherAlbum.get(0);
+                if (existingInOtherAlbum.size() > 1) {
+                  log.warn(
+                      "⚠️ Found {} duplicate files with checksum {}, using first one",
+                      existingInOtherAlbum.size(),
+                      checksum);
+                }
+                log.info(
+                    "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
+                    file.getOriginalFilename(),
+                    existing.getOriginalName(),
+                    existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
+                return convertToFileInfo(existing);
+              }
+              return null;
+            });
+    if (duplicateByChecksum != null) {
+      return duplicateByChecksum;
     }
 
     // Generate unique filename
@@ -443,12 +461,14 @@ public class FileStorageService {
     });
   }
 
+  @Transactional(readOnly = true)
   public List<FileInfo> listFiles() {
     return metadataRepository.findAllByOrderByDisplayOrderAsc().stream()
         .map(this::convertToFileInfo)
         .collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public List<FileInfo> listFilesByTag(String tagName) {
     User currentUser = userContext.getCurrentUser();
     Tag tag =
@@ -462,6 +482,7 @@ public class FileStorageService {
         .collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public List<FileInfo> listFilesByAlbum(Long albumId) {
     User currentUser = userContext.getCurrentUser();
     // Return files in specified album (albumId required)
@@ -473,6 +494,7 @@ public class FileStorageService {
         .collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public List<FileInfo> listFilesByAlbumByShareToken(String shareToken) {
     // Return files in specified album (albumId required)
     // Using optimized query with JOIN FETCH to avoid N+1 query problem
@@ -483,6 +505,7 @@ public class FileStorageService {
         .collect(Collectors.toList());
   }
 
+  @Transactional(readOnly = true)
   public FileInfo getFileInfoByPublicToken(String publicToken) {
     FileMetadata metadata =
         metadataRepository
@@ -1016,6 +1039,7 @@ public class FileStorageService {
    * @param size The size variant to serve (original, thumb, medium, large)
    * @return File serve information DTO
    */
+  @Transactional(readOnly = true)
   public FileServeInfo getFileServeInfoByPublicToken(String publicToken, String size) {
     FileMetadata metadata =
         metadataRepository
