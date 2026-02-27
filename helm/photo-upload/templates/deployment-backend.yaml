@@ -69,6 +69,8 @@ spec:
           value: {{ .Values.backend.persistence.mountPath | quote }}
         - name: APP_BASE_URL
           value: {{ .Values.backend.baseUrl | default "https://picz2.oglimmer.com" | quote }}
+        - name: FILE_UPLOAD_MAX_CONCURRENT_PROCESSING
+          value: {{ .Values.backend.maxConcurrentProcessing | default 1 | quote }}
         startupProbe:
           httpGet:
             path: /actuator/health

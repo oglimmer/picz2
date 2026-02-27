@@ -263,9 +263,8 @@ public class FileStorageService {
     Path targetLocation = this.fileStorageLocation.resolve(newFilename);
     Files.write(targetLocation, fileBytes);
 
-    // Convert HEIC/HEIF to JPEG if needed
+    // Detect HEIC/HEIF for conversion inside semaphore
     String contentType = file.getContentType();
-    Path convertedLocation = null;
     boolean isHeic =
         thumbnailService.isHeicFile(contentType)
             || extension.equalsIgnoreCase("heic")
@@ -278,38 +277,6 @@ public class FileStorageService {
         extension,
         isHeic);
 
-    if (isHeic) {
-      String convertedFilename = nameWithoutExtension + "-" + uniqueSuffix + ".jpg";
-      convertedLocation = this.fileStorageLocation.resolve(convertedFilename);
-
-      if (thumbnailService.convertHeicToJpeg(targetLocation, convertedLocation)) {
-        log.info("Converted HEIC/HEIF to JPEG: {} -> {}", originalFilename, convertedFilename);
-
-        // Delete original HEIC/HEIF file
-        Files.deleteIfExists(targetLocation);
-
-        // Update target location and filename to point to converted JPEG
-        targetLocation = convertedLocation;
-        newFilename = convertedFilename;
-        extension = "jpg";
-        contentType = "image/jpeg";
-      } else {
-        // HEIC conversion failed - reject the upload
-        // Delete both the original HEIC file and any failed conversion attempt
-        Files.deleteIfExists(targetLocation);
-        Files.deleteIfExists(convertedLocation);
-
-        String errorMsg =
-            String.format(
-                "Failed to convert HEIC/HEIF file '%s' to JPEG. "
-                    + "This file may use an unsupported HEIC format or have corrupted metadata. "
-                    + "Please try converting the file to JPEG on your device before uploading.",
-                originalFilename);
-        log.error(errorMsg);
-        throw new StorageException(errorMsg);
-      }
-    }
-
     log.info("✅ File uploaded: {} ({})", originalFilename, formatBytes(file.getSize()));
 
     // Generate thumbnails for images (not videos)
@@ -318,7 +285,7 @@ public class FileStorageService {
     String largePath = null;
     String transcodedVideoPath = null;
 
-    // Acquire permit before CPU-intensive processing
+    // Acquire permit before CPU/memory-intensive processing (HEIC conversion, thumbnails, video)
     boolean permitAcquired = false;
     try {
       log.debug(
@@ -326,6 +293,38 @@ public class FileStorageService {
       processingPermits.acquire();
       permitAcquired = true;
       log.debug("Processing permit acquired (available: {})", processingPermits.availablePermits());
+
+      // Convert HEIC/HEIF to JPEG if needed (inside semaphore to limit concurrent ImageMagick processes)
+      if (isHeic) {
+        String convertedFilename = nameWithoutExtension + "-" + uniqueSuffix + ".jpg";
+        Path convertedLocation = this.fileStorageLocation.resolve(convertedFilename);
+
+        if (thumbnailService.convertHeicToJpeg(targetLocation, convertedLocation)) {
+          log.info("Converted HEIC/HEIF to JPEG: {} -> {}", originalFilename, convertedFilename);
+
+          // Delete original HEIC/HEIF file
+          Files.deleteIfExists(targetLocation);
+
+          // Update target location and filename to point to converted JPEG
+          targetLocation = convertedLocation;
+          newFilename = convertedFilename;
+          extension = "jpg";
+          contentType = "image/jpeg";
+        } else {
+          // HEIC conversion failed - reject the upload
+          Files.deleteIfExists(targetLocation);
+          Files.deleteIfExists(convertedLocation);
+
+          String errorMsg =
+              String.format(
+                  "Failed to convert HEIC/HEIF file '%s' to JPEG. "
+                      + "This file may use an unsupported HEIC format or have corrupted metadata. "
+                      + "Please try converting the file to JPEG on your device before uploading.",
+                  originalFilename);
+          log.error(errorMsg);
+          throw new StorageException(errorMsg);
+        }
+      }
 
       if (thumbnailService.isImageFile(contentType)) {
         Path[] thumbnails = thumbnailService.generateAllThumbnails(targetLocation, targetLocation);

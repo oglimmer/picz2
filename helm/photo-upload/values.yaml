@@ -22,7 +22,7 @@ backend:
   resources:
     limits:
       cpu: 4000m
-      memory: 4Gi
+      memory: 6Gi
     requests:
       cpu: 500m
       memory: 1Gi
@@ -30,12 +30,15 @@ backend:
   # Java-specific settings
   javaOpts: "-Xmx1536m -Xms768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 
+  # Max concurrent image/video processing operations (HEIC conversion, thumbnails, transcoding)
+  maxConcurrentProcessing: 1
+
   # Persistent volume for uploads
   persistence:
     enabled: true
     storageClass: ""
     accessMode: ReadWriteOnce
-    size: 10Gi
+    size: 25Gi
     mountPath: /app/uploads
 
 # Frontend configuration

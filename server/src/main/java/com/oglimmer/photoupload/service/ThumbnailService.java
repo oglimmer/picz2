@@ -267,9 +267,16 @@ public class ThumbnailService {
 
       // Use ImageMagick's convert command
       // The AppImage version has latest libheif integration for modern HEIC files
+      // Memory limits prevent ImageMagick from consuming excessive memory
       ProcessBuilder processBuilder =
           new ProcessBuilder(
               "convert",
+              "-limit",
+              "memory",
+              "512MiB",
+              "-limit",
+              "map",
+              "1024MiB",
               originalFile.toAbsolutePath().toString(),
               "-quality",
               "95",
