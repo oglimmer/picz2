@@ -44,7 +44,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -94,6 +96,7 @@ public class FileStorageService {
   private final AlbumRepository albumRepository;
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
+  private final TransactionTemplate transactionTemplate;
 
   // Semaphore to limit concurrent file processing operations (image conversion, thumbnails, etc.)
   private Semaphore processingPermits;
@@ -107,7 +110,8 @@ public class FileStorageService {
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
       FileInfoMapper fileInfoMapper,
-      UserContext userContext) {
+      UserContext userContext,
+      PlatformTransactionManager transactionManager) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
@@ -118,6 +122,7 @@ public class FileStorageService {
     this.albumRepository = albumRepository;
     this.userContext = userContext;
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+    this.transactionTemplate = new TransactionTemplate(transactionManager);
   }
 
   @PostConstruct
@@ -164,7 +169,6 @@ public class FileStorageService {
     return toAbsolutePath(relativePath);
   }
 
-  @Transactional
   public FileInfo storeFile(MultipartFile file, Long albumId, String contentId) throws IOException {
     User currentUser = userContext.getCurrentUser();
 
@@ -381,50 +385,62 @@ public class FileStorageService {
       }
     }
 
-    // Save metadata to database
-    FileMetadata metadata = new FileMetadata();
-    metadata.setOriginalName(originalFilename);
-    metadata.setStoredFilename(newFilename);
-    metadata.setFileSize(file.getSize());
-    metadata.setMimeType(
-        contentType); // Use updated contentType (may have changed from HEIC to JPEG)
-    metadata.setFilePath(toRelativePath(targetLocation));
-    metadata.setUploadedAt(Instant.now());
-    metadata.setChecksum(checksum);
-    metadata.setContentId(
-        contentId); // Store contentId from source (e.g., iOS PHAsset.localIdentifier)
-    metadata.setThumbnailPath(thumbnailPath);
-    metadata.setMediumPath(mediumPath);
-    metadata.setLargePath(largePath);
-    metadata.setTranscodedVideoPath(transcodedVideoPath);
+    // Capture effectively-final copies of variables modified during processing
+    final Path finalTargetLocation = targetLocation;
+    final String finalNewFilename = newFilename;
+    final String finalContentType = contentType;
+    final String finalThumbnailPath = thumbnailPath;
+    final String finalMediumPath = mediumPath;
+    final String finalLargePath = largePath;
+    final String finalTranscodedVideoPath = transcodedVideoPath;
 
-    // Extract EXIF DateTimeOriginal if this is an image file
-    if (thumbnailService.isImageFile(contentType)) {
-      Instant exifDateTime = extractExifDateTimeOriginal(targetLocation);
-      metadata.setExifDateTimeOriginal(exifDateTime);
+    // Extract EXIF DateTimeOriginal outside transaction (disk I/O)
+    final Instant exifDateTime;
+    if (thumbnailService.isImageFile(finalContentType)) {
+      exifDateTime = extractExifDateTimeOriginal(finalTargetLocation);
+    } else {
+      exifDateTime = null;
     }
 
-    // Set album (required) - verify ownership
-    Album album =
-        albumRepository
-            .findByUserAndId(currentUser, effectiveAlbumId)
-            .orElseThrow(() -> new ResourceNotFoundException("Album", "id", effectiveAlbumId));
-    metadata.setAlbum(album);
+    // Save metadata in a short transaction (only DB operations, no file I/O)
+    return transactionTemplate.execute(status -> {
+      FileMetadata metadata = new FileMetadata();
+      metadata.setOriginalName(originalFilename);
+      metadata.setStoredFilename(finalNewFilename);
+      metadata.setFileSize(file.getSize());
+      metadata.setMimeType(finalContentType);
+      metadata.setFilePath(toRelativePath(finalTargetLocation));
+      metadata.setUploadedAt(Instant.now());
+      metadata.setChecksum(checksum);
+      metadata.setContentId(contentId);
+      metadata.setThumbnailPath(finalThumbnailPath);
+      metadata.setMediumPath(finalMediumPath);
+      metadata.setLargePath(finalLargePath);
+      metadata.setTranscodedVideoPath(finalTranscodedVideoPath);
+      metadata.setExifDateTimeOriginal(exifDateTime);
 
-    // Set display order to be at the end of the album
-    Integer maxOrder =
-        metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
-            effectiveAlbumId, currentUser.getId());
-    metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
+      // Set album (required) - verify ownership
+      Album album =
+          albumRepository
+              .findByUserAndId(currentUser, effectiveAlbumId)
+              .orElseThrow(() -> new ResourceNotFoundException("Album", "id", effectiveAlbumId));
+      metadata.setAlbum(album);
 
-    metadata = metadataRepository.save(metadata);
+      // Set display order to be at the end of the album
+      Integer maxOrder =
+          metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
+              effectiveAlbumId, currentUser.getId());
+      metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
-    // Add "no_tag" to all newly uploaded files
-    ensureNoTagExists(currentUser);
-    addNoTagToFile(metadata, currentUser);
+      FileMetadata saved = metadataRepository.save(metadata);
 
-    // Return file info
-    return convertToFileInfo(metadata);
+      // Add "no_tag" to all newly uploaded files
+      ensureNoTagExists(currentUser);
+      addNoTagToFile(saved, currentUser);
+
+      // Return file info
+      return convertToFileInfo(saved);
+    });
   }
 
   public List<FileInfo> listFiles() {
@@ -736,7 +752,6 @@ public class FileStorageService {
    *
    * @param overwrite If true, regenerate all thumbnails even if they already exist
    */
-  @Transactional
   public Map<String, Object> generateMissingThumbnails(boolean overwrite) {
     int processed = 0;
     int succeeded = 0;
@@ -773,7 +788,7 @@ public class FileStorageService {
           continue;
         }
 
-        // If overwriting, delete existing thumbnails first
+        // If overwriting, delete existing thumbnails first (disk I/O, no transaction needed)
         if (overwrite) {
           thumbnailService.deleteThumbnails(
               toAbsolutePath(metadata.getThumbnailPath()),
@@ -781,7 +796,7 @@ public class FileStorageService {
               toAbsolutePath(metadata.getLargePath()));
         }
 
-        // Generate thumbnails
+        // Generate thumbnails (CPU/disk intensive, no transaction needed)
         Path[] thumbnails = thumbnailService.generateAllThumbnails(originalFile, originalFile);
 
         boolean anyGenerated = false;
@@ -799,7 +814,9 @@ public class FileStorageService {
         }
 
         if (anyGenerated) {
-          metadataRepository.save(metadata);
+          // Short transaction for DB save only
+          transactionTemplate.executeWithoutResult(
+              status -> metadataRepository.save(metadata));
           succeeded++;
           log.info(
               "Generated thumbnails for: {} ({}/{})",
@@ -840,7 +857,6 @@ public class FileStorageService {
    *
    * @return Statistics about the update process
    */
-  @Transactional
   public Map<String, Object> updateTranscodedVideoPaths() {
     int processed = 0;
     int found = 0;
@@ -871,11 +887,12 @@ public class FileStorageService {
         String transcodedFilename = "web_" + baseNameWithoutExt + ".mp4";
         Path transcodedLocation = this.fileStorageLocation.resolve(transcodedFilename);
 
-        // Check if transcoded file exists on disk
+        // Check if transcoded file exists on disk (no transaction needed)
         if (transcodedLocation.toFile().exists()) {
-          // Update database with transcoded path
+          // Short transaction for DB update only
           metadata.setTranscodedVideoPath(toRelativePath(transcodedLocation));
-          metadataRepository.save(metadata);
+          transactionTemplate.executeWithoutResult(
+              status -> metadataRepository.save(metadata));
           found++;
           updated++;
           log.info(
@@ -919,7 +936,6 @@ public class FileStorageService {
    *
    * @return Statistics about the update process
    */
-  @Transactional
   public Map<String, Object> updateVideoThumbnailPaths() {
     int processed = 0;
     int found = 0;
@@ -950,11 +966,12 @@ public class FileStorageService {
         String thumbnailFilename = "thumb_" + baseNameWithoutExt + ".jpg";
         Path thumbnailLocation = this.fileStorageLocation.resolve(thumbnailFilename);
 
-        // Check if thumbnail file exists on disk
+        // Check if thumbnail file exists on disk (no transaction needed)
         if (thumbnailLocation.toFile().exists()) {
-          // Update database with thumbnail path
+          // Short transaction for DB update only
           metadata.setThumbnailPath(toRelativePath(thumbnailLocation));
-          metadataRepository.save(metadata);
+          transactionTemplate.executeWithoutResult(
+              status -> metadataRepository.save(metadata));
           found++;
           updated++;
           log.info(
@@ -1154,7 +1171,6 @@ public class FileStorageService {
    *
    * @param fileId The ID of the file to rotate
    */
-  @Transactional
   public void rotateImageLeft(Long fileId) {
     log.info("========================================");
     log.info("📸 Rotation request received for file ID: {}", fileId);
@@ -1188,7 +1204,7 @@ public class FileStorageService {
     }
 
     try {
-      // Rotate the original image file
+      // Rotate the original image file (disk I/O, no transaction needed)
       log.info("   Starting image rotation...");
       boolean rotateSuccess = thumbnailService.rotateImageLeft(originalFile);
       if (!rotateSuccess) {
@@ -1197,14 +1213,14 @@ public class FileStorageService {
       }
       log.info("   ✅ Image file rotated successfully");
 
-      // Delete existing thumbnails
+      // Delete existing thumbnails (disk I/O, no transaction needed)
       log.info("   Deleting old thumbnails...");
       thumbnailService.deleteThumbnails(
           toAbsolutePath(metadata.getThumbnailPath()),
           toAbsolutePath(metadata.getMediumPath()),
           toAbsolutePath(metadata.getLargePath()));
 
-      // Regenerate all thumbnails with the rotated image
+      // Regenerate all thumbnails with the rotated image (CPU/disk intensive, no transaction needed)
       log.info("   Regenerating thumbnails...");
       Path[] thumbnails = thumbnailService.generateAllThumbnails(originalFile, originalFile);
 
@@ -1247,9 +1263,10 @@ public class FileStorageService {
           oldToken != null ? oldToken.substring(0, 8) + "..." : "null",
           newToken.substring(0, 8) + "...");
 
-      // Save updated metadata
+      // Save updated metadata in a short transaction (only DB operation)
       log.info("   Saving metadata to database...");
-      metadataRepository.save(metadata);
+      transactionTemplate.executeWithoutResult(
+          status -> metadataRepository.save(metadata));
 
       log.info(
           "✅ Successfully rotated image {} by 90° left (total rotation: {}°)",

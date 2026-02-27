@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class FileStorageServicePathTest {
 
@@ -31,6 +32,7 @@ class FileStorageServicePathTest {
     AlbumRepository albumRepo = Mockito.mock(AlbumRepository.class);
     FileInfoMapper fileInfoMapper = Mockito.mock(FileInfoMapper.class);
     UserContext userContext = Mockito.mock(UserContext.class);
+    PlatformTransactionManager txManager = Mockito.mock(PlatformTransactionManager.class);
 
     FileStorageService svc =
         new FileStorageService(
@@ -42,7 +44,8 @@ class FileStorageServicePathTest {
             jdbc,
             albumRepo,
             fileInfoMapper,
-            userContext);
+            userContext,
+            txManager);
 
     // Not required for this specific test, but safe to ensure directory exists
     svc.init();
