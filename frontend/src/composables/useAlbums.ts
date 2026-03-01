@@ -15,6 +15,7 @@ export interface AlbumsComposable {
   createAlbum: (name: string, description?: string) => Promise<Album | null>;
   deleteAlbum: (albumId: number) => Promise<void>;
   updateAlbum: (albumId: number, updates: Partial<Album>) => Promise<void>;
+  duplicateAlbum: (albumId: number) => Promise<Album | null>;
 }
 
 /**
@@ -198,6 +199,31 @@ export function useAlbums(): AlbumsComposable {
     }
   }
 
+  async function duplicateAlbum(albumId: number): Promise<Album | null> {
+    try {
+      const response = await fetchWithAuth(
+        `${apiUrl}/api/albums/${albumId}/duplicate`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        if (data.album) {
+          albums.value.push(data.album);
+        }
+        return data.album;
+      } else {
+        throw new Error(data.message || "Unknown error");
+      }
+    } catch (err) {
+      console.error("Error duplicating album:", err);
+      throw err;
+    }
+  }
+
   return {
     // State
     albums,
@@ -211,5 +237,6 @@ export function useAlbums(): AlbumsComposable {
     createAlbum,
     deleteAlbum,
     updateAlbum,
+    duplicateAlbum,
   };
 }

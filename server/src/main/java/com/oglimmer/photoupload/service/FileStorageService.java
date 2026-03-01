@@ -639,27 +639,36 @@ public class FileStorageService {
             .findById(fileId)
             .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
 
-    try {
-      // Delete physical file
-      Path filePath = toAbsolutePath(metadata.getFilePath());
-      Files.deleteIfExists(filePath);
-      log.info("Deleted file: {}", metadata.getStoredFilename());
+    // Check if physical files are shared with other FileMetadata records
+    boolean isShared = metadataRepository.countByFilePath(metadata.getFilePath()) > 1;
 
-      // Delete thumbnails
-      thumbnailService.deleteThumbnails(
-          toAbsolutePath(metadata.getThumbnailPath()),
-          toAbsolutePath(metadata.getMediumPath()),
-          toAbsolutePath(metadata.getLargePath()));
+    if (isShared) {
+      log.info(
+          "Skipping physical file deletion for {} — shared with other records",
+          metadata.getStoredFilename());
+    } else {
+      try {
+        // Delete physical file
+        Path filePath = toAbsolutePath(metadata.getFilePath());
+        Files.deleteIfExists(filePath);
+        log.info("Deleted file: {}", metadata.getStoredFilename());
 
-      // Delete transcoded video if exists
-      thumbnailService.deleteTranscodedVideo(toAbsolutePath(metadata.getTranscodedVideoPath()));
+        // Delete thumbnails
+        thumbnailService.deleteThumbnails(
+            toAbsolutePath(metadata.getThumbnailPath()),
+            toAbsolutePath(metadata.getMediumPath()),
+            toAbsolutePath(metadata.getLargePath()));
 
-      // Delete metadata (cascade will delete image_tags)
-      metadataRepository.delete(metadata);
-    } catch (IOException e) {
-      log.error("Error deleting file", e);
-      throw new StorageException("Could not delete file: " + e.getMessage(), e);
+        // Delete transcoded video if exists
+        thumbnailService.deleteTranscodedVideo(toAbsolutePath(metadata.getTranscodedVideoPath()));
+      } catch (IOException e) {
+        log.error("Error deleting file", e);
+        throw new StorageException("Could not delete file: " + e.getMessage(), e);
+      }
     }
+
+    // Delete metadata (cascade will delete image_tags)
+    metadataRepository.delete(metadata);
   }
 
   @Transactional

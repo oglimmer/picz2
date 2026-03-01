@@ -129,8 +129,10 @@
         :key="album.id"
         :album="album"
         :can-delete="isLoggedIn"
+        :can-duplicate="isLoggedIn"
         @click="handleOpenAlbum(album)"
         @delete="handleDeleteAlbum"
+        @duplicate="handleDuplicateAlbum"
       />
     </div>
   </div>
@@ -152,7 +154,7 @@ import type { Album } from '@/types'
 
 const router = useRouter()
 const { isLoggedIn } = useAuth()
-const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum } = useAlbums()
+const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
 const { availableTags, loadTags } = useTags()
 const { error: showError } = useNotifications()
 const { confirm: confirmDialog } = useConfirm()
@@ -195,6 +197,15 @@ function cancelCreateAlbum() {
   showCreateAlbum.value = false
   newAlbumName.value = ''
   newAlbumDescription.value = ''
+}
+
+async function handleDuplicateAlbum(albumId: number) {
+  try {
+    await duplicateAlbum(albumId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    showError(`Error duplicating album: ${message}`)
+  }
 }
 
 async function handleDeleteAlbum(albumId: number) {

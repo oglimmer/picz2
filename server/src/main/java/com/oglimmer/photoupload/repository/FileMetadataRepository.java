@@ -68,6 +68,8 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   List<FileMetadata> findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(
       @Param("shareToken") String shareToken);
 
+  long countByFilePath(String filePath);
+
   List<FileMetadata> findByChecksum(String checksum);
 
   @Query(

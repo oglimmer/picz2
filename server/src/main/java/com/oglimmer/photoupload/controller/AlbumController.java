@@ -204,6 +204,15 @@ public class AlbumController {
 
   // Removed: Images cannot move between albums
 
+  @PostMapping("/{id}/duplicate")
+  public ResponseEntity<AlbumResponse> duplicateAlbum(@PathVariable Long id) {
+    AlbumInfo album = albumService.duplicateAlbum(id);
+
+    AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
+
+    return ResponseEntity.ok(response);
+  }
+
   @PostMapping("/{id}/reorder-by-filename")
   public ResponseEntity<ReorderResponse> reorderByFilename(@PathVariable Long id) {
     int updatedCount = albumService.reorderFilesByFilename(id);

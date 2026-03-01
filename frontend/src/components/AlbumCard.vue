@@ -18,6 +18,14 @@
         <span class="placeholder-text">Empty Album</span>
       </div>
       <button
+        v-if="canDuplicate"
+        class="duplicate-album-btn-overlay"
+        title="Duplicate album"
+        @click.stop="$emit('duplicate', album.id)"
+      >
+        📋
+      </button>
+      <button
         v-if="canDelete"
         class="delete-album-btn-overlay"
         title="Delete album"
@@ -49,15 +57,18 @@ import type { Album } from '@/types'
 interface Props {
   album: Album
   canDelete?: boolean
+  canDuplicate?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  canDelete: false
+  canDelete: false,
+  canDuplicate: false
 })
 
 defineEmits<{
   click: []
   delete: [albumId: number]
+  duplicate: [albumId: number]
 }>()
 
 const { getAlbumCoverUrl } = useApi()
