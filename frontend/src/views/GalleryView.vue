@@ -391,6 +391,40 @@
         >
           📷 Reorder by EXIF
         </button>
+        <button
+          class="duplicates-btn"
+          :class="{ 'duplicates-btn-active': duplicateFilterActive }"
+          :title="duplicateFilterActive ? 'Exit duplicate view' : 'Show only files with duplicate names'"
+          @click="toggleDuplicateFilter"
+        >
+          {{ duplicateFilterActive ? '✕ Exit Duplicates' : '🔍 Find Duplicates' }}
+        </button>
+        <button
+          v-if="duplicateFilterActive"
+          class="delete-selected-btn"
+          :disabled="selectedForDeletion.size === 0"
+          title="Delete all selected files"
+          @click="handleDeleteSelected"
+        >
+          🗑️ Delete Selected ({{ selectedForDeletion.size }})
+        </button>
+        <button
+          class="reorder-mode-btn"
+          :class="{ 'reorder-mode-btn-active': reorderModeActive }"
+          :title="reorderModeActive ? 'Exit reorder mode' : 'Select and mass-move images'"
+          @click="toggleReorderMode"
+        >
+          {{ reorderModeActive ? '✕ Exit Reorder' : '🔀 Reorder' }}
+        </button>
+        <button
+          v-if="reorderModeActive"
+          class="move-to-top-btn"
+          :disabled="selectedForReorder.size === 0"
+          title="Move selected images to the top"
+          @click="handleMoveSelectedToTop"
+        >
+          ⬆ Move to Top ({{ selectedForReorder.size }})
+        </button>
       </div>
 
       <div class="filter-controls">
@@ -456,6 +490,15 @@
       <p>Choose a tag from the dropdown above to view photos</p>
     </div>
 
+    <!-- Empty state when duplicate filter is active but no duplicates found -->
+    <div
+      v-else-if="duplicateFilterActive && displayedFiles.length === 0"
+      class="empty-state"
+    >
+      <h2>No duplicate filenames found</h2>
+      <p>All files in this album have unique names.</p>
+    </div>
+
     <!-- Gallery -->
     <div
       v-else
@@ -463,18 +506,21 @@
       :class="{ 'presentation-gallery': presentationMode }"
     >
       <GalleryItem
-        v-for="(file, index) in files"
+        v-for="(file, index) in displayedFiles"
         :key="file.id"
         :file="file"
         :available-tags="availableTags"
-        :is-draggable="!presentationMode && isLoggedIn"
-        :show-drag-handle="!presentationMode && isLoggedIn && !selectionActive"
+        :is-draggable="!presentationMode && isLoggedIn && !duplicateFilterActive && !reorderModeActive"
+        :show-drag-handle="!presentationMode && isLoggedIn && !duplicateFilterActive && !reorderModeActive && !selectionActive"
         :show-file-info="!presentationMode && isLoggedIn"
         :dragging="draggingIndex === index"
         :drag-over="dragOverIndex === index"
         :selectable="!presentationMode && isLoggedIn"
-        :selected="selectedFileIds.has(file.id)"
-        :selection-active="selectionActive"
+        :selected="reorderModeActive ? selectedForReorder.has(file.id) : duplicateFilterActive ? selectedForDeletion.has(file.id) : selectedFileIds.has(file.id)"
+        :selection-active="selectionActive || duplicateFilterActive || reorderModeActive"
+        :bulk-select="duplicateFilterActive || reorderModeActive"
+        :select-variant="reorderModeActive ? 'reorder' : 'delete'"
+        :move-target="reorderModeActive && selectedForReorder.size > 0 && !selectedForReorder.has(file.id)"
         @click="openLightbox"
         @delete="handleDeleteFile"
         @rotate="handleRotateImage"
@@ -482,6 +528,7 @@
         @remove-tag="handleRemoveTag"
         @filter-tag="filterByTagName"
         @toggle-select="(fileId, shiftKey) => handleToggleSelect(fileId, index, shiftKey)"
+        @move-here="handleMoveSelectedAfter"
         @drag-start="(e) => handleDragStart(e, index)"
         @drag-over="(e) => handleDragOver(e, index)"
         @drag-enter="(e) => handleDragEnter(e, index)"
@@ -630,6 +677,178 @@ export default {
     const showAnalytics = ref(false)
     const loadingAnalytics = ref(false)
     const analyticsStats = ref(null)
+    const duplicateFilterActive = ref(false)
+    const selectedForDeletion = ref(new Set())
+    const reorderModeActive = ref(false)
+    const selectedForReorder = ref(new Set())
+
+    const EXCLUDED_DUPLICATE_NAME = 'fullsizerender.heic'
+
+    function isExcludedFromDuplicates(file) {
+      const name = file.originalName || file.filename || ''
+      return name.toLowerCase() === EXCLUDED_DUPLICATE_NAME
+    }
+
+    const displayedFiles = computed(() => {
+      if (!duplicateFilterActive.value) return files.value
+      const nameCounts = new Map()
+      for (const file of files.value) {
+        if (isExcludedFromDuplicates(file)) continue
+        const key = file.originalName || file.filename
+        nameCounts.set(key, (nameCounts.get(key) || 0) + 1)
+      }
+      return files.value.filter(f => {
+        if (isExcludedFromDuplicates(f)) return false
+        const key = f.originalName || f.filename
+        return (nameCounts.get(key) || 0) > 1
+      })
+    })
+
+    function toggleDuplicateFilter() {
+      if (duplicateFilterActive.value) {
+        duplicateFilterActive.value = false
+        selectedForDeletion.value = new Set()
+        return
+      }
+      if (reorderModeActive.value) {
+        reorderModeActive.value = false
+        selectedForReorder.value = new Set()
+      }
+      duplicateFilterActive.value = true
+      const seen = new Set()
+      const toSelect = new Set()
+      for (const file of files.value) {
+        if (isExcludedFromDuplicates(file)) continue
+        const key = file.originalName || file.filename
+        if (seen.has(key)) {
+          toSelect.add(file.id)
+        } else {
+          seen.add(key)
+        }
+      }
+      selectedForDeletion.value = toSelect
+    }
+
+    function toggleReorderMode() {
+      if (reorderModeActive.value) {
+        reorderModeActive.value = false
+        selectedForReorder.value = new Set()
+        return
+      }
+      if (duplicateFilterActive.value) {
+        duplicateFilterActive.value = false
+        selectedForDeletion.value = new Set()
+      }
+      reorderModeActive.value = true
+      selectedForReorder.value = new Set()
+    }
+
+    function toggleReorderSelection(fileId) {
+      const next = new Set(selectedForReorder.value)
+      if (next.has(fileId)) {
+        next.delete(fileId)
+      } else {
+        next.add(fileId)
+      }
+      selectedForReorder.value = next
+    }
+
+    async function persistReorder(newFiles, successMessage) {
+      files.value = newFiles
+      selectedForReorder.value = new Set()
+      const fileIds = newFiles.map(f => f.id)
+      try {
+        await reorderFiles(fileIds)
+        if (successMessage) success(successMessage)
+      } catch (err) {
+        if (album.value) {
+          await loadAlbumFiles(album.value.id, props.presentationMode)
+        }
+        error(`Error reordering files: ${err.message}`)
+      }
+    }
+
+    async function handleMoveSelectedAfter(targetFileId) {
+      const selectedIds = selectedForReorder.value
+      if (selectedIds.size === 0) return
+      if (selectedIds.has(targetFileId)) return
+
+      const currentFiles = [...files.value]
+      const selectedList = currentFiles.filter(f => selectedIds.has(f.id))
+      const remaining = currentFiles.filter(f => !selectedIds.has(f.id))
+
+      const targetIndex = remaining.findIndex(f => f.id === targetFileId)
+      if (targetIndex === -1) return
+
+      const newFiles = [
+        ...remaining.slice(0, targetIndex + 1),
+        ...selectedList,
+        ...remaining.slice(targetIndex + 1)
+      ]
+
+      const count = selectedList.length
+      await persistReorder(newFiles, `Moved ${count} file${count !== 1 ? 's' : ''}.`)
+    }
+
+    async function handleMoveSelectedToTop() {
+      const selectedIds = selectedForReorder.value
+      if (selectedIds.size === 0) return
+
+      const currentFiles = [...files.value]
+      const selectedList = currentFiles.filter(f => selectedIds.has(f.id))
+      const remaining = currentFiles.filter(f => !selectedIds.has(f.id))
+
+      const newFiles = [...selectedList, ...remaining]
+      const count = selectedList.length
+      await persistReorder(newFiles, `Moved ${count} file${count !== 1 ? 's' : ''} to top.`)
+    }
+
+    function toggleFileSelection(fileId) {
+      const next = new Set(selectedForDeletion.value)
+      if (next.has(fileId)) {
+        next.delete(fileId)
+      } else {
+        next.add(fileId)
+      }
+      selectedForDeletion.value = next
+    }
+
+    async function handleDeleteSelected() {
+      const ids = Array.from(selectedForDeletion.value)
+      if (ids.length === 0) return
+
+      const confirmed = await confirmDialog(
+        `Delete ${ids.length} selected file${ids.length !== 1 ? 's' : ''}? This action cannot be undone.`,
+        { type: 'danger', confirmText: 'Delete' }
+      )
+      if (!confirmed) return
+
+      let successCount = 0
+      let errorCount = 0
+      for (const id of ids) {
+        try {
+          await deleteFile(id)
+          successCount++
+        } catch (err) {
+          errorCount++
+          console.error(`Failed to delete file ${id}:`, err)
+        }
+      }
+
+      selectedForDeletion.value = new Set()
+
+      if (errorCount === 0) {
+        success(`Successfully deleted ${successCount} file${successCount !== 1 ? 's' : ''}!`)
+      } else if (successCount > 0) {
+        warning(`Deleted ${successCount} file${successCount !== 1 ? 's' : ''}, ${errorCount} failed.`)
+      } else {
+        error('Failed to delete selected files.')
+      }
+
+      if (displayedFiles.value.length === 0) {
+        duplicateFilterActive.value = false
+      }
+    }
 
     // Multi-select state
     const selectedFileIds = ref(new Set())
@@ -873,6 +1092,14 @@ export default {
     }
 
     function handleToggleSelect(fileId, index, shiftKey) {
+      if (reorderModeActive.value) {
+        toggleReorderSelection(fileId)
+        return
+      }
+      if (duplicateFilterActive.value) {
+        toggleFileSelection(fileId)
+        return
+      }
       const ids = new Set(selectedFileIds.value)
       if (shiftKey && lastSelectedIndex.value !== null) {
         const lo = Math.min(lastSelectedIndex.value, index)
@@ -1424,6 +1651,17 @@ export default {
       showAnalytics,
       loadingAnalytics,
       analyticsStats,
+      duplicateFilterActive,
+      selectedForDeletion,
+      reorderModeActive,
+      selectedForReorder,
+      displayedFiles,
+      toggleDuplicateFilter,
+      toggleFileSelection,
+      handleDeleteSelected,
+      toggleReorderMode,
+      handleMoveSelectedAfter,
+      handleMoveSelectedToTop,
       toggleAnalytics,
       loadAnalyticsStats,
       goBack,

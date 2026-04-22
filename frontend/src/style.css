@@ -321,6 +321,168 @@ a:hover { text-decoration: underline; }
   transform: translateY(0);
 }
 
+.duplicates-btn {
+  background: #9c27b0;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.duplicates-btn:hover {
+  background: #7b1fa2;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(156, 39, 176, 0.4);
+}
+
+.duplicates-btn:active {
+  transform: translateY(0);
+}
+
+.duplicates-btn-active {
+  background: #555;
+}
+
+.duplicates-btn-active:hover {
+  background: #333;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.delete-selected-btn {
+  background: #e53935;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.delete-selected-btn:hover:not(:disabled) {
+  background: #c62828;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(229, 57, 53, 0.4);
+}
+
+.delete-selected-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.select-checkbox-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.select-checkbox-overlay input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  margin: 0;
+  accent-color: #e53935;
+}
+
+.select-checkbox-overlay-reorder input[type="checkbox"] {
+  accent-color: #1976d2;
+}
+
+.reorder-mode-btn {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.reorder-mode-btn:hover {
+  background: #1565c0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
+}
+
+.reorder-mode-btn:active {
+  transform: translateY(0);
+}
+
+.reorder-mode-btn-active {
+  background: #555;
+}
+
+.reorder-mode-btn-active:hover {
+  background: #333;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.move-to-top-btn {
+  background: #0d9488;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.move-to-top-btn:hover:not(:disabled) {
+  background: #0f766e;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.4);
+}
+
+.move-to-top-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.move-here-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(25, 118, 210, 0.95);
+  color: white;
+  border: 2px solid white;
+  padding: 10px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  z-index: 3;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: background 0.2s, transform 0.2s;
+}
+
+.move-here-btn:hover {
+  background: rgba(21, 101, 192, 1);
+  transform: translate(-50%, -50%) scale(1.05);
+}
+
+.move-here-btn:active {
+  transform: translate(-50%, -50%) scale(0.98);
+}
+
 .filter-controls {
   display: flex;
   align-items: center;

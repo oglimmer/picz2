@@ -18,7 +18,7 @@
       ⋮⋮
     </div>
     <button
-      v-if="selectable"
+      v-if="selectable && !bulkSelect"
       class="select-checkbox"
       :class="{ 'is-checked': selected }"
       :title="selected ? 'Deselect' : 'Select (Shift+click for range)'"
@@ -42,6 +42,27 @@
       >
         <span class="play-icon">▶</span>
       </div>
+      <label
+        v-if="bulkSelect"
+        class="select-checkbox-overlay"
+        :class="{ 'select-checkbox-overlay-reorder': selectVariant === 'reorder' }"
+        :title="selected ? 'Deselect' : 'Select'"
+        @click.stop
+      >
+        <input
+          type="checkbox"
+          :checked="selected"
+          @change="$emit('toggle-select', file.id)"
+        >
+      </label>
+      <button
+        v-if="moveTarget"
+        class="move-here-btn"
+        title="Move selected images here"
+        @click.stop="$emit('move-here', file.id)"
+      >
+        ⬇ Move here
+      </button>
     </div>
     <div
       v-if="showFileInfo"
@@ -130,6 +151,9 @@ interface Props {
   selectable?: boolean
   selected?: boolean
   selectionActive?: boolean
+  bulkSelect?: boolean
+  selectVariant?: 'delete' | 'reorder'
+  moveTarget?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -141,7 +165,10 @@ const props = withDefaults(defineProps<Props>(), {
   dragOver: false,
   selectable: false,
   selected: false,
-  selectionActive: false
+  selectionActive: false,
+  bulkSelect: false,
+  selectVariant: 'delete',
+  moveTarget: false
 })
 
 const emit = defineEmits<{
@@ -151,7 +178,8 @@ const emit = defineEmits<{
   'add-tag': [fileId: number, tagName: string]
   'remove-tag': [fileId: number, tagName: string]
   'filter-tag': [tagName: string]
-  'toggle-select': [fileId: number, shiftKey: boolean]
+  'toggle-select': [fileId: number, shiftKey?: boolean]
+  'move-here': [fileId: number]
   'drag-start': [event: DragEvent]
   'drag-over': [event: DragEvent]
   'drag-enter': [event: DragEvent]

@@ -38,6 +38,7 @@ public class AlbumService {
   private final ImageTagRepository imageTagRepository;
   private final JdbcTemplate jdbcTemplate;
   private final FileStorageService fileStorageService;
+  private final ThumbnailService thumbnailService;
   private final UserContext userContext;
   private final AlbumMapper albumMapper;
 
@@ -243,6 +244,28 @@ public class AlbumService {
 
     if (files.isEmpty()) {
       return 0;
+    }
+
+    // Backfill creation_time for videos that were uploaded before video date extraction existed.
+    // ffprobe runs once per video; result is persisted so subsequent sorts are instant.
+    int backfilled = 0;
+    for (FileMetadata file : files) {
+      if (file.getExifDateTimeOriginal() != null) {
+        continue;
+      }
+      if (!thumbnailService.isVideoFile(file.getMimeType())) {
+        continue;
+      }
+      Instant videoDate =
+          thumbnailService.extractVideoCreationDate(
+              fileStorageService.resolveFilePath(file.getFilePath()));
+      if (videoDate != null) {
+        file.setExifDateTimeOriginal(videoDate);
+        backfilled++;
+      }
+    }
+    if (backfilled > 0) {
+      log.info("Backfilled creation_time for {} video(s) in album {}", backfilled, album.getName());
     }
 
     // Sort files by EXIF DateTimeOriginal

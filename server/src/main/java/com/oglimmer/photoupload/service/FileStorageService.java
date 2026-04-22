@@ -416,6 +416,8 @@ public class FileStorageService {
     final Instant exifDateTime;
     if (thumbnailService.isImageFile(finalContentType)) {
       exifDateTime = extractExifDateTimeOriginal(finalTargetLocation);
+    } else if (thumbnailService.isVideoFile(finalContentType)) {
+      exifDateTime = thumbnailService.extractVideoCreationDate(finalTargetLocation);
     } else {
       exifDateTime = null;
     }

@@ -1,25 +1,11 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.drew.imaging.ImageMetadataReader;
-import com.drew.imaging.ImageProcessingException;
-import com.drew.metadata.Metadata;
-import com.drew.metadata.MetadataException;
-import com.drew.metadata.exif.ExifIFD0Directory;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.Transparency;
-import java.awt.geom.AffineTransform;
-import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Iterator;
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.ImageOutputStream;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,85 +15,13 @@ import org.springframework.stereotype.Service;
 public class ThumbnailService {
 
   /**
-   * Generate a thumbnail for an image file
+   * Generate all thumbnail sizes for an image in a single ImageMagick pipeline.
    *
-   * @param originalFile The original image file
-   * @param outputPath The path where the thumbnail should be saved
-   * @param size The thumbnail size to generate
-   * @return true if successful, false otherwise
-   */
-  public boolean generateThumbnail(Path originalFile, Path outputPath, ThumbnailSize size) {
-    try {
-      BufferedImage originalImage = ImageIO.read(originalFile.toFile());
-      if (originalImage == null) {
-        log.warn("Could not read image file: {}", originalFile);
-        return false;
-      }
-
-      // Read EXIF orientation and apply transformation
-      int orientation = getExifOrientation(originalFile);
-      if (orientation != 1) {
-        log.debug("Applying EXIF orientation {} to {}", orientation, originalFile.getFileName());
-        originalImage = applyOrientation(originalImage, orientation);
-      }
-
-      // Calculate scaled dimensions while maintaining aspect ratio
-      int originalWidth = originalImage.getWidth();
-      int originalHeight = originalImage.getHeight();
-
-      double widthRatio = (double) size.getMaxWidth() / originalWidth;
-      double heightRatio = (double) size.getMaxHeight() / originalHeight;
-      double ratio = Math.min(widthRatio, heightRatio);
-
-      // Don't upscale images
-      if (ratio > 1.0) {
-        ratio = 1.0;
-      }
-
-      int targetWidth = (int) (originalWidth * ratio);
-      int targetHeight = (int) (originalHeight * ratio);
-
-      // Create scaled image with high quality, preserving image type
-      // Use ARGB for images with transparency, RGB otherwise
-      int imageType =
-          originalImage.getTransparency() == Transparency.OPAQUE
-              ? BufferedImage.TYPE_INT_RGB
-              : BufferedImage.TYPE_INT_ARGB;
-      BufferedImage scaledImage = new BufferedImage(targetWidth, targetHeight, imageType);
-      Graphics2D graphics = scaledImage.createGraphics();
-
-      // Use high-quality rendering hints
-      graphics.setRenderingHint(
-          RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-      graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-      graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-      graphics.setRenderingHint(
-          RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
-
-      graphics.drawImage(originalImage, 0, 0, targetWidth, targetHeight, null);
-      graphics.dispose();
-
-      // Save the thumbnail
-      File outputFile = outputPath.toFile();
-      outputFile.getParentFile().mkdirs();
-
-      // Determine format from original file
-      String format = getImageFormat(originalFile);
-      writeImageWithQuality(scaledImage, outputFile, format, size.getJpegQuality());
-
-      log.debug(
-          "Generated {} thumbnail: {} ({}x{}) at {}% quality",
-          size, outputPath, targetWidth, targetHeight, (int) (size.getJpegQuality() * 100));
-      return true;
-
-    } catch (IOException e) {
-      log.error("Error generating thumbnail for {}: {}", originalFile, e.getMessage());
-      return false;
-    }
-  }
-
-  /**
-   * Generate all thumbnail sizes for an image
+   * <p>Decodes the source once, progressively downscales (large -> medium -> thumb) and writes each
+   * size via {@code +clone -write}. Memory is bounded by ImageMagick {@code -limit} flags on the
+   * native process, avoiding JVM heap/native pressure from {@code BufferedImage}. {@code
+   * -auto-orient} replaces the prior EXIF-orientation logic. {@code -define jpeg:size=} lets
+   * libjpeg pre-scale during decode, saving significant memory on large JPEGs.
    *
    * @param originalFile The original image file
    * @param baseOutputPath The base path for thumbnails (without size suffix)
@@ -119,25 +33,115 @@ public class ThumbnailService {
     String baseName = baseOutputPath.getFileName().toString();
     Path parentDir = baseOutputPath.getParent();
 
-    // Generate thumbnail (200x200)
     Path thumbnailPath = parentDir.resolve("thumb_" + baseName);
-    if (generateThumbnail(originalFile, thumbnailPath, ThumbnailSize.THUMBNAIL)) {
-      thumbnailPaths[0] = thumbnailPath;
-    }
-
-    // Generate medium (800x800)
     Path mediumPath = parentDir.resolve("medium_" + baseName);
-    if (generateThumbnail(originalFile, mediumPath, ThumbnailSize.MEDIUM)) {
-      thumbnailPaths[1] = mediumPath;
-    }
-
-    // Generate large (1920x1920)
     Path largePath = parentDir.resolve("large_" + baseName);
-    if (generateThumbnail(originalFile, largePath, ThumbnailSize.LARGE)) {
-      thumbnailPaths[2] = largePath;
-    }
 
-    return thumbnailPaths;
+    ThumbnailSize thumb = ThumbnailSize.THUMBNAIL;
+    ThumbnailSize medium = ThumbnailSize.MEDIUM;
+    ThumbnailSize large = ThumbnailSize.LARGE;
+
+    String largeGeom = large.getMaxWidth() + "x" + large.getMaxHeight() + ">";
+    String mediumGeom = medium.getMaxWidth() + "x" + medium.getMaxHeight() + ">";
+    String thumbGeom = thumb.getMaxWidth() + "x" + thumb.getMaxHeight() + ">";
+    // Pre-scale during JPEG decode: hint libjpeg to decode at ~2x the largest target.
+    String jpegSizeHint = (large.getMaxWidth() * 2) + "x" + (large.getMaxHeight() * 2);
+
+    try {
+      parentDir.toFile().mkdirs();
+
+      ProcessBuilder processBuilder =
+          new ProcessBuilder(
+              "convert",
+              "-limit",
+              "memory",
+              "512MiB",
+              "-limit",
+              "map",
+              "1024MiB",
+              "-define",
+              "jpeg:size=" + jpegSizeHint,
+              originalFile.toAbsolutePath().toString(),
+              "-auto-orient",
+              "-resize",
+              largeGeom,
+              "(",
+              "+clone",
+              "-quality",
+              String.valueOf((int) (large.getJpegQuality() * 100)),
+              "-write",
+              largePath.toAbsolutePath().toString(),
+              "+delete",
+              ")",
+              "-resize",
+              mediumGeom,
+              "(",
+              "+clone",
+              "-quality",
+              String.valueOf((int) (medium.getJpegQuality() * 100)),
+              "-write",
+              mediumPath.toAbsolutePath().toString(),
+              "+delete",
+              ")",
+              "-resize",
+              thumbGeom,
+              "-quality",
+              String.valueOf((int) (thumb.getJpegQuality() * 100)),
+              thumbnailPath.toAbsolutePath().toString());
+
+      processBuilder.redirectErrorStream(true);
+      log.info("Generating thumbnails via ImageMagick for: {}", originalFile.getFileName());
+
+      Process process = processBuilder.start();
+
+      java.io.BufferedReader reader =
+          new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
+      String line;
+      StringBuilder output = new StringBuilder();
+      while ((line = reader.readLine()) != null) {
+        output.append(line).append("\n");
+      }
+
+      int exitCode = process.waitFor();
+
+      if (exitCode != 0) {
+        log.error(
+            "ImageMagick thumbnail generation failed with exit code {} for {}: {}",
+            exitCode,
+            originalFile.getFileName(),
+            output);
+      }
+
+      // Pick up whatever ImageMagick managed to write, even on partial failure.
+      if (thumbnailPath.toFile().exists() && thumbnailPath.toFile().length() > 0) {
+        thumbnailPaths[0] = thumbnailPath;
+      }
+      if (mediumPath.toFile().exists() && mediumPath.toFile().length() > 0) {
+        thumbnailPaths[1] = mediumPath;
+      }
+      if (largePath.toFile().exists() && largePath.toFile().length() > 0) {
+        thumbnailPaths[2] = largePath;
+      }
+
+      if (exitCode == 0) {
+        log.info(
+            "Generated thumbnails for {} (thumb {}, medium {}, large {})",
+            originalFile.getFileName(),
+            formatBytes(thumbnailPath.toFile().length()),
+            formatBytes(mediumPath.toFile().length()),
+            formatBytes(largePath.toFile().length()));
+      }
+
+      return thumbnailPaths;
+
+    } catch (IOException e) {
+      log.error("IO error during thumbnail generation for {}: {}", originalFile, e.getMessage());
+      return thumbnailPaths;
+    } catch (InterruptedException e) {
+      log.error("Thumbnail generation interrupted for {}: {}", originalFile, e.getMessage());
+      Thread.currentThread().interrupt();
+      return thumbnailPaths;
+    }
   }
 
   /** Check if a file is an image that can be thumbnailed */
@@ -265,9 +269,11 @@ public class ThumbnailService {
       File outputFile = outputPath.toFile();
       outputFile.getParentFile().mkdirs();
 
-      // Use ImageMagick's convert command
-      // The AppImage version has latest libheif integration for modern HEIC files
-      // Memory limits prevent ImageMagick from consuming excessive memory
+      // Use ImageMagick's convert command.
+      // Memory limits prevent ImageMagick from consuming excessive memory.
+      // -auto-orient bakes any HEIF irot/EXIF orientation into the pixels and clears the tag, so
+      // downstream consumers (thumbnailer, browser) see a normalized JPEG regardless of how
+      // libheif/ImageMagick handled orientation during HEIC decode.
       ProcessBuilder processBuilder =
           new ProcessBuilder(
               "convert",
@@ -278,6 +284,7 @@ public class ThumbnailService {
               "map",
               "1024MiB",
               originalFile.toAbsolutePath().toString(),
+              "-auto-orient",
               "-quality",
               "95",
               outputPath.toAbsolutePath().toString());
@@ -436,142 +443,61 @@ public class ThumbnailService {
   }
 
   /**
-   * Read EXIF orientation from image file
-   *
-   * @param file The image file
-   * @return The orientation value (1-8), or 1 (normal) if not found or on error
+   * Extract the container-level creation timestamp from a video via ffprobe. Reads the
+   * {@code format_tags=creation_time} field (populated from MP4/MOV atoms). Returns null if the tag
+   * is missing, unparseable, or ffprobe fails.
    */
-  private int getExifOrientation(Path file) {
+  public Instant extractVideoCreationDate(Path videoFile) {
     try {
-      Metadata metadata = ImageMetadataReader.readMetadata(file.toFile());
-      ExifIFD0Directory directory = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
-      if (directory != null && directory.containsTag(ExifIFD0Directory.TAG_ORIENTATION)) {
-        return directory.getInt(ExifIFD0Directory.TAG_ORIENTATION);
-      }
-    } catch (ImageProcessingException | IOException | MetadataException e) {
-      log.debug("Could not read EXIF orientation from {}: {}", file, e.getMessage());
-    }
-    return 1; // Default: no rotation needed
-  }
+      ProcessBuilder processBuilder =
+          new ProcessBuilder(
+              "ffprobe",
+              "-v",
+              "quiet",
+              "-show_entries",
+              "format_tags=creation_time",
+              "-of",
+              "default=noprint_wrappers=1:nokey=1",
+              videoFile.toAbsolutePath().toString());
 
-  /**
-   * Apply EXIF orientation transformation to image
-   *
-   * @param image The original image
-   * @param orientation The EXIF orientation value (1-8)
-   * @return The correctly oriented image
-   */
-  private BufferedImage applyOrientation(BufferedImage image, int orientation) {
-    int width = image.getWidth();
-    int height = image.getHeight();
+      processBuilder.redirectErrorStream(true);
+      Process process = processBuilder.start();
 
-    // For orientations 5-8, we need to swap width and height
-    boolean swapDimensions = orientation >= 5 && orientation <= 8;
-    int newWidth = swapDimensions ? height : width;
-    int newHeight = swapDimensions ? width : height;
-
-    BufferedImage rotatedImage = new BufferedImage(newWidth, newHeight, image.getType());
-    Graphics2D g = rotatedImage.createGraphics();
-
-    AffineTransform transform = new AffineTransform();
-
-    switch (orientation) {
-      case 1: // Normal - no transformation needed
-        return image;
-
-      case 2: // Flip horizontal
-        transform.scale(-1, 1);
-        transform.translate(-width, 0);
-        break;
-
-      case 3: // Rotate 180
-        transform.translate(width, height);
-        transform.rotate(Math.PI);
-        break;
-
-      case 4: // Flip vertical
-        transform.scale(1, -1);
-        transform.translate(0, -height);
-        break;
-
-      case 5: // Rotate 90 CW and flip horizontal
-        transform.rotate(Math.PI / 2);
-        transform.scale(-1, 1);
-        break;
-
-      case 6: // Rotate 90 CW
-        transform.translate(height, 0);
-        transform.rotate(Math.PI / 2);
-        break;
-
-      case 7: // Rotate 90 CCW and flip horizontal
-        transform.scale(-1, 1);
-        transform.translate(-height, 0);
-        transform.translate(0, width);
-        transform.rotate(3 * Math.PI / 2);
-        break;
-
-      case 8: // Rotate 90 CCW
-        transform.translate(0, width);
-        transform.rotate(3 * Math.PI / 2);
-        break;
-
-      default:
-        return image;
-    }
-
-    g.drawImage(image, transform, null);
-    g.dispose();
-
-    return rotatedImage;
-  }
-
-  /** Get image format from file extension */
-  private String getImageFormat(Path file) {
-    String filename = file.getFileName().toString().toLowerCase();
-    if (filename.endsWith(".png")) {
-      return "png";
-    } else if (filename.endsWith(".gif")) {
-      return "gif";
-    } else if (filename.endsWith(".webp")) {
-      return "webp";
-    }
-    return "jpg"; // Default to JPEG
-  }
-
-  /**
-   * Write image to file with configurable quality settings
-   *
-   * @param image The image to write
-   * @param outputFile The output file
-   * @param format The image format (jpg, png, etc.)
-   * @param jpegQuality The JPEG quality (0.0 to 1.0)
-   */
-  private void writeImageWithQuality(
-      BufferedImage image, File outputFile, String format, float jpegQuality) throws IOException {
-    if (format.equals("jpg") || format.equals("jpeg")) {
-      // For JPEG, use specified quality compression
-      Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
-      if (!writers.hasNext()) {
-        throw new IOException("No JPEG writer found");
+      StringBuilder output = new StringBuilder();
+      try (java.io.BufferedReader reader =
+          new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          output.append(line).append("\n");
+        }
       }
 
-      ImageWriter writer = writers.next();
-      ImageWriteParam writeParam = writer.getDefaultWriteParam();
+      int exitCode = process.waitFor();
+      String value = output.toString().trim();
 
-      if (writeParam.canWriteCompressed()) {
-        writeParam.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-        writeParam.setCompressionQuality(jpegQuality);
+      if (exitCode != 0 || value.isEmpty()) {
+        log.debug("No creation_time found in video: {}", videoFile.getFileName());
+        return null;
       }
 
-      try (ImageOutputStream ios = ImageIO.createImageOutputStream(outputFile)) {
-        writer.setOutput(ios);
-        writer.write(null, new IIOImage(image, null, null), writeParam);
-        writer.dispose();
-      }
-    } else {
-      // For other formats (PNG, GIF, WebP), use default ImageIO
-      ImageIO.write(image, format, outputFile);
+      Instant instant = Instant.parse(value);
+      log.info("🎬 Extracted video creation_time: {} for {}", instant, videoFile.getFileName());
+      return instant;
+
+    } catch (DateTimeParseException e) {
+      log.debug(
+          "Could not parse video creation_time from {}: {}",
+          videoFile.getFileName(),
+          e.getMessage());
+      return null;
+    } catch (IOException e) {
+      log.debug(
+          "Could not read video metadata from {}: {}", videoFile.getFileName(), e.getMessage());
+      return null;
+    } catch (InterruptedException e) {
+      log.debug("Video metadata extraction interrupted for {}", videoFile.getFileName());
+      Thread.currentThread().interrupt();
+      return null;
     }
   }
 

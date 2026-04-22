@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 
 # Display usage help
 show_usage() {
-    echo "Usage: $(basename "$0") <major|minor|patch> [--restart]"
+    echo "Usage: $(basename "$0") <major|minor|patch> [--no-restart]"
     echo ""
     echo "Bumps the semantic version according to the specified level:"
     echo "  major    Increment major version (x.0.0)"
@@ -14,14 +14,14 @@ show_usage() {
     echo "  patch    Increment patch version (0.0.x)"
     echo ""
     echo "Options:"
-    echo "  --restart    Pass --restart flag to build_local.sh"
+    echo "  --no-restart    Skip Kubernetes deployment restart (default: restart)"
     echo ""
     echo "This script will:"
     echo "  1. Read current version from pom.xml and remove -SNAPSHOT"
     echo "  2. Increment the appropriate version component"
     echo "  3. Update VERSION, frontend/package.json, and server/pom.xml with release version"
     echo "  4. Create git commit and tag for release"
-    echo "  5. Run build_local.sh script"
+    echo "  5. Run ./oglimmer.sh to build and push images"
     echo "  6. Add -SNAPSHOT suffix back to frontend/package.json and server/pom.xml"
     echo "  7. Create git commit for next development version"
     echo ""
@@ -37,10 +37,10 @@ fi
 BUMP_TYPE=$1
 RESTART_FLAG=""
 
-# Check for --restart flag
+# Check for --no-restart flag
 if [ $# -eq 2 ]; then
-    if [ "$2" == "--restart" ]; then
-        RESTART_FLAG="--restart"
+    if [ "$2" == "--no-restart" ]; then
+        RESTART_FLAG="--no-restart"
     else
         echo "Error: Invalid option '$2'"
         show_usage
@@ -143,18 +143,18 @@ git commit -m "Release version $NEW_VERSION"
 git tag "v$NEW_VERSION"
 echo "✅ Created git commit and tag v$NEW_VERSION"
 
-# Run build_local.sh with --release flag
+# Run ./oglimmer.sh with --release flag
 echo ""
-echo "Running build_local.sh with --release flag $RESTART_FLAG..."
-if [ -f bin/build_local.sh ]; then
+echo "Running ./oglimmer.sh build -a --release $RESTART_FLAG..."
+if [ -f ./oglimmer.sh ]; then
     if [ -n "$RESTART_FLAG" ]; then
-        bin/build_local.sh all --release --restart
+        ./oglimmer.sh build -a --release "$RESTART_FLAG"
     else
-        bin/build_local.sh all --release
+        ./oglimmer.sh build -a --release
     fi
     echo "✅ Build completed successfully"
 else
-    echo "⚠️  Warning: bin/build_local.sh not found, skipping build"
+    echo "⚠️  Warning: ./oglimmer.sh not found, skipping build"
 fi
 
 # Add -SNAPSHOT suffix back to frontend/package.json and server/pom.xml
