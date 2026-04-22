@@ -501,6 +501,191 @@ a:hover { text-decoration: underline; }
   background: rgba(102, 126, 234, 0.05);
 }
 
+.gallery-item.selected {
+  outline: 3px solid #667eea;
+  outline-offset: -3px;
+}
+
+.gallery-item.selected .image-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(102, 126, 234, 0.15);
+  pointer-events: none;
+}
+
+.select-checkbox {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 20;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.4);
+  color: white;
+  font-size: 0.85rem;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+
+.gallery-item:hover .select-checkbox,
+.select-checkbox.is-checked {
+  opacity: 1;
+}
+
+.select-checkbox.is-checked {
+  background: #667eea;
+  border-color: #667eea;
+}
+
+.checkbox-icon {
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* Bulk tag bar */
+.bulk-tag-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 12px 20px;
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(12px);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  color: white;
+  max-width: calc(100vw - 48px);
+}
+
+.bulk-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #a8b4ff;
+}
+
+.bulk-label {
+  font-size: 0.78rem;
+  color: #888;
+  white-space: nowrap;
+}
+
+.bulk-quick-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bulk-quick-btn {
+  background: #667eea;
+  color: white;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.bulk-quick-btn:hover {
+  background: #5568d3;
+  transform: translateY(-1px);
+}
+
+.bulk-custom-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bulk-tag-input {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-size: 0.82rem;
+  width: 160px;
+  transition: border-color 0.15s;
+}
+
+.bulk-tag-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.bulk-tag-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.bulk-apply-btn {
+  background: #4caf50;
+  color: white;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.bulk-apply-btn:hover:not(:disabled) {
+  background: #43a047;
+}
+
+.bulk-apply-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bulk-clear-btn {
+  background: none;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.bulk-clear-btn:hover {
+  border-color: rgba(255, 255, 255, 0.6);
+  color: white;
+}
+
+/* Bulk bar entrance animation */
+.bulk-bar-enter-active,
+.bulk-bar-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.bulk-bar-enter-from,
+.bulk-bar-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(16px);
+}
+
 .drag-handle {
   position: absolute;
   top: 8px;

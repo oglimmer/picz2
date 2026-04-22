@@ -468,16 +468,20 @@
         :file="file"
         :available-tags="availableTags"
         :is-draggable="!presentationMode && isLoggedIn"
-        :show-drag-handle="!presentationMode && isLoggedIn"
+        :show-drag-handle="!presentationMode && isLoggedIn && !selectionActive"
         :show-file-info="!presentationMode && isLoggedIn"
         :dragging="draggingIndex === index"
         :drag-over="dragOverIndex === index"
+        :selectable="!presentationMode && isLoggedIn"
+        :selected="selectedFileIds.has(file.id)"
+        :selection-active="selectionActive"
         @click="openLightbox"
         @delete="handleDeleteFile"
         @rotate="handleRotateImage"
         @add-tag="handleAddTag"
         @remove-tag="handleRemoveTag"
         @filter-tag="filterByTagName"
+        @toggle-select="(fileId, shiftKey) => handleToggleSelect(fileId, index, shiftKey)"
         @drag-start="(e) => handleDragStart(e, index)"
         @drag-over="(e) => handleDragOver(e, index)"
         @drag-enter="(e) => handleDragEnter(e, index)"
@@ -513,11 +517,21 @@
         controls
       />
     </div>
+
+    <!-- Bulk tag bar (shown when images are selected) -->
+    <BulkTagBar
+      v-if="!presentationMode && isLoggedIn"
+      :selected-count="selectedFileIds.size"
+      :available-tags="availableTags"
+      :frequent-tags="frequentTags"
+      @add-tag="handleBulkAddTag"
+      @clear="clearSelection"
+    />
   </div>
 </template>
 
 <script>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { useApi } from '../composables/useApi'
@@ -534,13 +548,15 @@ import { formatBytes } from '../utils/format'
 import GalleryItem from '../components/GalleryItem.vue'
 import Lightbox from '../components/Lightbox.vue'
 import EditableTitle from '../components/EditableTitle.vue'
+import BulkTagBar from '../components/BulkTagBar.vue'
 
 export default {
   name: 'GalleryView',
   components: {
     GalleryItem,
     Lightbox,
-    EditableTitle
+    EditableTitle,
+    BulkTagBar
   },
   props: {
     albumId: {
@@ -615,6 +631,14 @@ export default {
     const loadingAnalytics = ref(false)
     const analyticsStats = ref(null)
 
+    // Multi-select state
+    const selectedFileIds = ref(new Set())
+    const lastSelectedIndex = ref(null)
+    const selectionActive = computed(() => selectedFileIds.value.size > 0)
+    const frequentTags = computed(() =>
+      [...tagsUsedInAlbum.value].sort((a, b) => b.count - a.count).slice(0, 6)
+    )
+
     const formattedTotalSize = computed(() => formatBytes(totalSize.value))
     const formattedRecordingDuration = computed(() => {
       const seconds = Math.floor(totalDuration.value / 1000)
@@ -659,6 +683,8 @@ export default {
     })
 
     onMounted(async () => {
+      window.addEventListener('keydown', handleGalleryKeydown)
+
       // Load album data
       await loadAlbumById(parseInt(props.albumId), props.presentationMode)
 
@@ -679,6 +705,10 @@ export default {
       if (props.presentationMode && album.value) {
         await loadRecordings(album.value.id)
       }
+    })
+
+    onUnmounted(() => {
+      window.removeEventListener('keydown', handleGalleryKeydown)
     })
 
     // React to prop changes when the same component instance is reused
@@ -839,6 +869,61 @@ export default {
         success('Image rotated successfully!')
       } catch (err) {
         error(`Error rotating image: ${err.message}`)
+      }
+    }
+
+    function handleToggleSelect(fileId, index, shiftKey) {
+      const ids = new Set(selectedFileIds.value)
+      if (shiftKey && lastSelectedIndex.value !== null) {
+        const lo = Math.min(lastSelectedIndex.value, index)
+        const hi = Math.max(lastSelectedIndex.value, index)
+        for (let i = lo; i <= hi; i++) {
+          ids.add(files.value[i].id)
+        }
+      } else {
+        if (ids.has(fileId)) {
+          ids.delete(fileId)
+        } else {
+          ids.add(fileId)
+        }
+        lastSelectedIndex.value = index
+      }
+      selectedFileIds.value = ids
+    }
+
+    function clearSelection() {
+      selectedFileIds.value = new Set()
+      lastSelectedIndex.value = null
+    }
+
+    function selectAll() {
+      selectedFileIds.value = new Set(files.value.map(f => f.id))
+    }
+
+    async function handleBulkAddTag(tagName) {
+      if (!tagName || selectedFileIds.value.size === 0) return
+      const ids = [...selectedFileIds.value]
+      let count = 0
+      for (const fileId of ids) {
+        try {
+          await addTag(fileId, tagName)
+          count++
+        } catch (err) {
+          console.error(`Error tagging file ${fileId}:`, err)
+        }
+      }
+      if (count > 0) success(`Tagged ${count} photo${count !== 1 ? 's' : ''} with "${tagName}"`)
+    }
+
+    function handleGalleryKeydown(e) {
+      if (!isLoggedIn.value || selectedFile.value) return
+      if (e.key === 'Escape' && selectionActive.value) {
+        e.preventDefault()
+        clearSelection()
+      }
+      if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        selectAll()
       }
     }
 
@@ -1305,6 +1390,12 @@ export default {
       isLoggedIn,
       album,
       files,
+      selectedFileIds,
+      selectionActive,
+      frequentTags,
+      handleToggleSelect,
+      clearSelection,
+      handleBulkAddTag,
       loadingFiles,
       formattedTotalSize,
       selectedTag,

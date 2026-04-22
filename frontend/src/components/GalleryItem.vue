@@ -1,8 +1,8 @@
 <template>
   <div
     class="gallery-item"
-    :draggable="isDraggable"
-    :class="{ 'dragging': dragging, 'drag-over': dragOver }"
+    :draggable="isDraggable && !selectionActive"
+    :class="{ 'dragging': dragging, 'drag-over': dragOver, 'selected': selected }"
     @dragstart="handleDragStart"
     @dragover.prevent="handleDragOver"
     @dragenter="handleDragEnter"
@@ -17,9 +17,19 @@
     >
       ⋮⋮
     </div>
+    <button
+      v-if="selectable"
+      class="select-checkbox"
+      :class="{ 'is-checked': selected }"
+      :title="selected ? 'Deselect' : 'Select (Shift+click for range)'"
+      @click.stop="(e) => $emit('toggle-select', file.id, e.shiftKey)"
+    >
+      <span class="checkbox-icon">{{ selected ? '✓' : '' }}</span>
+    </button>
+
     <div
       class="image-container"
-      @click="$emit('click', file)"
+      @click="(e) => selectionActive ? $emit('toggle-select', file.id, e.shiftKey) : $emit('click', file)"
     >
       <img
         :src="thumbnailUrl"
@@ -117,6 +127,9 @@ interface Props {
   showFileInfo?: boolean
   dragging?: boolean
   dragOver?: boolean
+  selectable?: boolean
+  selected?: boolean
+  selectionActive?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -125,7 +138,10 @@ const props = withDefaults(defineProps<Props>(), {
   showDragHandle: true,
   showFileInfo: true,
   dragging: false,
-  dragOver: false
+  dragOver: false,
+  selectable: false,
+  selected: false,
+  selectionActive: false
 })
 
 const emit = defineEmits<{
@@ -135,6 +151,7 @@ const emit = defineEmits<{
   'add-tag': [fileId: number, tagName: string]
   'remove-tag': [fileId: number, tagName: string]
   'filter-tag': [tagName: string]
+  'toggle-select': [fileId: number, shiftKey: boolean]
   'drag-start': [event: DragEvent]
   'drag-over': [event: DragEvent]
   'drag-enter': [event: DragEvent]
