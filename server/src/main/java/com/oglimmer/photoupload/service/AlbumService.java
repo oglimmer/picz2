@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.entity.Album;
+import com.oglimmer.photoupload.entity.AlbumEnabledTag;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.Tag;
@@ -10,6 +11,7 @@ import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.mapper.AlbumMapper;
 import com.oglimmer.photoupload.model.AlbumInfo;
+import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
@@ -36,6 +38,7 @@ public class AlbumService {
   private final FileMetadataRepository fileMetadataRepository;
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
+  private final AlbumEnabledTagRepository albumEnabledTagRepository;
   private final JdbcTemplate jdbcTemplate;
   private final FileStorageService fileStorageService;
   private final ThumbnailService thumbnailService;
@@ -366,6 +369,15 @@ public class AlbumService {
     newAlbum.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
     newAlbum = albumRepository.save(newAlbum);
+
+    // Copy enabled tags from source album so the duplicate has the same tag configuration
+    for (AlbumEnabledTag sourceEnabled :
+        albumEnabledTagRepository.findByAlbumId(sourceAlbum.getId())) {
+      AlbumEnabledTag copyEnabled = new AlbumEnabledTag();
+      copyEnabled.setAlbum(newAlbum);
+      copyEnabled.setTag(sourceEnabled.getTag());
+      albumEnabledTagRepository.save(copyEnabled);
+    }
 
     // Duplicate files
     List<FileMetadata> sourceFiles =

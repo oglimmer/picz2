@@ -4,17 +4,22 @@ import type { Tag } from "@/types";
 
 // Shared tags state across the app
 const availableTags = ref<Tag[]>([]);
+const enabledAlbumTags = ref<Tag[]>([]);
 const loading = ref<boolean>(false);
 const error = ref<string | null>(null);
 
 export interface TagsComposable {
   availableTags: Ref<Tag[]>;
+  enabledAlbumTags: Ref<Tag[]>;
   loading: Ref<boolean>;
   error: Ref<string | null>;
   loadTags: () => Promise<void>;
   createTag: (tagName: string) => Promise<Tag>;
   updateTag: (tagId: number, newTagName: string) => Promise<Tag | undefined>;
   deleteTag: (tagId: number) => Promise<void>;
+  loadEnabledAlbumTags: (albumId: number) => Promise<void>;
+  setEnabledAlbumTags: (albumId: number, tagIds: number[]) => Promise<void>;
+  clearEnabledAlbumTags: () => void;
 }
 
 /**
@@ -143,9 +148,54 @@ export function useTags(): TagsComposable {
     }
   }
 
+  async function loadEnabledAlbumTags(albumId: number): Promise<void> {
+    try {
+      const response = await fetchWithAuth(
+        `${apiUrl}/api/albums/${albumId}/enabled-tags`,
+      );
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        enabledAlbumTags.value = data.tags || [];
+      } else {
+        throw new Error(data.message || "Failed to load enabled tags");
+      }
+    } catch (err) {
+      console.error("Error loading enabled album tags:", err);
+      enabledAlbumTags.value = [];
+    }
+  }
+
+  async function setEnabledAlbumTags(
+    albumId: number,
+    tagIds: number[],
+  ): Promise<void> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/enabled-tags`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tagIds }),
+      },
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Failed to update enabled tags");
+    }
+
+    enabledAlbumTags.value = data.tags || [];
+  }
+
+  function clearEnabledAlbumTags(): void {
+    enabledAlbumTags.value = [];
+  }
+
   return {
     // State
     availableTags,
+    enabledAlbumTags,
     loading,
     error,
 
@@ -154,5 +204,8 @@ export function useTags(): TagsComposable {
     createTag,
     updateTag,
     deleteTag,
+    loadEnabledAlbumTags,
+    setEnabledAlbumTags,
+    clearEnabledAlbumTags,
   };
 }

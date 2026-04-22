@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.mapper.FileInfoMapper;
+import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
@@ -27,6 +28,8 @@ class FileStorageServicePathTest {
     FileMetadataRepository metaRepo = Mockito.mock(FileMetadataRepository.class);
     TagRepository tagRepo = Mockito.mock(TagRepository.class);
     ImageTagRepository imageTagRepo = Mockito.mock(ImageTagRepository.class);
+    AlbumEnabledTagRepository albumEnabledTagRepo =
+        Mockito.mock(AlbumEnabledTagRepository.class);
     ThumbnailService thumbSvc = Mockito.mock(ThumbnailService.class);
     JdbcTemplate jdbc = Mockito.mock(JdbcTemplate.class);
     AlbumRepository albumRepo = Mockito.mock(AlbumRepository.class);
@@ -40,6 +43,7 @@ class FileStorageServicePathTest {
             metaRepo,
             tagRepo,
             imageTagRepo,
+            albumEnabledTagRepo,
             thumbSvc,
             jdbc,
             albumRepo,

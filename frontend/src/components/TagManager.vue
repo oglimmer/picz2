@@ -42,7 +42,7 @@
           >
             <span class="tag-name">{{ tag.name }}</span>
             <div
-              v-if="tag.name !== 'no_tag'"
+              v-if="!isSystemTag(tag.name)"
               class="tag-actions"
             >
               <button
@@ -127,6 +127,11 @@ const newTagName = ref('')
 const editingTagId = ref<number | null>(null)
 const editingTagName = ref('')
 const tagEditInput = ref<HTMLInputElement | null>(null)
+
+const SYSTEM_TAGS = new Set(['no_tag', 'all'])
+function isSystemTag(name: string): boolean {
+  return SYSTEM_TAGS.has(name)
+}
 
 async function handleCreateTag() {
   if (!newTagName.value || newTagName.value.trim() === '') {

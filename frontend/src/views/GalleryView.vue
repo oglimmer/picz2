@@ -425,6 +425,14 @@
         >
           ⬆ Move to Top ({{ selectedForReorder.size }})
         </button>
+        <button
+          class="tag-manage-btn"
+          :class="{ 'tag-manage-btn-active': tagPickerOpen }"
+          title="Choose which tags are available in this album"
+          @click="toggleTagPicker"
+        >
+          🏷️ Manage Album Tags
+        </button>
       </div>
 
       <div class="filter-controls">
@@ -437,7 +445,7 @@
             All photos
           </option>
           <option
-            v-for="tag in availableTags"
+            v-for="tag in enabledAlbumTags"
             :key="tag.id"
             :value="tag.name"
           >
@@ -445,6 +453,65 @@
           </option>
         </select>
       </div>
+    </div>
+
+    <div
+      v-if="!presentationMode && isLoggedIn && tagPickerOpen"
+      class="tag-picker-panel"
+    >
+      <div class="tag-picker-header">
+        <strong>Enable tags for this album</strong>
+        <span class="tag-picker-hint">
+          Only enabled tags can be applied to photos or used as filters here.
+        </span>
+      </div>
+      <div
+        v-if="availableTags.length === 0"
+        class="tag-picker-empty"
+      >
+        No tags defined yet. Create tags from the Albums overview first.
+      </div>
+      <ul
+        v-else
+        class="tag-picker-list"
+      >
+        <li
+          v-for="tag in togglableTags"
+          :key="tag.id"
+          class="tag-picker-item"
+        >
+          <label>
+            <input
+              type="checkbox"
+              :checked="pickerSelectedTagIds.has(tag.id)"
+              @change="togglePickerTag(tag.id)"
+            >
+            <span>{{ tag.name }}</span>
+          </label>
+        </li>
+      </ul>
+      <div class="tag-picker-actions">
+        <button
+          class="btn-save-small"
+          :disabled="savingEnabledTags"
+          @click="saveEnabledTags"
+        >
+          {{ savingEnabledTags ? 'Saving…' : 'Save' }}
+        </button>
+        <button
+          class="btn-cancel-link"
+          @click="closeTagPicker"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="!presentationMode && isLoggedIn && !tagPickerOpen && enabledAlbumTags.length === 0 && availableTags.length > 0"
+      class="tag-picker-notice"
+    >
+      No tags are enabled for this album yet. Click "Manage Album Tags" to enable tags.
     </div>
 
     <div
@@ -509,7 +576,7 @@
         v-for="(file, index) in displayedFiles"
         :key="file.id"
         :file="file"
-        :available-tags="availableTags"
+        :available-tags="enabledAlbumTags"
         :is-draggable="!presentationMode && isLoggedIn && !duplicateFilterActive && !reorderModeActive"
         :show-drag-handle="!presentationMode && isLoggedIn && !duplicateFilterActive && !reorderModeActive && !selectionActive"
         :show-file-info="!presentationMode && isLoggedIn"
@@ -569,7 +636,7 @@
     <BulkTagBar
       v-if="!presentationMode && isLoggedIn"
       :selected-count="selectedFileIds.size"
-      :available-tags="availableTags"
+      :available-tags="enabledAlbumTags"
       :frequent-tags="frequentTags"
       @add-tag="handleBulkAddTag"
       @clear="clearSelection"
@@ -634,7 +701,14 @@ export default {
       reorderByFilename,
       reorderByExif
     } = useFiles()
-    const { availableTags, loadTags } = useTags()
+    const {
+      availableTags,
+      enabledAlbumTags,
+      loadTags,
+      loadEnabledAlbumTags,
+      setEnabledAlbumTags,
+      clearEnabledAlbumTags
+    } = useTags()
     const { language1Name, language2Name, loadLanguageSettings } = useSettings()
     const {
       isInRecordingMode,
@@ -681,6 +755,9 @@ export default {
     const selectedForDeletion = ref(new Set())
     const reorderModeActive = ref(false)
     const selectedForReorder = ref(new Set())
+    const tagPickerOpen = ref(false)
+    const pickerSelectedTagIds = ref(new Set())
+    const savingEnabledTags = ref(false)
 
     const EXCLUDED_DUPLICATE_NAME = 'fullsizerender.heic'
 
@@ -854,9 +931,60 @@ export default {
     const selectedFileIds = ref(new Set())
     const lastSelectedIndex = ref(null)
     const selectionActive = computed(() => selectedFileIds.value.size > 0)
-    const frequentTags = computed(() =>
-      [...tagsUsedInAlbum.value].sort((a, b) => b.count - a.count).slice(0, 6)
+    const SYSTEM_TAGS = new Set(['no_tag', 'all'])
+    const togglableTags = computed(() =>
+      availableTags.value.filter(t => !SYSTEM_TAGS.has(t.name))
     )
+    const enabledTagNames = computed(() => new Set(enabledAlbumTags.value.map(t => t.name)))
+    const frequentTags = computed(() =>
+      [...tagsUsedInAlbum.value]
+        .filter(t => enabledTagNames.value.has(t.name))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6)
+    )
+
+    function toggleTagPicker() {
+      if (tagPickerOpen.value) {
+        closeTagPicker()
+        return
+      }
+      // Seed from currently enabled tags, but exclude system tags — they can't be toggled.
+      pickerSelectedTagIds.value = new Set(
+        enabledAlbumTags.value
+          .filter(t => !SYSTEM_TAGS.has(t.name))
+          .map(t => t.id)
+      )
+      tagPickerOpen.value = true
+    }
+
+    function closeTagPicker() {
+      tagPickerOpen.value = false
+      pickerSelectedTagIds.value = new Set()
+    }
+
+    function togglePickerTag(tagId) {
+      const next = new Set(pickerSelectedTagIds.value)
+      if (next.has(tagId)) {
+        next.delete(tagId)
+      } else {
+        next.add(tagId)
+      }
+      pickerSelectedTagIds.value = next
+    }
+
+    async function saveEnabledTags() {
+      if (!album.value) return
+      savingEnabledTags.value = true
+      try {
+        await setEnabledAlbumTags(album.value.id, [...pickerSelectedTagIds.value])
+        success('Album tags updated.')
+        closeTagPicker()
+      } catch (err) {
+        error(`Error saving enabled tags: ${err.message}`)
+      } finally {
+        savingEnabledTags.value = false
+      }
+    }
 
     const formattedTotalSize = computed(() => formatBytes(totalSize.value))
     const formattedRecordingDuration = computed(() => {
@@ -910,6 +1038,9 @@ export default {
       // Load tags if logged in
       if (isLoggedIn.value) {
         await loadTags()
+        if (album.value && !props.presentationMode) {
+          await loadEnabledAlbumTags(album.value.id)
+        }
       }
 
       // Load language settings
@@ -928,6 +1059,7 @@ export default {
 
     onUnmounted(() => {
       window.removeEventListener('keydown', handleGalleryKeydown)
+      clearEnabledAlbumTags()
     })
 
     // React to prop changes when the same component instance is reused
@@ -945,9 +1077,14 @@ export default {
     watch(() => props.albumId, async (newAlbumId) => {
       const id = parseInt(newAlbumId)
       if (!Number.isNaN(id)) {
+        closeTagPicker()
+        clearEnabledAlbumTags()
         await loadAlbumById(id, props.presentationMode)
         if (isLoggedIn.value) {
           await loadTags()
+          if (album.value && !props.presentationMode) {
+            await loadEnabledAlbumTags(album.value.id)
+          }
         }
         if (album.value) {
           await loadAlbumFiles(album.value.id, props.presentationMode)
@@ -1628,6 +1765,15 @@ export default {
       selectedTag,
       tagsUsedInAlbum,
       availableTags,
+      enabledAlbumTags,
+      togglableTags,
+      tagPickerOpen,
+      pickerSelectedTagIds,
+      savingEnabledTags,
+      toggleTagPicker,
+      closeTagPicker,
+      togglePickerTag,
+      saveEnabledTags,
       selectedFile,
       draggingIndex,
       dragOverIndex,

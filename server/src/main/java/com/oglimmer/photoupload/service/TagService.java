@@ -23,6 +23,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class TagService {
 
   private static final String NO_TAG = FileStorageService.NO_TAG;
+  private static final String ALL_TAG = FileStorageService.ALL_TAG;
+
+  private static boolean isSystemTag(String name) {
+    return NO_TAG.equals(name) || ALL_TAG.equals(name);
+  }
 
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
@@ -39,10 +44,10 @@ public class TagService {
   public TagInfo createTag(String tagName) {
     User currentUser = userContext.getCurrentUser();
 
-    // Prevent manual creation of the special "no_tag" tag
-    if (NO_TAG.equals(tagName)) {
+    // Prevent manual creation of special system tags
+    if (isSystemTag(tagName)) {
       throw new ValidationException(
-          "The '" + NO_TAG + "' tag is a special system tag and cannot be manually created");
+          "The '" + tagName + "' tag is a special system tag and cannot be manually created");
     }
 
     // Check if tag already exists for this user
@@ -73,16 +78,16 @@ public class TagService {
             .findByUserAndId(currentUser, tagId)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "id", tagId));
 
-    // Prevent modification of the special "no_tag" tag
-    if (NO_TAG.equals(tag.getName())) {
+    // Prevent modification of special system tags
+    if (isSystemTag(tag.getName())) {
       throw new ValidationException(
-          "The '" + NO_TAG + "' tag is a special system tag and cannot be modified");
+          "The '" + tag.getName() + "' tag is a special system tag and cannot be modified");
     }
 
-    // Prevent renaming to "no_tag"
-    if (NO_TAG.equals(newTagName)) {
+    // Prevent renaming to a reserved system tag name
+    if (isSystemTag(newTagName)) {
       throw new ValidationException(
-          "Cannot rename tag to '" + NO_TAG + "' as it is a reserved system tag name");
+          "Cannot rename tag to '" + newTagName + "' as it is a reserved system tag name");
     }
 
     // Check if new name already exists for this user (and it's not the current tag)
@@ -113,10 +118,10 @@ public class TagService {
             .findByUserAndId(currentUser, tagId)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "id", tagId));
 
-    // Prevent deletion of the special "no_tag" tag
-    if (NO_TAG.equals(tag.getName())) {
+    // Prevent deletion of special system tags
+    if (isSystemTag(tag.getName())) {
       throw new ValidationException(
-          "The '" + NO_TAG + "' tag is a special system tag and cannot be deleted");
+          "The '" + tag.getName() + "' tag is a special system tag and cannot be deleted");
     }
 
     // Delete all associations with files first

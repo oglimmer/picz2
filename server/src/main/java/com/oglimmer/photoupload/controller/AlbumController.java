@@ -13,8 +13,12 @@ import com.oglimmer.photoupload.model.FilesResponse;
 import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.ReorderRequest;
 import com.oglimmer.photoupload.model.ReorderResponse;
+import com.oglimmer.photoupload.model.TagIdsRequest;
+import com.oglimmer.photoupload.model.TagInfo;
+import com.oglimmer.photoupload.model.TagsListResponse;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.service.AlbumService;
+import com.oglimmer.photoupload.service.AlbumTagService;
 import com.oglimmer.photoupload.service.AnalyticsService;
 import com.oglimmer.photoupload.service.FileStorageService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,6 +43,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AlbumController {
 
   private final AlbumService albumService;
+  private final AlbumTagService albumTagService;
   private final FileStorageService fileStorageService;
   private final AnalyticsService analyticsService;
   private final AlbumRepository albumRepository;
@@ -223,6 +228,25 @@ public class AlbumController {
             .message("Files reordered by filename numbers")
             .updatedCount(updatedCount)
             .build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  @GetMapping("/{id}/enabled-tags")
+  public ResponseEntity<TagsListResponse> getEnabledTags(@PathVariable Long id) {
+    List<TagInfo> tags = albumTagService.getEnabledTags(id);
+
+    TagsListResponse response = TagsListResponse.builder().success(true).tags(tags).build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  @PutMapping("/{id}/enabled-tags")
+  public ResponseEntity<TagsListResponse> setEnabledTags(
+      @PathVariable Long id, @RequestBody TagIdsRequest request) {
+    List<TagInfo> tags = albumTagService.setEnabledTags(id, request.getTagIds());
+
+    TagsListResponse response = TagsListResponse.builder().success(true).tags(tags).build();
 
     return ResponseEntity.ok(response);
   }

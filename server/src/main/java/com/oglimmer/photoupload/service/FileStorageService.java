@@ -19,6 +19,7 @@ import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
@@ -54,6 +55,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class FileStorageService {
 
   public static final String NO_TAG = "no_tag";
+  public static final String ALL_TAG = "all";
 
   private static final long ONE_KB = 1024L;
   private static final long ONE_MB = ONE_KB * ONE_KB; // 1_048_576
@@ -91,6 +93,7 @@ public class FileStorageService {
   private final FileMetadataRepository metadataRepository;
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
+  private final AlbumEnabledTagRepository albumEnabledTagRepository;
   private final ThumbnailService thumbnailService;
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
@@ -106,6 +109,7 @@ public class FileStorageService {
       FileMetadataRepository metadataRepository,
       TagRepository tagRepository,
       ImageTagRepository imageTagRepository,
+      AlbumEnabledTagRepository albumEnabledTagRepository,
       ThumbnailService thumbnailService,
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
@@ -116,6 +120,7 @@ public class FileStorageService {
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
     this.imageTagRepository = imageTagRepository;
+    this.albumEnabledTagRepository = albumEnabledTagRepository;
     this.thumbnailService = thumbnailService;
     this.jdbcTemplate = jdbcTemplate;
     this.fileInfoMapper = fileInfoMapper;
@@ -685,6 +690,15 @@ public class FileStorageService {
         tagRepository
             .findByUserAndName(currentUser, tagName)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
+
+    // Enforce album's enabled-tags list (system tags NO_TAG and ALL_TAG are always allowed)
+    if (!NO_TAG.equals(tagName)
+        && !ALL_TAG.equals(tagName)
+        && !albumEnabledTagRepository.existsByAlbumIdAndTagId(
+            metadata.getAlbum().getId(), tag.getId())) {
+      throw new ValidationException(
+          "Tag '" + tagName + "' is not enabled for this album");
+    }
 
     // Check if tag already exists for this file
     if (imageTagRepository.findByFileMetadataIdAndTagId(fileId, tag.getId()).isPresent()) {
