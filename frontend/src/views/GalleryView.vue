@@ -632,7 +632,7 @@
         :drag-over="dragOverIndex === index"
         :selectable="!presentationMode && isLoggedIn"
         :selected="reorderModeActive ? selectedForReorder.has(file.id) : duplicateFilterActive ? selectedForDeletion.has(file.id) : selectedFileIds.has(file.id)"
-        :selection-active="selectionActive || duplicateFilterActive || reorderModeActive"
+        :selection-active="!presentationMode && (selectionActive || duplicateFilterActive || reorderModeActive)"
         :bulk-select="duplicateFilterActive || reorderModeActive"
         :select-variant="reorderModeActive ? 'reorder' : 'delete'"
         :move-target="reorderModeActive && selectedForReorder.size > 0 && !selectedForReorder.has(file.id)"
