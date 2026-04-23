@@ -2455,6 +2455,25 @@ body.landing-page .version-info { display: none; }
 }
 .tag-remove:hover { opacity: 1; }
 
+.title-with-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.title-with-edit > :first-child { margin: 0; }
+.edit-icon-btn {
+  background: none;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 4px 7px;
+  font-size: .9rem;
+  cursor: pointer;
+  line-height: 1;
+  transition: border-color var(--t-fast);
+}
+.edit-icon-btn:hover { border-color: var(--c-border); }
+
 .file-actions {
   display: flex;
   align-items: center;
@@ -2488,12 +2507,13 @@ body.landing-page .version-info { display: none; }
   padding: 4px 7px;
   font-size: .75rem;
   background: none;
-  border: none;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-sm);
   color: var(--c-danger);
   cursor: pointer;
-  transition: color var(--t-fast);
+  transition: border-color var(--t-fast), color var(--t-fast);
 }
-.delete-btn:hover { color: #9e2a2a; }
+.delete-btn:hover { border-color: var(--c-danger); color: #9e2a2a; }
 
 /* === BULK TAG BAR === */
 

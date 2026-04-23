@@ -127,7 +127,7 @@
           title="Delete photo"
           @click.stop="$emit('delete', file.id)"
         >
-          🗑️ Delete
+          🗑️
         </button>
       </div>
     </div>
