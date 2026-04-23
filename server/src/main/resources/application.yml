@@ -57,6 +57,8 @@ file:
     max-file-size: 524288000
     max-files-per-request: 100
     max-concurrent-processing: "${FILE_UPLOAD_MAX_CONCURRENT_PROCESSING:2}"
+    processing-queue-capacity: "${FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY:50}"
+    duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:false}"
 logging:
   level:
     ROOT: "info"

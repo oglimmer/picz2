@@ -12,6 +12,17 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     // Called by AppDelegate when background session finished delivering events
     var onAllBackgroundEventsComplete: ((String) -> Void)?
 
+    // Fires for every task that finished (success, failure, backpressure).
+    // SyncCoordinator uses this to free a concurrency slot and re-enqueue
+    // on HTTP 503 with the honored Retry-After delay.
+    enum UploadOutcome {
+        case success
+        case clientError       // non-retryable 4xx (except 429)
+        case transport         // network / session error, system will retry
+        case backpressure(TimeInterval) // HTTP 429/503, with retry delay
+    }
+    var onTaskFinished: ((String, UploadOutcome) -> Void)?
+
     override private init() { super.init() }
 
     func configureSession(with identifier: String? = nil) {
@@ -177,34 +188,53 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
         let components = desc.components(separatedBy: "|")
         guard let assetId = components.first else { return }
 
-        // Handle error
+        // Handle transport error — system will retry background tasks automatically
         if let error {
             let errorMessage = error.localizedDescription
             SyncLogger.shared.logUploadFailure(assetId: assetId, error: errorMessage)
             UploadStore.shared.removeFromUploading(assetId)
-            return // System will retry background tasks automatically based on policy
+            onTaskFinished?(assetId, .transport)
+            return
         }
 
         // Check HTTP response
-        let success: Bool
         if let http = task.response as? HTTPURLResponse {
-            success = (200 ... 299).contains(http.statusCode)
-            if !success {
-                let errorMessage = "HTTP \(http.statusCode)"
-                SyncLogger.shared.logUploadFailure(assetId: assetId, error: errorMessage)
+            let code = http.statusCode
+            if (200 ... 299).contains(code) {
+                let checksum = components.count > 3 ? components[3] : nil
+                UploadStore.shared.markUploaded(assetId, checksum: checksum)
+                SyncCoordinator.shared.onUploadedOne(assetId: assetId)
+                SyncLogger.shared.logUploadSuccess(assetId: assetId)
+                onTaskFinished?(assetId, .success)
+            } else if code == 429 || code == 503 {
+                // Server backpressure — expected signal, not a failure. Log as
+                // informational so the user doesn't see a red error entry.
+                let retryAfter = parseRetryAfter(from: http) ?? 30
+                SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retryAfter)
                 UploadStore.shared.removeFromUploading(assetId)
-                return
+                onTaskFinished?(assetId, .backpressure(retryAfter))
+            } else {
+                SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(code)")
+                UploadStore.shared.removeFromUploading(assetId)
+                onTaskFinished?(assetId, .clientError)
             }
         } else {
-            success = true // Non-HTTP upload (unlikely) — assume success
-        }
-
-        if success {
+            // Non-HTTP upload (unlikely) — assume success
             let checksum = components.count > 3 ? components[3] : nil
             UploadStore.shared.markUploaded(assetId, checksum: checksum)
             SyncCoordinator.shared.onUploadedOne(assetId: assetId)
             SyncLogger.shared.logUploadSuccess(assetId: assetId)
+            onTaskFinished?(assetId, .success)
         }
+    }
+
+    private func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let value = response.value(forHTTPHeaderField: "Retry-After") else { return nil }
+        if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespaces)) {
+            return seconds
+        }
+        // HTTP-date form — not expected from our server; fall through to default
+        return nil
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

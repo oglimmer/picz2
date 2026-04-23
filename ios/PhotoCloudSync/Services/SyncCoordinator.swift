@@ -28,8 +28,16 @@ final class SyncCoordinator: ObservableObject {
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
     private var pendingAssets: [PHAsset] = []
     private var uploadingAssets: Set<String> = [] // Track assets currently being uploaded
+    private var inFlightAssets: [String: PHAsset] = [:] // localId -> PHAsset, kept for 503 re-queue
+    private let maxInFlightUploads = 3
 
-    private init() {}
+    private init() {
+        // Route actual upload completions through the coordinator so we can
+        // free a slot, drain the next upload, and re-enqueue 503s with backoff.
+        uploader.onTaskFinished = { [weak self] assetId, outcome in
+            self?.handleUploadFinished(assetId: assetId, outcome: outcome)
+        }
+    }
 
     // MARK: - Public controls
 
@@ -61,6 +69,7 @@ final class SyncCoordinator: ObservableObject {
         syncQueue.async {
             self.pendingAssets.removeAll()
             self.uploadingAssets.removeAll()
+            self.inFlightAssets.removeAll()
             DispatchQueue.main.async {
                 self.metrics.queued = 0
                 self.metrics.uploading = 0
@@ -315,15 +324,19 @@ final class SyncCoordinator: ObservableObject {
     }
 
     private func drainQueue() {
-        // Push a small batch to the uploader to avoid memory pressure
-        let batchSize = 3
-        let batch = Array(pendingAssets.prefix(batchSize))
+        // Only launch enough uploads to fill the concurrency cap. New uploads
+        // are handed off one-per-completion (see handleUploadFinished) so the
+        // server never sees more than maxInFlightUploads at once.
+        let slotsFree = max(0, maxInFlightUploads - uploadingAssets.count)
+        guard slotsFree > 0 else { return }
+
+        let batch = Array(pendingAssets.prefix(slotsFree))
         guard !batch.isEmpty else { return }
 
-        // Remove from pending and mark as uploading
-        pendingAssets.removeFirst(min(batchSize, pendingAssets.count))
+        pendingAssets.removeFirst(batch.count)
         for asset in batch {
             uploadingAssets.insert(asset.localIdentifier)
+            inFlightAssets[asset.localIdentifier] = asset
         }
 
         DispatchQueue.main.async {
@@ -333,34 +346,57 @@ final class SyncCoordinator: ObservableObject {
 
         for asset in batch {
             uploader.queueUpload(asset: asset, api: api) { result in
-                // Remove from uploading set
-                self.syncQueue.async {
-                    self.uploadingAssets.remove(asset.localIdentifier)
-                }
-
-                DispatchQueue.main.async {
-                    self.metrics.uploading = max(0, self.metrics.uploading - 1)
-                    self.metrics.lastSync = Date()
-                    self.settings.lastSyncDate = self.metrics.lastSync
-                }
-
                 switch result {
                 case .success:
+                    // Handoff succeeded; actual upload completion comes through
+                    // Uploader.onTaskFinished -> handleUploadFinished.
                     break
                 case .failure:
-                    // Re-enqueue on failure (light retry). In production, use retry with backoff.
-                    self.syncQueue.asyncAfter(deadline: .now() + 10) {
-                        self.pendingAssets.append(asset)
-                        DispatchQueue.main.async { self.metrics.queued = self.pendingAssets.count }
-                        self.drainQueue()
+                    // Export / multipart write failed — free the slot and try a replacement.
+                    self.syncQueue.async {
+                        self.uploadingAssets.remove(asset.localIdentifier)
+                        self.inFlightAssets.removeValue(forKey: asset.localIdentifier)
+                        DispatchQueue.main.async {
+                            self.metrics.uploading = max(0, self.metrics.uploading - 1)
+                        }
+                        self.syncQueue.asyncAfter(deadline: .now() + 10) {
+                            self.pendingAssets.append(asset)
+                            DispatchQueue.main.async { self.metrics.queued = self.pendingAssets.count }
+                            self.drainQueue()
+                        }
                     }
                 }
             }
         }
+    }
 
-        // Continue draining if more remain
+    private func handleUploadFinished(assetId: String, outcome: Uploader.UploadOutcome) {
         syncQueue.async {
-            self.drainQueue()
+            let asset = self.inFlightAssets.removeValue(forKey: assetId)
+            self.uploadingAssets.remove(assetId)
+
+            DispatchQueue.main.async {
+                self.metrics.uploading = max(0, self.metrics.uploading - 1)
+                self.metrics.lastSync = Date()
+                self.settings.lastSyncDate = self.metrics.lastSync
+            }
+
+            switch outcome {
+            case .success, .clientError, .transport:
+                // success: done; clientError: permanent failure; transport: system-retried.
+                self.drainQueue()
+            case let .backpressure(retryAfter):
+                // Server asked us to back off. Re-enqueue this asset and pause
+                // draining for retryAfter seconds so we don't hammer the server.
+                if let asset {
+                    print("SyncCoordinator: 503/429 on \(assetId), re-queueing after \(Int(retryAfter))s")
+                    self.pendingAssets.insert(asset, at: 0)
+                    DispatchQueue.main.async { self.metrics.queued = self.pendingAssets.count }
+                }
+                self.syncQueue.asyncAfter(deadline: .now() + retryAfter) {
+                    self.drainQueue()
+                }
+            }
         }
     }
 }

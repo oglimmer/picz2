@@ -41,12 +41,6 @@
       <artifactId>flyway-mysql</artifactId>
     </dependency>
 
-    <!-- Spring Boot Flyway starter (Boot 4 extracted Flyway auto-config into its own starter) -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-flyway</artifactId>
-    </dependency>
-
     <!-- MapStruct for bean mapping -->
     <dependency>
       <groupId>org.mapstruct</groupId>
@@ -93,6 +87,12 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Flyway starter (Boot 4 extracted Flyway auto-config into its own starter) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
     </dependency>
 
     <!-- Spring Boot Mail -->

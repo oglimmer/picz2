@@ -26,6 +26,14 @@ class SyncLogger: ObservableObject {
         addLog(isManual: false, success: false, message: message)
     }
 
+    // Server asked us to back off (HTTP 429/503). Not a failure — the upload
+    // will be retried automatically after the given delay, so render this
+    // as an informational success-styled entry rather than a red error.
+    func logUploadDeferred(assetId: String, retryAfter: TimeInterval) {
+        let message = "Server busy, will retry \(assetId.prefix(8))... in \(Int(retryAfter))s"
+        addLog(isManual: false, success: true, message: message)
+    }
+
     func logBackgroundSync(success: Bool, message: String) {
         addLog(isManual: false, success: success, message: "Background sync: \(message)")
     }

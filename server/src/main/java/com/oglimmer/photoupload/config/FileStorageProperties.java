@@ -14,4 +14,6 @@ public class FileStorageProperties {
   private long maxFileSize = 500 * 1024 * 1024; // 500MB
   private int maxFilesPerRequest = 100;
   private int maxConcurrentProcessing = 2; // Maximum concurrent file processing operations
+  private int processingQueueCapacity = 50; // Backlog before new uploads get 503
+  private boolean duplicateDetectionEnabled = true;
 }

@@ -1,9 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.drew.imaging.ImageMetadataReader;
-import com.drew.metadata.Metadata;
-import com.drew.metadata.exif.ExifSubIFDDirectory;
+import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -13,13 +11,14 @@ import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.StorageException;
+import com.oglimmer.photoupload.exception.UploadBackpressureException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.mapper.FileInfoMapper;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FileServeInfo;
+import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
-import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
@@ -33,17 +32,18 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -100,9 +100,8 @@ public class FileStorageService {
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
-
-  // Semaphore to limit concurrent file processing operations (image conversion, thumbnails, etc.)
-  private Semaphore processingPermits;
+  private final FileProcessingService fileProcessingService;
+  private final ThreadPoolTaskExecutor fileProcessingExecutor;
 
   public FileStorageService(
       FileStorageProperties properties,
@@ -115,7 +114,10 @@ public class FileStorageService {
       AlbumRepository albumRepository,
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      FileProcessingService fileProcessingService,
+      @Qualifier(AsyncConfig.FILE_PROCESSING_EXECUTOR)
+          ThreadPoolTaskExecutor fileProcessingExecutor) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
@@ -128,6 +130,8 @@ public class FileStorageService {
     this.userContext = userContext;
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
+    this.fileProcessingService = fileProcessingService;
+    this.fileProcessingExecutor = fileProcessingExecutor;
   }
 
   @PostConstruct
@@ -135,11 +139,6 @@ public class FileStorageService {
     try {
       Files.createDirectories(this.fileStorageLocation);
       log.info("Upload directory created at: {}", this.fileStorageLocation);
-
-      // Initialize semaphore with configured max concurrent processing
-      processingPermits = new Semaphore(properties.getMaxConcurrentProcessing());
-      log.info(
-          "File processing concurrency limit set to: {}", properties.getMaxConcurrentProcessing());
     } catch (Exception ex) {
       throw new StorageException("Could not create upload directory!", ex);
     }
@@ -203,7 +202,7 @@ public class FileStorageService {
     // Check for duplicate by contentId first (if provided)
     // ContentId is a stable identifier from the source (e.g., iOS PHAsset.localIdentifier)
     // This is more reliable than checksum for detecting duplicates, especially for HEIC files
-    if (contentId != null && !contentId.isBlank()) {
+    if (properties.isDuplicateDetectionEnabled() && contentId != null && !contentId.isBlank()) {
       FileInfo duplicateByContentId =
           transactionTemplate.execute(
               status -> {
@@ -238,47 +237,49 @@ public class FileStorageService {
 
     // Check for duplicate by checksum (same album and other albums) in a single transaction
     FileInfo duplicateByChecksum =
-        transactionTemplate.execute(
-            status -> {
-              // Check for duplicate in the same album
-              Optional<FileMetadata> existingFile =
-                  metadataRepository.findByChecksumAndAlbumIdAndUserId(
-                      checksum, effectiveAlbumId, currentUser.getId());
-              if (existingFile.isPresent()) {
-                FileMetadata existing = existingFile.get();
-                log.info(
-                    "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
-                    effectiveAlbumId,
-                    file.getOriginalFilename(),
-                    existing.getOriginalName());
-                return convertToFileInfo(existing);
-              }
+        !properties.isDuplicateDetectionEnabled()
+            ? null
+            : transactionTemplate.execute(
+                status -> {
+                  // Check for duplicate in the same album
+                  Optional<FileMetadata> existingFile =
+                      metadataRepository.findByChecksumAndAlbumIdAndUserId(
+                          checksum, effectiveAlbumId, currentUser.getId());
+                  if (existingFile.isPresent()) {
+                    FileMetadata existing = existingFile.get();
+                    log.info(
+                        "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
+                        effectiveAlbumId,
+                        file.getOriginalFilename(),
+                        existing.getOriginalName());
+                    return convertToFileInfo(existing);
+                  }
 
-              // Check for duplicate in any other album
-              List<FileMetadata> existingInOtherAlbum =
-                  metadataRepository.findByChecksum(checksum);
-              if (!existingInOtherAlbum.isEmpty()) {
-                FileMetadata existing = existingInOtherAlbum.get(0);
-                if (existingInOtherAlbum.size() > 1) {
-                  log.warn(
-                      "⚠️ Found {} duplicate files with checksum {}, using first one",
-                      existingInOtherAlbum.size(),
-                      checksum);
-                }
-                log.info(
-                    "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
-                    file.getOriginalFilename(),
-                    existing.getOriginalName(),
-                    existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
-                return convertToFileInfo(existing);
-              }
-              return null;
-            });
+                  // Check for duplicate in any other album
+                  List<FileMetadata> existingInOtherAlbum =
+                      metadataRepository.findByChecksum(checksum);
+                  if (!existingInOtherAlbum.isEmpty()) {
+                    FileMetadata existing = existingInOtherAlbum.get(0);
+                    if (existingInOtherAlbum.size() > 1) {
+                      log.warn(
+                          "⚠️ Found {} duplicate files with checksum {}, using first one",
+                          existingInOtherAlbum.size(),
+                          checksum);
+                    }
+                    log.info(
+                        "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
+                        file.getOriginalFilename(),
+                        existing.getOriginalName(),
+                        existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
+                    return convertToFileInfo(existing);
+                  }
+                  return null;
+                });
     if (duplicateByChecksum != null) {
       return duplicateByChecksum;
     }
 
-    // Generate unique filename
+    // Generate unique filename (keep original extension — processing happens asynchronously)
     String originalFilename = file.getOriginalFilename();
     String extension = getFileExtension(originalFilename);
     String nameWithoutExtension = getFilenameWithoutExtension(originalFilename);
@@ -286,186 +287,80 @@ public class FileStorageService {
         System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
 
-    // Store file
+    // Backpressure: reject if the processing queue is already full, before touching disk.
+    // This turns a would-be pod-killing stampede into a retryable 503 with Retry-After.
+    java.util.concurrent.ThreadPoolExecutor raw =
+        fileProcessingExecutor.getThreadPoolExecutor();
+    if (raw.getQueue().remainingCapacity() == 0) {
+      log.warn(
+          "Rejecting upload {} — processing queue full (active={}, queued={})",
+          originalFilename,
+          raw.getActiveCount(),
+          raw.getQueue().size());
+      throw new UploadBackpressureException(
+          "Server is currently busy processing uploads. Please retry shortly.", 30);
+    }
+
+    // Store file on disk as-is (HEIC stays HEIC until async worker converts it)
     Path targetLocation = this.fileStorageLocation.resolve(newFilename);
     Files.write(targetLocation, fileBytes);
 
-    // Detect HEIC/HEIF for conversion inside semaphore
     String contentType = file.getContentType();
-    boolean isHeic =
-        thumbnailService.isHeicFile(contentType)
-            || extension.equalsIgnoreCase("heic")
-            || extension.equalsIgnoreCase("heif");
-
-    log.info(
-        "File {} - ContentType: {}, Extension: {}, IsHEIC: {}",
-        originalFilename,
-        contentType,
-        extension,
-        isHeic);
-
     log.info("✅ File uploaded: {} ({})", originalFilename, formatBytes(file.getSize()));
 
-    // Generate thumbnails for images (not videos)
-    String thumbnailPath = null;
-    String mediumPath = null;
-    String largePath = null;
-    String transcodedVideoPath = null;
-
-    // Acquire permit before CPU/memory-intensive processing (HEIC conversion, thumbnails, video)
-    boolean permitAcquired = false;
-    try {
-      log.debug(
-          "Waiting for processing permit (available: {})", processingPermits.availablePermits());
-      processingPermits.acquire();
-      permitAcquired = true;
-      log.debug("Processing permit acquired (available: {})", processingPermits.availablePermits());
-
-      // Convert HEIC/HEIF to JPEG if needed (inside semaphore to limit concurrent ImageMagick processes)
-      if (isHeic) {
-        String convertedFilename = nameWithoutExtension + "-" + uniqueSuffix + ".jpg";
-        Path convertedLocation = this.fileStorageLocation.resolve(convertedFilename);
-
-        if (thumbnailService.convertHeicToJpeg(targetLocation, convertedLocation)) {
-          log.info("Converted HEIC/HEIF to JPEG: {} -> {}", originalFilename, convertedFilename);
-
-          // Delete original HEIC/HEIF file
-          Files.deleteIfExists(targetLocation);
-
-          // Update target location and filename to point to converted JPEG
-          targetLocation = convertedLocation;
-          newFilename = convertedFilename;
-          extension = "jpg";
-          contentType = "image/jpeg";
-        } else {
-          // HEIC conversion failed - reject the upload
-          Files.deleteIfExists(targetLocation);
-          Files.deleteIfExists(convertedLocation);
-
-          String errorMsg =
-              String.format(
-                  "Failed to convert HEIC/HEIF file '%s' to JPEG. "
-                      + "This file may use an unsupported HEIC format or have corrupted metadata. "
-                      + "Please try converting the file to JPEG on your device before uploading.",
-                  originalFilename);
-          log.error(errorMsg);
-          throw new StorageException(errorMsg);
-        }
-      }
-
-      if (thumbnailService.isImageFile(contentType)) {
-        Path[] thumbnails = thumbnailService.generateAllThumbnails(targetLocation, targetLocation);
-        if (thumbnails[0] != null) {
-          thumbnailPath = toRelativePath(thumbnails[0]);
-        }
-        if (thumbnails[1] != null) {
-          mediumPath = toRelativePath(thumbnails[1]);
-        }
-        if (thumbnails[2] != null) {
-          largePath = toRelativePath(thumbnails[2]);
-        }
-
-        if (thumbnailPath != null) {
-          log.info("📐 Generated thumbnails for: {}", originalFilename);
-        }
-      }
-
-      // Transcode videos for Safari/iOS compatibility
-      if (thumbnailService.isVideoFile(contentType)) {
-        String baseNameWithoutExt = newFilename.substring(0, newFilename.lastIndexOf('.'));
-
-        // Generate transcoded video (web-compatible MP4)
-        String transcodedFilename = "web_" + baseNameWithoutExt + ".mp4";
-        Path transcodedLocation = this.fileStorageLocation.resolve(transcodedFilename);
-
-        if (thumbnailService.transcodeVideo(targetLocation, transcodedLocation)) {
-          transcodedVideoPath = toRelativePath(transcodedLocation);
-          log.info("🎬 Transcoded video for Safari/iOS: {}", originalFilename);
-        } else {
-          log.warn("⚠️ Video transcoding failed for: {}, will serve original", originalFilename);
-        }
-
-        // Generate video thumbnail (image from first frame)
-        String thumbnailFilename = "thumb_" + baseNameWithoutExt + ".jpg";
-        Path thumbnailLocation = this.fileStorageLocation.resolve(thumbnailFilename);
-
-        if (thumbnailService.generateVideoThumbnail(targetLocation, thumbnailLocation)) {
-          thumbnailPath = toRelativePath(thumbnailLocation);
-          log.info("📸 Generated video thumbnail: {}", originalFilename);
-        } else {
-          log.warn("⚠️ Video thumbnail generation failed for: {}", originalFilename);
-        }
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.error("Processing interrupted for: {}", originalFilename, e);
-      throw new StorageException("File processing was interrupted", e);
-    } finally {
-      if (permitAcquired) {
-        processingPermits.release();
-        log.debug(
-            "Processing permit released (available: {})", processingPermits.availablePermits());
-      }
-    }
-
-    // Capture effectively-final copies of variables modified during processing
+    // Insert metadata row immediately with null thumbnails/transcoded paths — processing
+    // will fill those in asynchronously and save again.
     final Path finalTargetLocation = targetLocation;
     final String finalNewFilename = newFilename;
     final String finalContentType = contentType;
-    final String finalThumbnailPath = thumbnailPath;
-    final String finalMediumPath = mediumPath;
-    final String finalLargePath = largePath;
-    final String finalTranscodedVideoPath = transcodedVideoPath;
+    FileInfo result =
+        transactionTemplate.execute(
+            status -> {
+              FileMetadata metadata = new FileMetadata();
+              metadata.setOriginalName(originalFilename);
+              metadata.setStoredFilename(finalNewFilename);
+              metadata.setFileSize(file.getSize());
+              metadata.setMimeType(finalContentType);
+              metadata.setFilePath(toRelativePath(finalTargetLocation));
+              metadata.setUploadedAt(Instant.now());
+              metadata.setChecksum(checksum);
+              metadata.setContentId(contentId);
 
-    // Extract EXIF DateTimeOriginal outside transaction (disk I/O)
-    final Instant exifDateTime;
-    if (thumbnailService.isImageFile(finalContentType)) {
-      exifDateTime = extractExifDateTimeOriginal(finalTargetLocation);
-    } else if (thumbnailService.isVideoFile(finalContentType)) {
-      exifDateTime = thumbnailService.extractVideoCreationDate(finalTargetLocation);
-    } else {
-      exifDateTime = null;
+              Album album =
+                  albumRepository
+                      .findByUserAndId(currentUser, effectiveAlbumId)
+                      .orElseThrow(
+                          () -> new ResourceNotFoundException("Album", "id", effectiveAlbumId));
+              metadata.setAlbum(album);
+
+              Integer maxOrder =
+                  metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
+                      effectiveAlbumId, currentUser.getId());
+              metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
+
+              FileMetadata saved = metadataRepository.save(metadata);
+              ensureNoTagExists(currentUser);
+              addNoTagToFile(saved, currentUser);
+              return convertToFileInfoWithId(saved);
+            });
+
+    // Submit async processing. If this races and gets rejected anyway (AbortPolicy), the
+    // row already exists and can be reprocessed later; we log and return success so the
+    // client doesn't double-upload.
+    try {
+      fileProcessingService.processFile(result.getId());
+    } catch (TaskRejectedException e) {
+      log.warn(
+          "Processing task rejected after insert for {} (id={}); row retained for later reprocess",
+          originalFilename,
+          result.getId());
     }
 
-    // Save metadata in a short transaction (only DB operations, no file I/O)
-    return transactionTemplate.execute(status -> {
-      FileMetadata metadata = new FileMetadata();
-      metadata.setOriginalName(originalFilename);
-      metadata.setStoredFilename(finalNewFilename);
-      metadata.setFileSize(file.getSize());
-      metadata.setMimeType(finalContentType);
-      metadata.setFilePath(toRelativePath(finalTargetLocation));
-      metadata.setUploadedAt(Instant.now());
-      metadata.setChecksum(checksum);
-      metadata.setContentId(contentId);
-      metadata.setThumbnailPath(finalThumbnailPath);
-      metadata.setMediumPath(finalMediumPath);
-      metadata.setLargePath(finalLargePath);
-      metadata.setTranscodedVideoPath(finalTranscodedVideoPath);
-      metadata.setExifDateTimeOriginal(exifDateTime);
+    return result;
+  }
 
-      // Set album (required) - verify ownership
-      Album album =
-          albumRepository
-              .findByUserAndId(currentUser, effectiveAlbumId)
-              .orElseThrow(() -> new ResourceNotFoundException("Album", "id", effectiveAlbumId));
-      metadata.setAlbum(album);
-
-      // Set display order to be at the end of the album
-      Integer maxOrder =
-          metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
-              effectiveAlbumId, currentUser.getId());
-      metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
-
-      FileMetadata saved = metadataRepository.save(metadata);
-
-      // Add "no_tag" to all newly uploaded files
-      ensureNoTagExists(currentUser);
-      addNoTagToFile(saved, currentUser);
-
-      // Return file info
-      return convertToFileInfo(saved);
-    });
+  private FileInfo convertToFileInfoWithId(FileMetadata saved) {
+    return convertToFileInfo(saved);
   }
 
   @Transactional(readOnly = true)
@@ -614,31 +509,6 @@ public class FileStorageService {
     }
   }
 
-  /**
-   * Extract EXIF DateTimeOriginal from an image file. Returns null if EXIF data is not available or
-   * if DateTimeOriginal is not set.
-   */
-  private Instant extractExifDateTimeOriginal(Path imagePath) {
-    try {
-      Metadata metadata = ImageMetadataReader.readMetadata(imagePath.toFile());
-      ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
-
-      if (directory != null && directory.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
-        Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
-        if (date != null) {
-          Instant exifInstant = date.toInstant();
-          log.info("📷 Extracted EXIF DateTimeOriginal: {}", exifInstant);
-          return exifInstant;
-        }
-      }
-      log.debug("No EXIF DateTimeOriginal found for: {}", imagePath.getFileName());
-      return null;
-    } catch (Exception e) {
-      log.debug("Could not read EXIF data from {}: {}", imagePath.getFileName(), e.getMessage());
-      return null;
-    }
-  }
-
   @Transactional
   public void deleteFile(Long fileId) {
     FileMetadata metadata =
@@ -696,8 +566,7 @@ public class FileStorageService {
         && !ALL_TAG.equals(tagName)
         && !albumEnabledTagRepository.existsByAlbumIdAndTagId(
             metadata.getAlbum().getId(), tag.getId())) {
-      throw new ValidationException(
-          "Tag '" + tagName + "' is not enabled for this album");
+      throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
     }
 
     // Check if tag already exists for this file
@@ -863,8 +732,7 @@ public class FileStorageService {
 
         if (anyGenerated) {
           // Short transaction for DB save only
-          transactionTemplate.executeWithoutResult(
-              status -> metadataRepository.save(metadata));
+          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
           succeeded++;
           log.info(
               "Generated thumbnails for: {} ({}/{})",
@@ -939,8 +807,7 @@ public class FileStorageService {
         if (transcodedLocation.toFile().exists()) {
           // Short transaction for DB update only
           metadata.setTranscodedVideoPath(toRelativePath(transcodedLocation));
-          transactionTemplate.executeWithoutResult(
-              status -> metadataRepository.save(metadata));
+          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
           found++;
           updated++;
           log.info(
@@ -1018,8 +885,7 @@ public class FileStorageService {
         if (thumbnailLocation.toFile().exists()) {
           // Short transaction for DB update only
           metadata.setThumbnailPath(toRelativePath(thumbnailLocation));
-          transactionTemplate.executeWithoutResult(
-              status -> metadataRepository.save(metadata));
+          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
           found++;
           updated++;
           log.info(
@@ -1269,7 +1135,8 @@ public class FileStorageService {
           toAbsolutePath(metadata.getMediumPath()),
           toAbsolutePath(metadata.getLargePath()));
 
-      // Regenerate all thumbnails with the rotated image (CPU/disk intensive, no transaction needed)
+      // Regenerate all thumbnails with the rotated image (CPU/disk intensive, no transaction
+      // needed)
       log.info("   Regenerating thumbnails...");
       Path[] thumbnails = thumbnailService.generateAllThumbnails(originalFile, originalFile);
 
@@ -1314,8 +1181,7 @@ public class FileStorageService {
 
       // Save updated metadata in a short transaction (only DB operation)
       log.info("   Saving metadata to database...");
-      transactionTemplate.executeWithoutResult(
-          status -> metadataRepository.save(metadata));
+      transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
 
       log.info(
           "✅ Successfully rotated image {} by 90° left (total rotation: {}°)",

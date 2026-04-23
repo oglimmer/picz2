@@ -117,7 +117,25 @@ public class GlobalExceptionHandler {
 
   @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
   public void handleClientDisconnect(Exception ex, HttpServletRequest request) {
-    log.debug("Client disconnected during response to {}: {}", request.getRequestURI(), ex.getMessage());
+    log.debug(
+        "Client disconnected during response to {}: {}", request.getRequestURI(), ex.getMessage());
+  }
+
+  @ExceptionHandler(UploadBackpressureException.class)
+  public ResponseEntity<ErrorResponse> handleUploadBackpressure(
+      UploadBackpressureException ex, HttpServletRequest request) {
+    log.warn("Upload rejected due to backpressure: {}", ex.getMessage());
+
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.SERVICE_UNAVAILABLE.value(),
+            "Service Unavailable",
+            ex.getMessage(),
+            request.getRequestURI());
+
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()))
+        .body(error);
   }
 
   @ExceptionHandler(Exception.class)

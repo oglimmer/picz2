@@ -467,7 +467,10 @@ public class AlbumService {
               tag.setUser(user);
               tag.setName(FileStorageService.NO_TAG);
               tag = tagRepository.save(tag);
-              log.info("Created special '{}' tag for user: {}", FileStorageService.NO_TAG, user.getEmail());
+              log.info(
+                  "Created special '{}' tag for user: {}",
+                  FileStorageService.NO_TAG,
+                  user.getEmail());
               return tag;
             });
   }

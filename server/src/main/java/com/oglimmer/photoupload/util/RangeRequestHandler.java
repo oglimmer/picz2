@@ -100,8 +100,7 @@ public class RangeRequestHandler {
     return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT).headers(headers).body(body);
   }
 
-  private static HttpHeaders buildBaseHeaders(
-      String contentType, String filename, long fileSize) {
+  private static HttpHeaders buildBaseHeaders(String contentType, String filename, long fileSize) {
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.parseMediaType(contentType));
     headers.setContentLength(fileSize);

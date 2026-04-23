@@ -32,6 +32,9 @@ backend:
 
   # Max concurrent image/video processing operations (HEIC conversion, thumbnails, transcoding)
   maxConcurrentProcessing: 1
+  # Backlog of queued uploads waiting for a processing worker. When full, new uploads
+  # receive HTTP 503 with Retry-After so clients back off instead of stalling the pod.
+  processingQueueCapacity: 50
 
   # Persistent volume for uploads
   persistence:

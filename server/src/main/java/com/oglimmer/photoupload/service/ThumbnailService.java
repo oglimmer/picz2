@@ -443,9 +443,9 @@ public class ThumbnailService {
   }
 
   /**
-   * Extract the container-level creation timestamp from a video via ffprobe. Reads the
-   * {@code format_tags=creation_time} field (populated from MP4/MOV atoms). Returns null if the tag
-   * is missing, unparseable, or ffprobe fails.
+   * Extract the container-level creation timestamp from a video via ffprobe. Reads the {@code
+   * format_tags=creation_time} field (populated from MP4/MOV atoms). Returns null if the tag is
+   * missing, unparseable, or ffprobe fails.
    */
   public Instant extractVideoCreationDate(Path videoFile) {
     try {
