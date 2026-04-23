@@ -4,10 +4,12 @@ package com.oglimmer.photoupload.exception;
 import com.oglimmer.photoupload.model.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.catalina.connector.ClientAbortException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @Slf4j
@@ -111,6 +113,11 @@ public class GlobalExceptionHandler {
             request.getRequestURI());
 
     return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+  }
+
+  @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
+  public void handleClientDisconnect(Exception ex, HttpServletRequest request) {
+    log.debug("Client disconnected during response to {}: {}", request.getRequestURI(), ex.getMessage());
   }
 
   @ExceptionHandler(Exception.class)
