@@ -1,49 +1,93 @@
 <template>
   <div
-    class="album-card"
+    class="album-tile"
+    :style="{ '--i': tileIndex }"
     @click="$emit('click')"
   >
-    <div class="album-cover">
+    <div class="tile-frame">
       <img
         v-if="album.coverImageToken"
         :src="coverUrl"
         :alt="album.name"
-        class="album-cover-image"
+        class="tile-image"
       >
       <div
         v-else
-        class="album-cover-placeholder"
+        class="tile-placeholder"
       >
-        <span class="placeholder-icon">📁</span>
-        <span class="placeholder-text">Empty Album</span>
+        <div class="placeholder-crosshair">
+          <span class="ch-h" />
+          <span class="ch-v" />
+          <span class="ch-corner ch-corner--tl" />
+          <span class="ch-corner ch-corner--tr" />
+          <span class="ch-corner ch-corner--bl" />
+          <span class="ch-corner ch-corner--br" />
+        </div>
+        <span class="placeholder-label">Empty</span>
       </div>
-      <button
-        v-if="canDuplicate"
-        class="duplicate-album-btn-overlay"
-        title="Duplicate album"
-        @click.stop="$emit('duplicate', album.id)"
-      >
-        📋
-      </button>
-      <button
-        v-if="canDelete"
-        class="delete-album-btn-overlay"
-        title="Delete album"
-        @click.stop="$emit('delete', album.id)"
-      >
-        🗑️
-      </button>
-    </div>
-    <div class="album-card-info">
-      <h3>{{ album.name }}</h3>
-      <div class="album-count">
-        {{ album.fileCount }} photo{{ album.fileCount !== 1 ? 's' : '' }}
+
+      <div class="tile-caption">
+        <span class="tile-frame-count">
+          {{ album.fileCount || 0 }}&nbsp;{{ (album.fileCount || 0) === 1 ? 'frame' : 'frames' }}
+        </span>
+        <h3 class="tile-title">
+          {{ album.name }}
+        </h3>
+        <p
+          v-if="album.description"
+          class="tile-desc"
+        >
+          {{ album.description }}
+        </p>
       </div>
+
       <div
-        v-if="album.description"
-        class="album-description"
+        class="tile-actions"
+        @click.stop
       >
-        {{ album.description }}
+        <button
+          v-if="canDuplicate"
+          class="tile-btn"
+          title="Duplicate album"
+          @click.stop="$emit('duplicate', album.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect
+              x="9"
+              y="9"
+              width="13"
+              height="13"
+              rx="2"
+              ry="2"
+            />
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+          </svg>
+        </button>
+        <button
+          v-if="canDelete"
+          class="tile-btn tile-btn--danger"
+          title="Delete album"
+          @click.stop="$emit('delete', album.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2" />
+          </svg>
+        </button>
       </div>
     </div>
   </div>
@@ -58,11 +102,13 @@ interface Props {
   album: Album
   canDelete?: boolean
   canDuplicate?: boolean
+  tileIndex?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   canDelete: false,
-  canDuplicate: false
+  canDuplicate: false,
+  tileIndex: 0
 })
 
 defineEmits<{
@@ -72,6 +118,5 @@ defineEmits<{
 }>()
 
 const { getAlbumCoverUrl } = useApi()
-
 const coverUrl = computed(() => getAlbumCoverUrl(props.album))
 </script>

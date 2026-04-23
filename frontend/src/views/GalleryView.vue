@@ -155,6 +155,29 @@
                 <span class="refresh-icon">↻</span>
                 Refresh
               </button>
+              <button
+                v-if="analyticsStats"
+                class="pause-button"
+                :class="{ 'paused': analyticsStats.analyticsPaused }"
+                @click="handleToggleAnalyticsPaused"
+                :title="analyticsStats.analyticsPaused ? 'Resume analytics counting' : 'Pause analytics counting'"
+              >
+                {{ analyticsStats.analyticsPaused ? '▶ Resume' : '⏸ Pause' }}
+              </button>
+              <button
+                v-if="analyticsStats"
+                class="reset-button"
+                @click="handleResetAnalytics"
+                title="Delete all analytics data for this album"
+              >
+                ✕ Reset
+              </button>
+            </div>
+            <div
+              v-if="analyticsStats && analyticsStats.analyticsPaused"
+              class="analytics-paused-notice"
+            >
+              Analytics counting is paused — no new events are being recorded.
             </div>
             <div
               v-if="loadingAnalytics"
@@ -453,6 +476,31 @@
           </option>
         </select>
       </div>
+
+      <div class="grid-size-picker">
+        <button
+          v-for="size in ['small', 'medium', 'large']"
+          :key="size"
+          class="grid-size-btn"
+          :class="{ 'grid-size-btn--active': albumSize === size }"
+          :title="`${size.charAt(0).toUpperCase() + size.slice(1)} thumbnails`"
+          @click="albumSize = size"
+        >
+          <svg v-if="size === 'small'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+            <rect x="0" y="0" width="6" height="6" rx="1"/>
+            <rect x="8" y="0" width="6" height="6" rx="1"/>
+            <rect x="0" y="8" width="6" height="6" rx="1"/>
+            <rect x="8" y="8" width="6" height="6" rx="1"/>
+          </svg>
+          <svg v-else-if="size === 'medium'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+            <rect x="0" y="0" width="6" height="14" rx="1"/>
+            <rect x="8" y="0" width="6" height="14" rx="1"/>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+            <rect x="0" y="0" width="14" height="14" rx="1"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div
@@ -570,7 +618,7 @@
     <div
       v-else
       class="gallery"
-      :class="{ 'presentation-gallery': presentationMode }"
+      :class="[{ 'presentation-gallery': presentationMode }, !presentationMode && `gallery--${albumSize}`]"
     >
       <GalleryItem
         v-for="(file, index) in displayedFiles"
@@ -733,9 +781,12 @@ export default {
     } = useSlideshowPlayback()
     const { success, error, warning, info } = useNotifications()
     const { confirm: confirmDialog } = useConfirm()
-    const { getAlbumStatistics } = useAnalytics()
+    const { getAlbumStatistics, resetAlbumAnalytics, setAnalyticsPaused } = useAnalytics()
 
     const album = computed(() => currentAlbum.value)
+    const albumSize = ref(localStorage.getItem('galleryGridSize') || 'small')
+    watch(albumSize, v => localStorage.setItem('galleryGridSize', v))
+
     const selectedFile = ref(null)
     const draggingIndex = ref(null)
     const dragOverIndex = ref(null)
@@ -1750,6 +1801,32 @@ export default {
       }
     }
 
+    async function handleResetAnalytics() {
+      if (!album.value) return
+      if (!confirm('Reset all analytics data for this album? This cannot be undone.')) return
+      try {
+        await resetAlbumAnalytics(album.value.id)
+        await loadAnalyticsStats()
+        success('Analytics reset successfully')
+      } catch (err) {
+        console.error('Error resetting analytics:', err)
+        error('Failed to reset analytics')
+      }
+    }
+
+    async function handleToggleAnalyticsPaused() {
+      if (!album.value || !analyticsStats.value) return
+      const newPaused = !analyticsStats.value.analyticsPaused
+      try {
+        await setAnalyticsPaused(album.value.id, newPaused)
+        analyticsStats.value = { ...analyticsStats.value, analyticsPaused: newPaused }
+        success(newPaused ? 'Analytics paused' : 'Analytics resumed')
+      } catch (err) {
+        console.error('Error toggling analytics pause:', err)
+        error('Failed to update analytics state')
+      }
+    }
+
     return {
       isLoggedIn,
       album,
@@ -1810,6 +1887,8 @@ export default {
       handleMoveSelectedToTop,
       toggleAnalytics,
       loadAnalyticsStats,
+      handleResetAnalytics,
+      handleToggleAnalyticsPaused,
       goBack,
       handleRefresh,
       handleUpdateAlbumTitle,
@@ -1844,7 +1923,8 @@ export default {
       goToProfile,
       handleDeleteAlbum,
       triggerFileUpload,
-      handleFileUpload
+      handleFileUpload,
+      albumSize
     }
   }
 }

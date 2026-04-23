@@ -205,11 +205,3 @@ async function handleDelete(tagId: number) {
   }
 }
 </script>
-
-<style scoped>
-.system-tag-badge {
-  color: #999;
-  font-size: 0.9em;
-  font-style: italic;
-}
-</style>

@@ -14,6 +14,7 @@ import lombok.NoArgsConstructor;
 public class AnalyticsStatsResponse {
 
   private boolean success;
+  private boolean analyticsPaused;
   private Long totalEvents;
   private Long uniqueVisitors;
   private Long pageViews;

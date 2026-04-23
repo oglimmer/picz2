@@ -2,6 +2,7 @@ import { ref, type Ref } from "vue";
 import { useApi } from "./useApi";
 
 export interface AnalyticsStats {
+  analyticsPaused: boolean;
   totalEvents: number;
   uniqueVisitors: number;
   pageViews: number;
@@ -15,6 +16,8 @@ export interface AnalyticsComposable {
   hasConsent: Ref<boolean>;
   consentGiven: (accepted: boolean) => void;
   getAlbumStatistics: (albumId: number) => Promise<AnalyticsStats>;
+  resetAlbumAnalytics: (albumId: number) => Promise<void>;
+  setAnalyticsPaused: (albumId: number, paused: boolean) => Promise<void>;
   logPageView: (shareToken: string, tag?: string) => Promise<void>;
   logFilterChange: (shareToken: string, tag: string) => Promise<void>;
   logAudioPlay: (shareToken: string, recordingId: number, tag?: string) => Promise<void>;
@@ -124,6 +127,7 @@ export function useAnalytics(): AnalyticsComposable {
 
       if (data.success) {
         return {
+          analyticsPaused: data.analyticsPaused || false,
           totalEvents: data.totalEvents || 0,
           uniqueVisitors: data.uniqueVisitors || 0,
           pageViews: data.pageViews || 0,
@@ -138,6 +142,17 @@ export function useAnalytics(): AnalyticsComposable {
       console.error("Error fetching album statistics:", err);
       throw err;
     }
+  }
+
+  async function resetAlbumAnalytics(albumId: number): Promise<void> {
+    await fetchWithAuth(`${apiUrl}/api/albums/${albumId}/analytics`, { method: 'DELETE' });
+  }
+
+  async function setAnalyticsPaused(albumId: number, paused: boolean): Promise<void> {
+    await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/analytics/paused?paused=${paused}`,
+      { method: 'PUT' }
+    );
   }
 
   /**
@@ -202,6 +217,8 @@ export function useAnalytics(): AnalyticsComposable {
     hasConsent,
     consentGiven,
     getAlbumStatistics,
+    resetAlbumAnalytics,
+    setAnalyticsPaused,
     logPageView,
     logFilterChange,
     logAudioPlay,

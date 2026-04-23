@@ -57,6 +57,11 @@ public class AnalyticsService {
       Long recordingId,
       HttpServletRequest request) {
 
+    if (album.isAnalyticsPaused()) {
+      log.debug("Analytics paused for album: {}, skipping event: {}", album.getId(), eventType);
+      return;
+    }
+
     // Get or generate visitor ID from cookie
     String visitorId = getVisitorId(request);
 
@@ -149,6 +154,7 @@ public class AnalyticsService {
 
     return AnalyticsStatsResponse.builder()
         .success(true)
+        .analyticsPaused(album.isAnalyticsPaused())
         .totalEvents(totalEvents)
         .uniqueVisitors(uniqueVisitors)
         .pageViews(eventTypeMap.getOrDefault("PAGE_VIEW", 0L))
@@ -156,6 +162,28 @@ public class AnalyticsService {
         .audioPlays(eventTypeMap.getOrDefault("AUDIO_PLAY", 0L))
         .filterTagCounts(filterTagMap)
         .build();
+  }
+
+  @Transactional
+  public void resetAnalyticsForAlbum(Long albumId) {
+    Album album =
+        albumRepository
+            .findByUserAndId(userContext.getCurrentUser(), albumId)
+            .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId.toString()));
+    analyticsEventRepository.deleteByAlbum(album);
+    log.info("Reset analytics for album: {}", albumId);
+  }
+
+  @Transactional
+  public boolean setAnalyticsPaused(Long albumId, boolean paused) {
+    Album album =
+        albumRepository
+            .findByUserAndId(userContext.getCurrentUser(), albumId)
+            .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId.toString()));
+    album.setAnalyticsPaused(paused);
+    albumRepository.save(album);
+    log.info("Analytics {} for album: {}", paused ? "paused" : "resumed", albumId);
+    return paused;
   }
 
   private String getClientIpAddress(HttpServletRequest request) {

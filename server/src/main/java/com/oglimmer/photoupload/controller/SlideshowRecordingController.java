@@ -18,8 +18,8 @@ import java.io.IOException;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -113,7 +113,7 @@ public class SlideshowRecordingController {
   }
 
   @GetMapping("/recordings/{id}/audio")
-  public ResponseEntity<Resource> getRecordingAudio(
+  public ResponseEntity<StreamingResponseBody> getRecordingAudio(
       @PathVariable Long id, @RequestHeader(value = "Range", required = false) String rangeHeader) {
     try {
       // Get recording audio info
@@ -164,7 +164,7 @@ public class SlideshowRecordingController {
   }
 
   @GetMapping("/r/{publicToken}/audio")
-  public ResponseEntity<Resource> getRecordingAudioByPublicToken(
+  public ResponseEntity<StreamingResponseBody> getRecordingAudioByPublicToken(
       @PathVariable String publicToken,
       @RequestHeader(value = "Range", required = false) String rangeHeader,
       HttpServletRequest request) {

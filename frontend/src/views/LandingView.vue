@@ -1,74 +1,96 @@
 <template>
-  <div class="legal-container">
-    <header class="legal-header">
-      <h1 class="legal-title">📸 Picz2</h1>
-      <p class="legal-subtitle">Share vacation moments, without the social media hassle</p>
-    </header>
+  <div class="landing">
 
-    <div class="legal-content">
-      <div class="features">
-          <div class="feature highlight-feature">
-            <div class="feature-icon">
-              ✨
-            </div>
-            <h3>Private & Simple</h3>
-            <p>Private photo galleries for your travel memories. No accounts needed for viewers.</p>
-          </div>
-          <div class="feature">
-            <div class="feature-icon">
-              🖼️
-            </div>
-            <h3>Organize Albums</h3>
-            <p>Create and manage your photo albums with ease</p>
-          </div>
+    <nav class="lp-nav">
+      <span class="lp-brand">Picz</span>
+      <div class="lp-nav-links">
+        <router-link to="/privacy">Privacy</router-link>
+        <router-link to="/imprint">Imprint</router-link>
+        <button class="lp-signin-btn" @click="goToLogin">Sign In</button>
+      </div>
+    </nav>
 
-          <div class="feature">
-            <div class="feature-icon">
-              🏷️
-            </div>
-            <h3>Smart Tagging</h3>
-            <p>Tag and categorize your photos for quick access</p>
-          </div>
-
-          <div class="feature">
-            <div class="feature-icon">
-              🔗
-            </div>
-            <h3>Share & Present</h3>
-            <p>Share albums with others or present in slideshow mode</p>
-          </div>
-
-          <div class="feature">
-            <div class="feature-icon">
-              🎙️
-            </div>
-            <h3>Audio Recording</h3>
-            <p>Record narration during slideshows with synchronized playback</p>
-          </div>
-        </div>
-
-      <div class="cta-section">
-        <button
-          class="btn-primary btn-large"
-          @click="goToLogin"
-        >
+    <section class="lp-hero">
+      <div class="lp-hero-text">
+        <p class="lp-eyebrow">Private &middot; Simple &middot; Yours</p>
+        <h1 class="lp-headline">Your memories,<br>beautifully shared.</h1>
+        <p class="lp-tagline">
+          Private photo galleries for the people who matter.
+          No social media, no algorithms, no&nbsp;ads.
+        </p>
+        <button class="lp-cta" @click="goToLogin">
           Get Started
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+          </svg>
         </button>
       </div>
-    </div>
 
-    <footer class="legal-footer">
-      <p>© {{ new Date().getFullYear() }} Picz2</p>
-      <router-link to="/privacy">Privacy</router-link> |
-      <router-link to="/terms">Terms</router-link> |
-      <router-link to="/imprint">Imprint</router-link>
+      <div class="lp-hero-visual" aria-hidden="true">
+        <div class="photo-stack">
+          <div class="photo-card photo-card--1">
+            <div class="photo-card-img"></div>
+            <span class="photo-card-label">Summer 2024</span>
+          </div>
+          <div class="photo-card photo-card--2">
+            <div class="photo-card-img"></div>
+            <span class="photo-card-label">Lisbon Trip</span>
+          </div>
+          <div class="photo-card photo-card--3">
+            <div class="photo-card-img"></div>
+            <span class="photo-card-label">Family Photos</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lp-features">
+      <h2 class="lp-section-title">Everything you need,<br>nothing you don't</h2>
+      <div class="lp-grid">
+        <div class="lp-feature lp-feature--highlight">
+          <div class="lp-feature-icon">✨</div>
+          <h3>Private &amp; Simple</h3>
+          <p>Private photo galleries for your travel memories. No accounts needed for viewers.</p>
+        </div>
+        <div class="lp-feature">
+          <div class="lp-feature-icon">🖼️</div>
+          <h3>Organize Albums</h3>
+          <p>Create and manage your photo albums with ease.</p>
+        </div>
+        <div class="lp-feature">
+          <div class="lp-feature-icon">🏷️</div>
+          <h3>Smart Tagging</h3>
+          <p>Tag and categorize your photos for quick access.</p>
+        </div>
+        <div class="lp-feature">
+          <div class="lp-feature-icon">🔗</div>
+          <h3>Share &amp; Present</h3>
+          <p>Share albums with others or present in slideshow mode.</p>
+        </div>
+        <div class="lp-feature">
+          <div class="lp-feature-icon">🎙️</div>
+          <h3>Audio Recording</h3>
+          <p>Record narration during slideshows with synchronized playback.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="lp-footer">
+      <p class="lp-footer-copy">© {{ new Date().getFullYear() }} Picz</p>
+      <div class="lp-footer-links">
+        <router-link to="/privacy">Privacy</router-link>
+        <span>·</span>
+        <router-link to="/terms">Terms</router-link>
+        <span>·</span>
+        <router-link to="/imprint">Imprint</router-link>
+      </div>
     </footer>
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router';
-import '@/assets/css/legal.css';
 
 const router = useRouter();
 
@@ -76,78 +98,3 @@ function goToLogin() {
   router.push('/login');
 }
 </script>
-
-<style scoped>
-.features {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
-  margin-bottom: 28px;
-  text-align: left;
-}
-
-.highlight-feature {
-  grid-column: 1 / -1;
-  text-align: center;
-}
-
-.feature {
-  padding: 15px;
-  border-radius: 10px;
-  background: #f8f9fa;
-  transition: transform 0.3s, box-shadow 0.3s;
-}
-
-.feature:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-}
-
-.feature-icon {
-  font-size: 2.2em;
-  margin-bottom: 8px;
-}
-
-.feature h3 {
-  margin: 0 0 6px 0;
-  color: #333;
-  font-size: 1.1em;
-  font-weight: 600;
-}
-
-.feature p {
-  margin: 0;
-  color: #666;
-  line-height: 1.4;
-  font-size: 0.85em;
-}
-
-.cta-section {
-  text-align: center;
-  margin-top: 40px;
-  margin-bottom: 40px;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 16px 48px;
-  border-radius: 50px;
-  font-size: 1.1rem;
-  font-weight: 600;
-  border: none;
-  cursor: pointer;
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
-}
-
-.btn-primary:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
-}
-
-@media (max-width: 768px) {
-  .features {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

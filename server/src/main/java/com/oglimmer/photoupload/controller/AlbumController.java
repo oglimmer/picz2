@@ -172,6 +172,23 @@ public class AlbumController {
     return ResponseEntity.ok(stats);
   }
 
+  @DeleteMapping("/{id}/analytics")
+  public ResponseEntity<MessageResponse> resetAlbumAnalytics(@PathVariable Long id) {
+    analyticsService.resetAnalyticsForAlbum(id);
+    MessageResponse response =
+        MessageResponse.builder().success(true).message("Analytics reset successfully").build();
+    return ResponseEntity.ok(response);
+  }
+
+  @PutMapping("/{id}/analytics/paused")
+  public ResponseEntity<MessageResponse> setAnalyticsPaused(
+      @PathVariable Long id, @RequestParam boolean paused) {
+    boolean newState = analyticsService.setAnalyticsPaused(id, paused);
+    String message = newState ? "Analytics paused" : "Analytics resumed";
+    MessageResponse response = MessageResponse.builder().success(true).message(message).build();
+    return ResponseEntity.ok(response);
+  }
+
   @PutMapping("/{id}")
   public ResponseEntity<AlbumResponse> updateAlbum(
       @PathVariable Long id, @RequestBody AlbumRequest albumRequest) {

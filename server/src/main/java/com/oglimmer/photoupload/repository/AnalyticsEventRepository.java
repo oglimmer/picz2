@@ -14,6 +14,8 @@ public interface AnalyticsEventRepository extends JpaRepository<AnalyticsEvent, 
 
   List<AnalyticsEvent> findByAlbumOrderByCreatedAtDesc(Album album);
 
+  void deleteByAlbum(Album album);
+
   List<AnalyticsEvent> findByAlbumAndCreatedAtBetweenOrderByCreatedAtDesc(
       Album album, Instant startDate, Instant endDate);
 

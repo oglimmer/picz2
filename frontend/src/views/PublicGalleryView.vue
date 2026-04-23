@@ -140,6 +140,16 @@
       />
     </div>
 
+    <!-- Back to top button -->
+    <button
+      v-if="showBackToTop"
+      class="back-to-top-btn"
+      title="Back to top"
+      @click="scrollToTop"
+    >
+      ↑
+    </button>
+
     <!-- Cookie Consent Banner -->
     <CookieConsent @consent="handleConsent" />
 
@@ -156,7 +166,7 @@
 </template>
 
 <script>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useApi } from '../composables/useApi'
 import { useSettings } from '../composables/useSettings'
 import { useSlideshowPlayback } from '../composables/useSlideshowPlayback'
@@ -228,6 +238,7 @@ export default {
     const audioPlayer = ref(null)
     const isPaused = ref(false)
     const controlsVisible = ref(true)
+    const showBackToTop = ref(false)
 
     // Subscription dialog
     const showSubscriptionDialog = ref(false)
@@ -301,7 +312,20 @@ export default {
       }
     })
 
+    function handleScroll() {
+      showBackToTop.value = window.scrollY > 400
+    }
+
+    function scrollToTop() {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    onUnmounted(() => {
+      window.removeEventListener('scroll', handleScroll)
+    })
+
     onMounted(async () => {
+      window.addEventListener('scroll', handleScroll, { passive: true })
       await loadAlbumInfo()
       await loadAlbumFiles()
 
@@ -519,40 +543,10 @@ export default {
       handlePauseResume,
       handleStopPlayback,
       handleConsent,
-      handleSubscribed
+      handleSubscribed,
+      showBackToTop,
+      scrollToTop
     }
   }
 }
 </script>
-
-<style scoped>
-.gallery-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.subscribe-btn {
-  padding: 10px 20px;
-  background-color: #4CAF50;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 0.95rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.subscribe-btn:hover {
-  background-color: #45a049;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.subscribe-btn:active {
-  transform: translateY(0);
-}
-</style>

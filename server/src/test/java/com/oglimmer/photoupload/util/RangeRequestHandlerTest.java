@@ -9,10 +9,10 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 class RangeRequestHandlerTest {
 
@@ -28,7 +28,7 @@ class RangeRequestHandlerTest {
   void serveFullFileWithoutRangeReturns200(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 2048);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, null, "application/octet-stream", "test.bin");
 
@@ -46,7 +46,7 @@ class RangeRequestHandlerTest {
   void servePartialFixedRangeReturns206(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 1000);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, "bytes=0-99", "application/octet-stream", "test.bin");
 
@@ -61,7 +61,7 @@ class RangeRequestHandlerTest {
   void servePartialSuffixRangeReturnsLastBytes(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 300);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, "bytes=-50", "application/octet-stream", "test.bin");
 
@@ -74,7 +74,7 @@ class RangeRequestHandlerTest {
   void servePartialOpenEndedRangeReturnsToEnd(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 512);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, "bytes=100-", "application/octet-stream", "test.bin");
 
@@ -87,7 +87,7 @@ class RangeRequestHandlerTest {
   void invalidRangeReturns416(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 256);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, "bytes=abc-def", "application/octet-stream", "test.bin");
 
@@ -99,7 +99,7 @@ class RangeRequestHandlerTest {
   void invalidUnitReturns416(@TempDir Path tempDir) throws IOException {
     Path file = createTempFileWithSize(tempDir, 128);
 
-    ResponseEntity<Resource> resp =
+    ResponseEntity<StreamingResponseBody> resp =
         RangeRequestHandler.serveFileWithRangeSupport(
             file, "items=0-10", "application/octet-stream", "test.bin");
 

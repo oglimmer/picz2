@@ -55,6 +55,9 @@ public class Album {
   @Column(name = "share_token", unique = true, length = 128)
   private String shareToken;
 
+  @Column(name = "analytics_paused", nullable = false)
+  private boolean analyticsPaused = false;
+
   @OneToMany(mappedBy = "album", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
   private List<FileMetadata> files = new ArrayList<>();
 
