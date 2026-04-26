@@ -20,15 +20,21 @@ backend:
     port: 8080
 
   resources:
+    # Honest budget after streaming uploads + bounded native memory: steady state ~1.2 GiB, peak
+    # with one ImageMagick subprocess ~2.2 GiB. 3Gi limit gives headroom; requests raised so the
+    # scheduler actually reserves the working set instead of relying on burst oversubscription.
     limits:
       cpu: 4000m
-      memory: 6Gi
+      memory: 3Gi
     requests:
       cpu: 500m
-      memory: 1Gi
+      memory: 1536Mi
 
-  # Java-specific settings
-  javaOpts: "-Xmx1536m -Xms768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+  # Heap caps at 1Gi; direct-memory cap at 256Mi prevents Tomcat NIO's DirectByteBuffer pool from
+  # quietly growing to Xmx. ExitOnOutOfMemoryError turns any heap OOM into a fast pod restart
+  # instead of a staggering zombie. NativeMemoryTracking=summary keeps jcmd VM.native_memory
+  # available for diagnosis without meaningful runtime cost.
+  javaOpts: "-Xmx1024m -Xms512m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"
 
   # Max concurrent image/video processing operations (HEIC conversion, thumbnails, transcoding)
   maxConcurrentProcessing: 1
@@ -41,7 +47,9 @@ backend:
     enabled: true
     storageClass: ""
     accessMode: ReadWriteOnce
-    size: 25Gi
+    # The live PVC was expanded in-cluster to 30Gi; K8s rejects shrinking a PVC, so this value
+    # must match (or exceed) the actual provisioned capacity.
+    size: 30Gi
     mountPath: /app/uploads
 
 # Frontend configuration

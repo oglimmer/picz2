@@ -37,6 +37,9 @@ spec:
         - name: http
           containerPort: 8080
           protocol: TCP
+        - name: management
+          containerPort: 8081
+          protocol: TCP
         env:
         - name: MARIADB_HOST
           valueFrom:
@@ -73,26 +76,30 @@ spec:
           value: {{ .Values.backend.maxConcurrentProcessing | default 1 | quote }}
         - name: FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY
           value: {{ .Values.backend.processingQueueCapacity | default 50 | quote }}
+        # Liveness/readiness use the cheap probe groups (LivenessState/ReadinessState only,
+        # no DB or disk indicators) so a slow database or Longhorn hiccup can't starve them.
+        # Startup still hits the full /actuator/health so the pod isn't marked ready until
+        # the DB and mail servers are reachable.
         startupProbe:
           httpGet:
             path: /actuator/health
-            port: http
+            port: management
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 30
         livenessProbe:
           httpGet:
-            path: /actuator/health
-            port: http
+            path: /actuator/health/liveness
+            port: management
           initialDelaySeconds: 0
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /actuator/health
-            port: http
+            path: /actuator/health/readiness
+            port: management
           initialDelaySeconds: 0
           periodSeconds: 5
           timeoutSeconds: 3

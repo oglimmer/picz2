@@ -34,7 +34,8 @@ public class FileProcessingService {
   @Async(AsyncConfig.FILE_PROCESSING_EXECUTOR)
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata = tx.execute(status -> metadataRepository.findById(fileMetadataId).orElse(null));
+    FileMetadata metadata =
+        tx.execute(status -> metadataRepository.findById(fileMetadataId).orElse(null));
     if (metadata == null) {
       log.warn("processFile: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -70,7 +71,8 @@ public class FileProcessingService {
           metadata.setFilePath(toRelativePath(fileStorageLocation, convertedLocation));
         } else {
           log.error(
-              "Failed to convert HEIC/HEIF file {} to JPEG; leaving original in place", originalName);
+              "Failed to convert HEIC/HEIF file {} to JPEG; leaving original in place",
+              originalName);
           // Keep the original HEIC — serve-layer will fall back to it.
         }
       }

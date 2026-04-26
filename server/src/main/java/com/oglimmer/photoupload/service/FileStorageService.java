@@ -1,7 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -11,7 +10,6 @@ import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.StorageException;
-import com.oglimmer.photoupload.exception.UploadBackpressureException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.mapper.FileInfoMapper;
 import com.oglimmer.photoupload.model.FileInfo;
@@ -24,10 +22,14 @@ import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -39,11 +41,9 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -101,7 +101,6 @@ public class FileStorageService {
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
   private final FileProcessingService fileProcessingService;
-  private final ThreadPoolTaskExecutor fileProcessingExecutor;
 
   public FileStorageService(
       FileStorageProperties properties,
@@ -115,9 +114,7 @@ public class FileStorageService {
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
-      FileProcessingService fileProcessingService,
-      @Qualifier(AsyncConfig.FILE_PROCESSING_EXECUTOR)
-          ThreadPoolTaskExecutor fileProcessingExecutor) {
+      FileProcessingService fileProcessingService) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
@@ -131,13 +128,13 @@ public class FileStorageService {
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.fileProcessingService = fileProcessingService;
-    this.fileProcessingExecutor = fileProcessingExecutor;
   }
 
   @PostConstruct
   public void init() {
     try {
       Files.createDirectories(this.fileStorageLocation);
+      Files.createDirectories(this.fileStorageLocation.resolve(".multipart-tmp"));
       log.info("Upload directory created at: {}", this.fileStorageLocation);
     } catch (Exception ex) {
       throw new StorageException("Could not create upload directory!", ex);
@@ -231,17 +228,28 @@ public class FileStorageService {
       }
     }
 
-    // Calculate checksum early to detect duplicates before storing
-    byte[] fileBytes = file.getBytes();
-    String checksum = calculateChecksum(fileBytes);
+    // Generate a unique final name and a sibling temp file. We stream the upload to the
+    // temp path while computing the SHA-256 in a single pass — no full-file heap buffering,
+    // so upload memory is O(64 KiB) regardless of file size.
+    String originalFilename = file.getOriginalFilename();
+    String extension = getFileExtension(originalFilename);
+    String nameWithoutExtension = getFilenameWithoutExtension(originalFilename);
+    String uniqueSuffix =
+        System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
+    String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
+    Path targetLocation = this.fileStorageLocation.resolve(newFilename);
+    Path tempLocation = this.fileStorageLocation.resolve("." + newFilename + ".tmp");
 
-    // Check for duplicate by checksum (same album and other albums) in a single transaction
+    final String checksum = streamToDiskWithChecksum(file, tempLocation);
+
+    // Check for duplicate by checksum (same album and other albums) in a single transaction.
+    // If the payload matches an existing file, drop what we just streamed and return the
+    // existing record — the streamed bytes were cheap (disk, not heap).
     FileInfo duplicateByChecksum =
         !properties.isDuplicateDetectionEnabled()
             ? null
             : transactionTemplate.execute(
                 status -> {
-                  // Check for duplicate in the same album
                   Optional<FileMetadata> existingFile =
                       metadataRepository.findByChecksumAndAlbumIdAndUserId(
                           checksum, effectiveAlbumId, currentUser.getId());
@@ -255,7 +263,6 @@ public class FileStorageService {
                     return convertToFileInfo(existing);
                   }
 
-                  // Check for duplicate in any other album
                   List<FileMetadata> existingInOtherAlbum =
                       metadataRepository.findByChecksum(checksum);
                   if (!existingInOtherAlbum.isEmpty()) {
@@ -276,34 +283,17 @@ public class FileStorageService {
                   return null;
                 });
     if (duplicateByChecksum != null) {
+      try {
+        Files.deleteIfExists(tempLocation);
+      } catch (IOException e) {
+        log.warn("Could not delete temp file after duplicate detection: {}", tempLocation, e);
+      }
       return duplicateByChecksum;
     }
 
-    // Generate unique filename (keep original extension — processing happens asynchronously)
-    String originalFilename = file.getOriginalFilename();
-    String extension = getFileExtension(originalFilename);
-    String nameWithoutExtension = getFilenameWithoutExtension(originalFilename);
-    String uniqueSuffix =
-        System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
-    String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
-
-    // Backpressure: reject if the processing queue is already full, before touching disk.
-    // This turns a would-be pod-killing stampede into a retryable 503 with Retry-After.
-    java.util.concurrent.ThreadPoolExecutor raw =
-        fileProcessingExecutor.getThreadPoolExecutor();
-    if (raw.getQueue().remainingCapacity() == 0) {
-      log.warn(
-          "Rejecting upload {} — processing queue full (active={}, queued={})",
-          originalFilename,
-          raw.getActiveCount(),
-          raw.getQueue().size());
-      throw new UploadBackpressureException(
-          "Server is currently busy processing uploads. Please retry shortly.", 30);
-    }
-
-    // Store file on disk as-is (HEIC stays HEIC until async worker converts it)
-    Path targetLocation = this.fileStorageLocation.resolve(newFilename);
-    Files.write(targetLocation, fileBytes);
+    // Promote temp file to its final name. ATOMIC_MOVE ensures readers never see a half-written
+    // file.
+    Files.move(tempLocation, targetLocation, StandardCopyOption.ATOMIC_MOVE);
 
     String contentType = file.getContentType();
     log.info("✅ File uploaded: {} ({})", originalFilename, formatBytes(file.getSize()));
@@ -490,23 +480,37 @@ public class FileStorageService {
     return byteCountToDisplaySize(bytes);
   }
 
-  private String calculateChecksum(byte[] fileBytes) {
+  /**
+   * Copy the uploaded part to {@code target} while computing its SHA-256. Uses a fixed-size 64 KiB
+   * buffer so memory use is independent of file size — a 500 MB upload costs 64 KiB, not 500 MB.
+   * The target temp file is removed on any error so we never leak partial files.
+   */
+  private String streamToDiskWithChecksum(MultipartFile file, Path target) throws IOException {
+    MessageDigest digest;
     try {
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      byte[] hash = digest.digest(fileBytes);
-      StringBuilder hexString = new StringBuilder();
-      for (byte b : hash) {
-        String hex = Integer.toHexString(0xff & b);
-        if (hex.length() == 1) {
-          hexString.append('0');
-        }
-        hexString.append(hex);
-      }
-      return hexString.toString();
-    } catch (Exception e) {
-      log.error("Error calculating checksum", e);
-      return null;
+      digest = MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
     }
+
+    try (InputStream in = file.getInputStream();
+        DigestInputStream dis = new DigestInputStream(in, digest)) {
+      Files.copy(dis, target, StandardCopyOption.REPLACE_EXISTING);
+    } catch (IOException e) {
+      try {
+        Files.deleteIfExists(target);
+      } catch (IOException cleanupError) {
+        e.addSuppressed(cleanupError);
+      }
+      throw e;
+    }
+
+    byte[] hash = digest.digest();
+    StringBuilder hex = new StringBuilder(hash.length * 2);
+    for (byte b : hash) {
+      hex.append(String.format("%02x", b));
+    }
+    return hex.toString();
   }
 
   @Transactional

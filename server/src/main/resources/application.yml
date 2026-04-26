@@ -6,12 +6,21 @@ server:
     mime-types: "text/html, text/xml, text/plain, text/css, text/javascript, application/javascript,\
       \ application/json, application/xml\n"
     excluded-user-agents: ""
+  tomcat:
+    threads:
+      max: 25
+      min-spare: 4
+    max-connections: 60
+    accept-count: 20
+    connection-timeout: 20000
 spring:
   servlet:
     multipart:
       enabled: true
       max-file-size: "500MB"
       max-request-size: "500MB"
+      file-size-threshold: 0
+      location: "${FILE_UPLOAD_BASE_PATH:./uploads/}/.multipart-tmp"
   datasource:
     url: "jdbc:mariadb://${MARIADB_HOST:localhost}:${MARIADB_PORT:3306}/${MARIADB_DATABASE:photoupload}"
     username: "${MARIADB_USER:photoupload}"
@@ -58,7 +67,7 @@ file:
     max-files-per-request: 100
     max-concurrent-processing: "${FILE_UPLOAD_MAX_CONCURRENT_PROCESSING:2}"
     processing-queue-capacity: "${FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY:50}"
-    duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:false}"
+    duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:true}"
 logging:
   level:
     ROOT: "info"
@@ -77,13 +86,18 @@ app:
     topic: "${APNS_TOPIC:com.oglimmer.photosync}"
     production: "${APNS_PRODUCTION:false}"
 management:
+  server:
+    port: 8081
+    address: "0.0.0.0"
   endpoints:
     web:
       exposure:
-        include: "health,info"
+        include: "health,info,metrics"
   endpoint:
     health:
       show-details: "always"
+      probes:
+        enabled: true
   info:
     git:
       mode: "full"
