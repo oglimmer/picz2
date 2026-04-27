@@ -7,6 +7,7 @@ import com.drew.metadata.exif.ExifSubIFDDirectory;
 import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
+import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,7 +36,18 @@ public class FileProcessingService {
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
     FileMetadata metadata =
-        tx.execute(status -> metadataRepository.findById(fileMetadataId).orElse(null));
+        tx.execute(
+            status -> {
+              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+              if (found == null) {
+                return null;
+              }
+              found.setProcessingStatus(ProcessingStatus.PROCESSING);
+              found.setProcessingAttempts(
+                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+              found.setProcessingError(null);
+              return metadataRepository.save(found);
+            });
     if (metadata == null) {
       log.warn("processFile: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -128,14 +140,46 @@ public class FileProcessingService {
       }
 
       // Persist all updates in one short transaction
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
       final FileMetadata toSave = metadata;
       tx.executeWithoutResult(status -> metadataRepository.save(toSave));
       log.info("✅ Finished processing: {}", originalName);
     } catch (IOException e) {
       log.error("I/O error processing file {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
     } catch (Exception e) {
       log.error("Unexpected error processing file {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
     }
+  }
+
+  private void markFailed(TransactionTemplate tx, Long fileMetadataId, Throwable cause) {
+    try {
+      tx.executeWithoutResult(
+          status -> {
+            FileMetadata current = metadataRepository.findById(fileMetadataId).orElse(null);
+            if (current == null) {
+              return;
+            }
+            current.setProcessingStatus(ProcessingStatus.FAILED);
+            current.setProcessingCompletedAt(Instant.now());
+            current.setProcessingError(truncateError(cause));
+            metadataRepository.save(current);
+          });
+    } catch (Exception persistenceError) {
+      log.error(
+          "Failed to record FAILED status for fileMetadataId {}: {}",
+          fileMetadataId,
+          persistenceError.getMessage(),
+          persistenceError);
+    }
+  }
+
+  private String truncateError(Throwable cause) {
+    String msg = cause.getClass().getSimpleName() + ": " + cause.getMessage();
+    return msg.length() > 4000 ? msg.substring(0, 4000) : msg;
   }
 
   private Instant extractExifDateTimeOriginal(Path imagePath) {

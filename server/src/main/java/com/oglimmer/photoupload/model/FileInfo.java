@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.model;
 
+import com.oglimmer.photoupload.entity.ProcessingStatus;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,4 +28,5 @@ public class FileInfo {
   private List<String> tags = new ArrayList<>();
   private Long albumId;
   private String albumName;
+  private ProcessingStatus processingStatus;
 }

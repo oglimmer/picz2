@@ -152,3 +152,16 @@ affinity: {}
 # Image pull secrets
 imagePullSecrets:
   - name: oglimmerregistrykey
+
+# Prometheus monitoring rules. Requires the prometheus-operator CRDs (PrometheusRule)
+# to be installed in the cluster — set storageAlert.enabled=false to skip if they aren't.
+monitoring:
+  storageAlert:
+    enabled: true
+    # Fraction (0–1) of capacity that triggers the alert. 0.8 = 80%.
+    threshold: 0.8
+    # Sustained-breach duration before the alert fires.
+    for: 10m
+    # Extra labels to merge onto the PrometheusRule (e.g. release: kube-prometheus-stack)
+    # so the in-cluster Prometheus picks the rule up.
+    additionalLabels: {}

@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -315,6 +316,7 @@ public class FileStorageService {
               metadata.setUploadedAt(Instant.now());
               metadata.setChecksum(checksum);
               metadata.setContentId(contentId);
+              metadata.setProcessingStatus(ProcessingStatus.INGESTED);
 
               Album album =
                   albumRepository
@@ -949,6 +951,10 @@ public class FileStorageService {
     boolean isOriginalRequested = "original".equalsIgnoreCase(size);
     boolean isServingThumbnail = false;
     boolean isServingTranscodedVideo = false;
+    // Tracks whether the size the caller asked for is genuinely present. When false, the
+    // controller decides between 202 (processing not done) and serving the original (done
+    // but no derivative — e.g. video has only a thumb, or image processing failed).
+    boolean derivativeReady = true;
 
     // Handle size parameter for both images and videos
     if (size != null) {
@@ -959,16 +965,22 @@ public class FileStorageService {
           if (metadata.getThumbnailPath() != null) {
             filePath = metadata.getThumbnailPath();
             isServingThumbnail = true;
+          } else {
+            derivativeReady = false;
           }
           break;
         case "medium":
           if (metadata.getMediumPath() != null) {
             filePath = metadata.getMediumPath();
+          } else {
+            derivativeReady = false;
           }
           break;
         case "large":
           if (metadata.getLargePath() != null) {
             filePath = metadata.getLargePath();
+          } else {
+            derivativeReady = false;
           }
           break;
         case "original":
@@ -1011,7 +1023,9 @@ public class FileStorageService {
         metadata.getChecksum(),
         metadata.getUploadedAt(),
         absolutePath,
-        metadata.getStoredFilename());
+        metadata.getStoredFilename(),
+        metadata.getProcessingStatus(),
+        derivativeReady);
   }
 
   private FileInfo convertToFileInfo(FileMetadata metadata) {

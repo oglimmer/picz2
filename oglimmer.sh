@@ -34,6 +34,7 @@ VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 RESTART="${RESTART:-true}"
 PUSH="${PUSH:-true}"
+NO_CACHE="${NO_CACHE:-false}"
 HELP=false
 PLATFORM="${PLATFORM:-auto}"
 RELEASE_FLAG=false
@@ -99,6 +100,7 @@ BUILD OPTIONS:
     -v, --verbose           Enable verbose output
     -n, --no-restart        Skip Kubernetes deployment restart (default: restart)
     --no-push               Skip pushing images to registry
+    --no-cache              Pass --no-cache to docker build (force full layer rebuild)
     --dry-run               Show what would be done without executing
     --release               Build as release (no -SNAPSHOT suffix in pom.xml)
 
@@ -130,7 +132,7 @@ ENVIRONMENT VARIABLES:
     FRONTEND_DEPLOYMENT / BACKEND_DEPLOYMENT    Override deployment names
     PLATFORM                                    amd64 | arm64 | multi | auto
     DEFAULT_REGISTRIES_ENV                      Comma-separated registries
-    VERBOSE / DRY_RUN / PUSH / RESTART          true/false toggles
+    VERBOSE / DRY_RUN / PUSH / RESTART / NO_CACHE  true/false toggles
 EOF
 }
 
@@ -152,6 +154,7 @@ parse_args() {
             -v|--verbose)   VERBOSE=true; shift ;;
             -n|--no-restart) RESTART=false; shift ;;
             --no-push)      PUSH=false; shift ;;
+            --no-cache)     NO_CACHE=true; shift ;;
             --dry-run)      DRY_RUN=true; shift ;;
             --release)      RELEASE_FLAG=true; shift ;;
             --registries)
@@ -340,9 +343,12 @@ build_image() {
     done
     [[ -n "$platform_args" ]] && log_info "Target platform(s): $PLATFORM"
 
+    local cache_flag=""
+    [[ "$NO_CACHE" == true ]] && cache_flag=" --no-cache"
+
     local build_cmd=""
     if [[ "$PLATFORM" == "multi" || ( -n "$platform_args" && "$PLATFORM" != "auto" ) ]]; then
-        build_cmd="docker buildx build $platform_args$tag_args"
+        build_cmd="docker buildx build$cache_flag $platform_args$tag_args"
         if [[ "$PUSH" == true ]]; then
             build_cmd+=" --push"
         elif [[ "$PLATFORM" != "multi" ]]; then
@@ -353,7 +359,7 @@ build_image() {
         fi
         build_cmd+=" -f $dockerfile ."
     else
-        build_cmd="docker build$tag_args -f $dockerfile ."
+        build_cmd="docker build$cache_flag$tag_args -f $dockerfile ."
         if [[ "$PUSH" == true ]]; then
             for img in "${images[@]}"; do
                 build_cmd+=" && docker push $img:$version && docker push $img:latest"
@@ -398,6 +404,7 @@ execute_build() {
     echo "Push to Registry:  $PUSH"
     echo "Restart K8s:       $RESTART"
     echo "Release build:     $RELEASE_FLAG"
+    echo "No-cache build:    $NO_CACHE"
     echo "Dry-run:           $DRY_RUN"
     echo -e "${BOLD}===========================${RESET}"
     echo

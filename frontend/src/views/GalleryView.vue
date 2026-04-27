@@ -699,6 +699,7 @@ import { useAuth } from '../composables/useAuth'
 import { useApi } from '../composables/useApi'
 import { useAlbums } from '../composables/useAlbums'
 import { useFiles } from '../composables/useFiles'
+import { useProcessingPoller } from '../composables/useProcessingPoller'
 import { useTags } from '../composables/useTags'
 import { useSettings } from '../composables/useSettings'
 import { useSlideshow } from '../composables/useSlideshow'
@@ -749,6 +750,11 @@ export default {
       reorderByFilename,
       reorderByExif
     } = useFiles()
+    // Polls /api/assets/{id}/status for any file that arrived from the backend with
+    // processingStatus != DONE (typical right after a fresh upload). When a file's status
+    // flips to a terminal state, the file ref is mutated so GalleryItem rerenders the
+    // <img> instead of the spinner placeholder.
+    const processingPoller = useProcessingPoller(files)
     const {
       availableTags,
       enabledAlbumTags,
@@ -1108,9 +1114,17 @@ export default {
       }
     })
 
+    // Whenever the file list changes (initial load, post-upload reload, reorder, etc),
+    // hand the new entries to the poller. startOne() is idempotent, so files that are
+    // already being polled are not re-armed.
+    watch(files, (newFiles) => {
+      processingPoller.watchFiles(newFiles)
+    }, { deep: false })
+
     onUnmounted(() => {
       window.removeEventListener('keydown', handleGalleryKeydown)
       clearEnabledAlbumTags()
+      processingPoller.stopAll()
     })
 
     // React to prop changes when the same component instance is reused

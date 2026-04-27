@@ -32,10 +32,19 @@
       @click="(e) => selectionActive ? $emit('toggle-select', file.id, e.shiftKey) : $emit('click', file)"
     >
       <img
+        v-if="thumbnailReady"
         :src="thumbnailUrl"
         :alt="file.originalName"
         loading="lazy"
       >
+      <div
+        v-else
+        class="processing-placeholder"
+        :title="processingTitle"
+      >
+        <span class="processing-spinner" />
+        <span class="processing-label">{{ processingLabel }}</span>
+      </div>
       <div
         v-if="isVideoFile"
         class="video-play-overlay"
@@ -190,7 +199,30 @@ const emit = defineEmits<{
 
 const { getImageUrl } = useApi()
 
+// Treat absent processingStatus (older rows pre-Gap 6) as DONE so we don't suppress them.
+const thumbnailReady = computed(
+  () => !props.file.processingStatus || props.file.processingStatus === 'DONE'
+)
 const thumbnailUrl = computed(() => getImageUrl(props.file, 'thumb'))
+const processingLabel = computed(() => {
+  switch (props.file.processingStatus) {
+    case 'FAILED':
+    case 'DEAD_LETTER':
+      return 'Failed'
+    default:
+      return 'Processing…'
+  }
+})
+const processingTitle = computed(() => {
+  switch (props.file.processingStatus) {
+    case 'FAILED':
+      return 'Processing failed — will retry'
+    case 'DEAD_LETTER':
+      return 'Processing failed permanently'
+    default:
+      return 'Generating thumbnail…'
+  }
+})
 const isVideoFile = computed(() => isVideo(props.file))
 const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))

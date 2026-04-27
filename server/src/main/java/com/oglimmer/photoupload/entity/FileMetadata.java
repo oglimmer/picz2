@@ -4,6 +4,8 @@ package com.oglimmer.photoupload.entity;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -93,6 +95,19 @@ public class FileMetadata {
 
   @Column(name = "transcoded_video_path")
   private String transcodedVideoPath;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "processing_status", nullable = false, length = 32)
+  private ProcessingStatus processingStatus = ProcessingStatus.INGESTED;
+
+  @Column(name = "processing_attempts", nullable = false)
+  private Integer processingAttempts = 0;
+
+  @Column(name = "processing_error", columnDefinition = "TEXT")
+  private String processingError;
+
+  @Column(name = "processing_completed_at")
+  private Instant processingCompletedAt;
 
   @OneToMany(mappedBy = "fileMetadata", cascade = CascadeType.ALL, orphanRemoval = true)
   private List<ImageTag> imageTags = new ArrayList<>();

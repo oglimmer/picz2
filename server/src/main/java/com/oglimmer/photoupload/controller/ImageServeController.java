@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
+import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
@@ -8,7 +9,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,18 +26,33 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class ImageServeController {
 
+  private static final String RETRY_AFTER_SECONDS = "2";
+
   private final FileStorageService fileStorageService;
 
   @GetMapping("/{token}")
   public ResponseEntity<?> downloadFileByToken(
       @PathVariable String token, @RequestParam(value = "size", required = false) String size) {
     try {
-      // Get file serve info by public token
       FileServeInfo fileInfo = fileStorageService.getFileServeInfoByPublicToken(token, size);
+
+      // Caller asked for a derivative (thumb/medium/large) but processing hasn't produced it
+      // yet. Returning the original here would either ship a HEIC the browser can't render or
+      // waste bandwidth on the full-res image. Instead, return 202 Accepted with Retry-After
+      // and let the client poll /api/assets/{id}/status.
+      if (!fileInfo.isDerivativeReady()
+          && fileInfo.getProcessingStatus() != ProcessingStatus.DONE) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+            .header(HttpHeaders.RETRY_AFTER, RETRY_AFTER_SECONDS)
+            .cacheControl(CacheControl.noStore())
+            .build();
+      }
 
       Resource resource = new UrlResource(fileInfo.getFilePath().toUri());
       if (!resource.exists()) {
-        // Fallback to original if requested size doesn't exist
+        // Derivative metadata exists but the file is missing on disk — fall back to the
+        // original. This shouldn't normally happen but keeps the gallery functional if a
+        // derivative is deleted out-of-band.
         fileInfo = fileStorageService.getFileServeInfoByPublicToken(token, "original");
         resource = new UrlResource(fileInfo.getFilePath().toUri());
         if (!resource.exists()) {
@@ -48,12 +66,9 @@ public class ImageServeController {
       } catch (Exception ignored) {
       }
 
-      // Add caching headers for performance
       return ResponseEntity.ok()
           .contentType(mediaType)
-          .cacheControl(
-              org.springframework.http.CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS)
-                  .cachePublic())
+          .cacheControl(CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
           .eTag(fileInfo.getChecksum())
           .lastModified(fileInfo.getUploadedAt())
           .header(

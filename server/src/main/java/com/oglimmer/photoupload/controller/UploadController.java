@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,7 +42,7 @@ public class UploadController {
       UploadFileResponse response =
           UploadFileResponse.builder().success(true).file(fileInfo).build();
 
-      return ResponseEntity.ok(response);
+      return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     } catch (IOException e) {
       log.error("Failed to store file", e);
       throw new StorageException("Failed to store file: " + e.getMessage(), e);
@@ -79,7 +80,7 @@ public class UploadController {
               .files(uploadedFiles)
               .build();
 
-      return ResponseEntity.ok(response);
+      return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     } catch (IOException e) {
       log.error("Failed to store files", e);
       throw new StorageException("Failed to store files: " + e.getMessage(), e);

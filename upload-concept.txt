@@ -1,0 +1,155 @@
+The fundamental principle here is decoupling: ingestion and processing have completely different scaling characteristics, and they must never share a request t…
+
+Architected decoupled upload-processing pipeline with memory constraints
+Architected decoupled upload-processing pipeline with memory constraints
+The fundamental principle here is decoupling: ingestion and processing have completely different scaling characteristics, and they must never share a request thread, a memory budget, or a connection. Ingestion is I/O-bound and parallel-friendly — many slow uploads can happen concurrently at negligible CPU cost. Processing is CPU and memory-bound and must be strictly throttled. Treat them as two separate systems that communicate only through durable storage and a job queue.
+
+
+
+iOS side
+The iOS app needs a persistent upload queue that survives app suspension, force-quit, OS reboot, and network loss. The right primitive is URLSession with URLSessionConfiguration.background(withIdentifier:) — the system continues uploads after the app is killed and relaunches your app in the background when uploads finish or fail. This is non-negotiable; foreground-only uploads will leave half-finished assets stranded the moment the user switches apps.
+
+Persist the queue in Core Data or SQLite, one row per asset, with: a client-generated UUID acting as idempotency key, the local file URL, status (pending, uploading, processing, done, failed), and an attempt counter. Critically, never load video data into memory — use URLSession.uploadTask(with:fromFile:), which streams from disk via mmap. The Data-based variants will OOM the app on a 4K video.
+
+For large videos you need resumable chunked uploads. The TUS protocol (tus.io) is the cleanest choice: an open standard with a mature server (tus-java-server for Spring, or tusd as a Go sidecar) and a Swift client. Sending a 2GB video in one POST and losing it at 99% on a flaky cellular connection is exactly the failure you want to avoid.
+
+Keep concurrent uploads modest — two or three at a time is plenty. More just contends for bandwidth and battery. Use exponential backoff on 5xx and 429 responses, and respect Retry-After — the backend uses it to push back when the worker queue is overloaded.
+
+Backend ingestion: the upload service
+The upload endpoint should do exactly three things: stream the request body to durable storage, write a job row, and return 202 Accepted with the asset ID. It must not decode the image, must not invoke ffmpeg, must not load the body into JVM heap.
+
+If you go with TUS, deploy tusd as a sidecar (single Go binary) or use a Java implementation embedded in Spring. For a hand-rolled endpoint, configure multipart streaming so Spring writes uploads to disk immediately:
+
+yaml
+spring:
+  servlet:
+    multipart:
+      max-file-size: 5GB
+      max-request-size: 5GB
+      file-size-threshold: 0   # write to disk, never buffer in heap
+      location: /tmp/uploads
+Better, accept raw PUT with application/octet-stream and pipe request.getInputStream() directly to your storage backend. Spring will not buffer the body if you read it as a stream:
+
+java
+@PutMapping("/assets/{clientUuid}")
+public ResponseEntity<?> upload(@PathVariable UUID clientUuid,
+                                @RequestHeader("Content-Type") String mime,
+                                HttpServletRequest req) {
+    var existing = assetRepo.findByClientUuid(clientUuid);
+    if (existing.isPresent()) return ResponseEntity.ok(toResponse(existing.get()));
+
+    String key = "originals/" + clientUuid;
+    try (InputStream in = req.getInputStream()) {
+        s3.putObject(PutObjectRequest.builder()
+                .bucket(bucket).key(key).contentType(mime).build(),
+            RequestBody.fromInputStream(in, req.getContentLengthLong()));
+    } catch (IOException e) {
+        throw new UncheckedIOException(e);
+    }
+    var asset = assetRepo.save(new Asset(clientUuid, key, Status.PENDING, mime));
+    jobRepo.save(new Job(asset.getId(), JobStatus.QUEUED));
+    return ResponseEntity.accepted().body(toResponse(asset));
+}
+The idempotency check on clientUuid is essential. A network blip can cause the iOS client to retry an upload that actually succeeded server-side, and you must never duplicate work or storage.
+
+When backpressure kicks in (queue too deep, see below), return 503 with Retry-After: 60. The iOS client honors it and stops piling on more work.
+
+Storage
+Use object storage as the boundary between services. MinIO runs perfectly well on K3s with Longhorn-backed PVCs as a single replica — given your existing Longhorn setup that's a natural fit. SeaweedFS is another lightweight option. Store originals at originals/{uuid} and derivatives at derivatives/{uuid}/{size}.{ext}. Keep originals at least until processing completes; ideally retain them so you can reprocess later if you change formats.
+
+Avoid ReadWriteMany PVCs shared between upload and worker pods — that path leads to filesystem contention and weird locking bugs. Object storage gives clean separation and both services use the same SDK.
+
+Worker
+This is where "1 conversion at a time" lives. Run the worker as its own Spring Boot process — separate deployment, separate resource limits — so an OOM in the worker doesn't take down the upload service.
+
+For the queue itself, you have two reasonable choices. RabbitMQ gives proper queue semantics with prefetch and dead-lettering, but adds an operational dependency. A MariaDB table polled with FOR UPDATE SKIP LOCKED (MariaDB 10.6+) or pessimistic locking gives the same atomicity with one less moving part — and you already have MariaDB. The schema:
+
+sql
+CREATE TABLE jobs (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  asset_id BIGINT NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  leased_until TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_status_leased (status, leased_until)
+);
+Atomic dequeue:
+
+sql
+SELECT id, asset_id FROM jobs
+WHERE status = 'QUEUED'
+   OR (status = 'PROCESSING' AND leased_until < NOW())
+ORDER BY created_at
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+The leased_until column gives crash recovery: a worker takes a 30-minute lease on the row, and if the worker dies mid-job, another worker picks it back up after the lease expires. This is the visibility-timeout pattern from SQS, expressed in SQL.
+
+Concurrency is a Semaphore:
+
+java
+@Component
+public class ProcessingExecutor {
+    private final Semaphore permits;
+
+    public ProcessingExecutor(@Value("${processing.concurrency:1}") int n) {
+        this.permits = new Semaphore(n);
+    }
+
+    public <T> T run(Callable<T> work) throws Exception {
+        permits.acquire();
+        try { return work.call(); } finally { permits.release(); }
+    }
+}
+A single @Scheduled poll task tries to acquire a permit and dequeue. If both succeed, it dispatches to a small bounded ThreadPoolExecutor sized to match the permit count. Don't poll aggressively — every 2-5 seconds is plenty. If you want event-driven dequeue, MariaDB doesn't have LISTEN/NOTIFY, so polling is the pragmatic answer.
+
+Memory: never run media in the JVM
+This is the rule that matters most. Decoding a video frame or a 50MP photo into a Java BufferedImage will allocate hundreds of megabytes of heap per file and eventually OOM the worker. The only safe pattern is to shell out to native processes that have their own memory address space:
+
+java
+ProcessBuilder pb = new ProcessBuilder(
+    "ffmpeg", "-y",
+    "-i", inputPath,
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+    "-vf", "scale=-2:720",
+    "-c:a", "aac", "-b:a", "128k",
+    "-threads", "1",
+    "-loglevel", "error",
+    outputPath
+);
+pb.redirectErrorStream(true);
+Process p = pb.start();
+
+// Critical: drain stdout/stderr concurrently or ffmpeg will block on a full pipe
+Thread drain = Thread.startVirtualThread(() -> {
+    try (var in = p.getInputStream()) { in.transferTo(OutputStream.nullOutputStream()); }
+    catch (IOException ignored) {}
+});
+
+if (!p.waitFor(30, TimeUnit.MINUTES)) {
+    p.destroyForcibly();
+    throw new TimeoutException("ffmpeg hung");
+}
+drain.join();
+if (p.exitValue() != 0) throw new RuntimeException("ffmpeg failed");
+The drain thread is not optional. If you don't read ffmpeg's stderr, the OS pipe buffer (typically 64KB) fills up and ffmpeg blocks indefinitely. This is the most common subtle bug in Java-to-subprocess pipelines, and it shows up as "works fine on small files, hangs on big ones".
+
+For images, use libvips. vipsthumbnail input.jpg --size 320x320 -o thumb.jpg is fast and uses bounded memory regardless of input dimensions because it streams tiles rather than decoding the whole image. Don't use ImageMagick on huge images; it loads everything. Don't use ImageIO/BufferedImage for anything user-supplied.
+
+The pattern in code: download the original from object storage to a temp file, run ffmpeg or vips against it, upload outputs back to storage, delete temp files in a finally block. Never hold media bytes in heap.
+
+Container memory budget
+For both services, set the JVM heap small. With a 512Mi pod limit, -XX:MaxRAMPercentage=50.0 gives the heap 256Mi, which is generous for a Spring Boot app that does no media work. The remaining 256Mi covers metaspace, threads, and direct buffers (HTTP and S3 SDK use them).
+
+The worker pod additionally needs space for the ffmpeg subprocess. Give it a 1.5Gi or 2Gi total limit, with the JVM constrained as above. ffmpeg's memory is mostly a function of resolution and codec — H.264 encoding of 1080p with -preset veryfast typically stays well under 300Mi, but 4K can push higher. Test on your actual content. If you want ironclad isolation, run ffmpeg as a Kubernetes Job triggered from the worker, with its own resource limits — but for single-node K3s, in-pod subprocess is fine and saves the scheduling overhead.
+
+Backpressure
+Two mechanisms work together. Expose jobs_queued as a Prometheus gauge from the worker. The upload service reads it and switches to 503 Retry-After when the depth crosses a threshold — say, 200 jobs. The iOS client backs off exponentially and the spike doesn't drown the system. The second layer is on the client: cap concurrent uploads per device at 2-3 so a single user with a fat connection doesn't accidentally DDoS your upload service.
+
+Disk fills are the other backpressure axis. A nightly CronJob that purges originals older than 7 days for DONE assets keeps storage bounded. Alert on storage utilization at 80%.
+
+Notifying the iOS app
+Three options. APNs push notifications are the right answer for closed apps but require push infrastructure. A GET /assets/{id} polling endpoint is simplest and works fine while the user has the asset list open in the app. WebSockets/SSE are overkill at this scale. Start with polling; add APNs only if user experience demands it.
+
+Putting it together
+The combination that gives you reliable behavior under poor conditions: client-side persistent queue with idempotency keys, resumable chunked uploads, atomic DB-based job dequeue with leases, ffmpeg as a subprocess outside the JVM, bounded worker concurrency via a Semaphore, queue-depth backpressure with Retry-After, and object storage as the durable boundary between services. Each component fails independently and recovers without data loss; memory consumption is bounded at every layer because no service ever holds media in heap.

@@ -47,16 +47,31 @@ RUN apt-get update && \
         libde265-dev \
         libaom-dev \
         libx265-dev && \
+    # Make /usr/local/lib win lookups against /usr/lib/<triplet>/. ffmpeg + libvips-tools
+    # (installed below) drag in Ubuntu's libheif1 1.17.x as a transitive dep, which
+    # lacks heif_has_compatible_filetype and applies stricter aux-image / metadata
+    # checks than 1.18 — both of which break HEIC decode for modern iOS files. Without
+    # this entry, ld.so.cache resolves SONAME libheif.so.1 to the apt copy and shadows
+    # the /usr/local/lib build done in the next step.
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/00-photoupload-local.conf && \
     # Build and install libheif (latest version for modern HEIC support)
     cd /tmp && \
     wget https://github.com/strukturag/libheif/releases/download/v1.18.2/libheif-1.18.2.tar.gz && \
     tar xzf libheif-1.18.2.tar.gz && \
     cd libheif-1.18.2 && \
     mkdir build && cd build && \
-    cmake --preset=release .. && \
+    # WITH_EXAMPLES installs heif-convert into /usr/local/bin — that is the canonical
+    # HEIC → JPEG path; ImageMagick's HEIC reader is now a fallback only.
+    # CMAKE_INSTALL_RPATH bakes /usr/local/lib into heif-convert's RPATH so it always
+    # picks up the matching libheif.so.1 even if a different copy lands on the global
+    # search path later.
+    cmake --preset=release -DWITH_EXAMPLES=ON \
+          -DCMAKE_INSTALL_RPATH=/usr/local/lib \
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON .. && \
     make -j$(nproc) && \
     make install && \
     ldconfig && \
+    test -x /usr/local/bin/heif-convert && \
     # Build and install ImageMagick (latest version)
     cd /tmp && \
     wget https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.1-39.tar.gz && \
@@ -78,6 +93,7 @@ RUN apt-get update && \
     # This ensures apt knows these are explicitly wanted and won't remove them
     apt-get install -y --no-install-recommends \
         ffmpeg \
+        libvips-tools \
         libjpeg-turbo8 \
         libjpeg8 \
         libpng16-16 \
@@ -101,6 +117,16 @@ RUN apt-get update && \
         libjbig0 \
         liblzma5 \
         libzstd1 && \
+    # Re-cache library paths now that runtime debs (which can ship their own libheif1)
+    # have been laid down. /usr/local/lib stays first thanks to the conf.d entry above.
+    ldconfig && \
+    # Hard-fail the image build if libheif.so.1 ever resolves to the apt copy. Pinning
+    # this here is cheap insurance against a future Dockerfile reorder that breaks
+    # HEIC decode silently at runtime.
+    ldd /usr/local/bin/heif-convert | grep 'libheif\.so' \
+        | grep -q '=> /usr/local/lib/' \
+        || (echo "heif-convert is not linked against /usr/local/lib/libheif" >&2; \
+            ldd /usr/local/bin/heif-convert >&2; exit 1) && \
     # Clean up build artifacts and BUILD dependencies only (keep runtime libs!)
     cd / && \
     rm -rf /tmp/* && \

@@ -8,6 +8,14 @@ export interface Album {
   shareToken?: string;
 }
 
+export type ProcessingStatus =
+  | "INGESTED"
+  | "QUEUED"
+  | "PROCESSING"
+  | "DONE"
+  | "FAILED"
+  | "DEAD_LETTER";
+
 export interface AlbumFile {
   id: number;
   albumId: number;
@@ -23,6 +31,7 @@ export interface AlbumFile {
   tags: string[];
   order?: number;
   publicToken?: string;
+  processingStatus?: ProcessingStatus;
 }
 
 export interface Tag {
