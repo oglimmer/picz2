@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
@@ -102,6 +103,8 @@ public class FileStorageService {
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
   private final FileProcessingService fileProcessingService;
+  private final JobEnqueueService jobEnqueueService;
+  private final JobsProperties jobsProperties;
 
   public FileStorageService(
       FileStorageProperties properties,
@@ -115,7 +118,9 @@ public class FileStorageService {
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
-      FileProcessingService fileProcessingService) {
+      FileProcessingService fileProcessingService,
+      JobEnqueueService jobEnqueueService,
+      JobsProperties jobsProperties) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
@@ -129,6 +134,8 @@ public class FileStorageService {
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.fileProcessingService = fileProcessingService;
+    this.jobEnqueueService = jobEnqueueService;
+    this.jobsProperties = jobsProperties;
   }
 
   @PostConstruct
@@ -316,7 +323,12 @@ public class FileStorageService {
               metadata.setUploadedAt(Instant.now());
               metadata.setChecksum(checksum);
               metadata.setContentId(contentId);
-              metadata.setProcessingStatus(ProcessingStatus.INGESTED);
+              // When the dispatcher owns processing, the row is QUEUED at insert time and the
+              // jobs table is the source of truth. The legacy @Async path keeps INGESTED so
+              // FileProcessingService transitions it to PROCESSING the same way it always has.
+              boolean dispatcherEnabled = jobsProperties.getDispatcher().isEnabled();
+              metadata.setProcessingStatus(
+                  dispatcherEnabled ? ProcessingStatus.QUEUED : ProcessingStatus.INGESTED);
 
               Album album =
                   albumRepository
@@ -333,19 +345,25 @@ public class FileStorageService {
               FileMetadata saved = metadataRepository.save(metadata);
               ensureNoTagExists(currentUser);
               addNoTagToFile(saved, currentUser);
+              if (dispatcherEnabled) {
+                // Same TX as the metadata insert → either both visible or neither.
+                jobEnqueueService.enqueue(saved.getId());
+              }
               return convertToFileInfoWithId(saved);
             });
 
-    // Submit async processing. If this races and gets rejected anyway (AbortPolicy), the
-    // row already exists and can be reprocessed later; we log and return success so the
-    // client doesn't double-upload.
-    try {
-      fileProcessingService.processFile(result.getId());
-    } catch (TaskRejectedException e) {
-      log.warn(
-          "Processing task rejected after insert for {} (id={}); row retained for later reprocess",
-          originalFilename,
-          result.getId());
+    if (!jobsProperties.getDispatcher().isEnabled()) {
+      // Legacy path: hand the new asset id to the @Async executor directly. If the executor
+      // queue is full and AbortPolicy rejects us, the row already exists and can be
+      // reprocessed later; we log and return success so the client doesn't double-upload.
+      try {
+        fileProcessingService.processFileAsync(result.getId());
+      } catch (TaskRejectedException e) {
+        log.warn(
+            "Processing task rejected after insert for {} (id={}); row retained for later reprocess",
+            originalFilename,
+            result.getId());
+      }
     }
 
     return result;

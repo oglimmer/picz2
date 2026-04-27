@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-27
+Last reviewed: 2026-04-27 (Gap 1 implementation landed)
 
 ---
 
@@ -68,21 +68,21 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 
 | #   | Decision                                       | Recommended                                                                                                          | Status |
 | --- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------ |
-| D1  | Status enum values                             | `INGESTED / QUEUED / PROCESSING / DONE / FAILED / DEAD_LETTER` — richer set keeps reprocessing diagnosable.          | open   |
-| D2  | Backfill strategy for existing rows            | Rows with any derivative → `DONE`; otherwise `FAILED`. Cheap SQL, no false promises.                                 | open   |
-| D3  | Jobs table key relationship                    | FK `asset_id → file_metadata.id`. Single-purpose queue, not infra.                                                   | open   |
-| D4  | Job granularity                                | One row per asset, fixed pipeline. No sub-step rows until reprocessing demands them.                                 | open   |
-| D5  | Lease duration                                 | 15 min default, configurable. Enough for a 1080p transcode; short enough to recover quickly from a crash.            | open   |
-| D6  | Poll interval                                  | 2 s. Invisible relative to ffmpeg cost.                                                                              | open   |
+| D1  | Status enum values                             | `INGESTED / QUEUED / PROCESSING / DONE / FAILED / DEAD_LETTER` — richer set keeps reprocessing diagnosable.          | accepted |
+| D2  | Backfill strategy for existing rows            | V30: rows with any derivative → `DONE`; else `FAILED`. V31: re-enqueue every FAILED row as QUEUED.                   | accepted |
+| D3  | Jobs table key relationship                    | FK `asset_id → file_metadata.id`. Single-purpose queue, not infra.                                                   | accepted |
+| D4  | Job granularity                                | One row per asset, fixed pipeline. No sub-step rows until reprocessing demands them.                                 | accepted |
+| D5  | Lease duration                                 | 15 min default, configurable via `jobs.lease.seconds`.                                                               | accepted |
+| D6  | Poll interval                                  | 2 s, configurable via `jobs.poll.interval-ms`.                                                                       | accepted |
 | D7  | TUS implementation                             | **tusd Deployment** with S3 backend writing directly to MinIO. Avoids JVM heap; tusd's state machine is mature.      | open   |
 | D8  | Object storage                                 | **MinIO**, single replica on Longhorn PVC.                                                                           | open   |
 | D9  | MinIO deploy shape                             | Hand-rolled Deployment (single Pod, single PVC). Official chart is over-engineered for one node.                     | open   |
 | D10 | Existing-data migration to MinIO               | Lazy + one-shot CommandLineRunner (idempotent: skip if HEAD succeeds). No maintenance window.                        | open   |
 | D11 | iOS handling of HTTP 202                       | Treat 202 like 200 for "don't re-upload" bookkeeping; surface "Processing…" status in gallery UI optionally.         | open   |
 | D12 | TUS rollout to iOS                             | Coexistence: `/api/upload` stays for old clients; new clients prefer TUS based on `GET /api/capabilities`.           | open   |
-| D13 | Worker concurrency                             | `Semaphore(1)` per worker pod. Add replicas if needed; do not oversubscribe ImageMagick/ffmpeg threads.              | open   |
+| D13 | Worker concurrency                             | `Semaphore(1)` per worker pod. Add replicas if needed; do not oversubscribe ImageMagick/ffmpeg threads.              | accepted |
 | D14 | libvips refactor shape                         | Split into `VipsThumbnailService` (images), `HeicConversionService` (HEIC only), `FfmpegService` (video).            | open   |
-| D15 | Dead-letter behaviour                          | Move to `DEAD_LETTER` after N attempts, keep original blob, expose in admin UI. Do not silently drop user data.      | open   |
+| D15 | Dead-letter behaviour                          | Move to `DEAD_LETTER` after `max_attempts=3`, keep original blob. `GET /api/admin/dead-letter` exposes them; UI deferred. | accepted |
 
 ---
 
@@ -132,14 +132,16 @@ vips handles unusual color profiles slightly differently. Flag-gated rollback.
 
 ## Gap 1 — Persistent jobs table with leases (Phase 1)
 
-- [ ] Migration `V31__create_processing_jobs.sql`: `processing_jobs` table with `(id, asset_id, status, attempts, max_attempts, leased_until, leased_by, last_error, created_at, started_at, finished_at)`, FK to `file_metadata` with `ON DELETE CASCADE`, composite index `(status, leased_until)`. Backfill enqueues any asset still missing derivatives.
-- [ ] `ProcessingJob` entity, `ProcessingJobRepository` with native `SELECT ... FOR UPDATE SKIP LOCKED` for atomic lease acquisition.
-- [ ] `JobDispatcher` with `@Scheduled(fixedDelay=2000)`: acquires `Semaphore(1)` permit, leases a row in one TX (`status='PROCESSING'`, `leased_until=NOW()+15min`), dispatches to executor, marks `DONE` / `FAILED` (→ `DEAD_LETTER` after max attempts) on completion.
-- [ ] `JobEnqueueService.enqueue(assetId)` called by `FileStorageService.storeFile` *inside the same TX as the metadata insert* → atomic.
-- [ ] `FileProcessingService.processFile`: drop `@Async`. Now synchronous, called by the dispatcher.
-- [ ] `UploadBackpressureFilter`: switch the depth check from `executor.getQueue().remainingCapacity()` to a **cached gauge** of `(QUEUED + PROCESSING)` jobs (refreshed every 1 s via `@Scheduled`). Threshold stays at 200.
-- [ ] Config: `jobs.poll.interval-ms`, `jobs.lease.seconds`, `jobs.max-attempts`, `jobs.backpressure.queue-depth-threshold`.
-- [ ] Feature flag `jobs.dispatcher.enabled` so we can fall back to old `@Async` for one release.
+- [x] Migration `V31__create_processing_jobs.sql`: `processing_jobs` table with `(id, asset_id, status, attempts, max_attempts, leased_until, leased_by, last_error, created_at, started_at, finished_at)`, FK to `file_metadata` with `ON DELETE CASCADE`, composite index `(status, leased_until)`. Backfill enqueues every row left FAILED by V30 and resets their `processing_status` to QUEUED.
+- [x] `ProcessingJob` entity, `ProcessingJobRepository` with native `SELECT ... FOR UPDATE SKIP LOCKED` for atomic lease acquisition.
+- [x] `JobDispatcher` with `@Scheduled(fixedDelay=2000)`: acquires `Semaphore(1)` permit, leases a row in one TX (`status='PROCESSING'`, `leased_until=NOW()+15min`), runs `FileProcessingService.processFile` synchronously, mirrors the asset's resulting `ProcessingStatus` onto the job row, marking `DONE` / `FAILED` (→ `DEAD_LETTER` after max attempts).
+- [x] `JobEnqueueService.enqueue(assetId)` called by `FileStorageService.storeFile` *inside the same TX as the metadata insert* → atomic.
+- [x] `FileProcessingService.processFile`: synchronous core; `processFileAsync` thin `@Async` wrapper kept only for the legacy flag-off path.
+- [x] `UploadBackpressureFilter`: switched to a **cached gauge** (`JobQueueDepthService`) of `(QUEUED + PROCESSING)` jobs, refreshed every 1 s via `@Scheduled`. Threshold stays at 200. Falls back to executor-queue check when the dispatcher is disabled.
+- [x] Config: `jobs.poll.interval-ms`, `jobs.lease.seconds`, `jobs.max-attempts`, `jobs.backpressure.queue-depth-threshold`, `jobs.backpressure.refresh-ms`.
+- [x] Feature flag `jobs.dispatcher.enabled` so we can fall back to old `@Async` for one release.
+- [x] D15 admin surface: `GET /api/admin/dead-letter` (re-enqueue UI deferred per the decision).
+- [~] Pre-deploy: `ProcessingJobLeaseTest` (Testcontainers, MariaDB 11.8) covers SKIP LOCKED non-duplication, expired-lease recovery, active-lease respect, V31 backfill. Gated by `-Drun.testcontainers=true` because the local Docker Desktop install returns stub responses to docker-java; IT runs cleanly on a daemon without that filter (CI / fresh Docker).
 
 ### Testing
 - [ ] Testcontainers-MariaDB integration: two competing threads acquire from the same row → exactly one wins.
@@ -153,13 +155,13 @@ vips handles unusual color profiles slightly differently. Flag-gated rollback.
 
 ## Gap 7 — Prometheus queue-depth gauge (Phase 2)
 
-- [ ] New `MetricsConfig` registers a Micrometer `MultiGauge` for `photoupload_jobs_queued{status=...}`.
-- [ ] `ProcessingJobRepository.countByStatus` cached for 1 s via Caffeine.
-- [ ] Add `prometheus` to actuator exposure; pull in `micrometer-registry-prometheus`.
-- [ ] Helm: Prometheus annotations on the API Service.
-- [ ] Alert rules:
-  - `jobs_queued{status="QUEUED"} > 200 for 5m` → warn.
-  - `jobs_queued{status="DEAD_LETTER"} > 0` → page (potential data loss).
+- [x] `JobMetricsConfig` registers one Micrometer `Gauge` per `JobStatus` value, all sharing the metric name `photoupload.jobs.queued` with a `status` tag (renders as `photoupload_jobs_queued{status=...}` in Prometheus).
+- [x] One scheduled `GROUP BY status` query refreshes a `volatile EnumMap` snapshot in `JobQueueDepthService`. Both the gauge suppliers and the backpressure filter read from that snapshot — no per-scrape DB cost, no Caffeine needed.
+- [x] `prometheus` added to actuator exposure; `micrometer-registry-prometheus` on the classpath.
+- [x] Helm: `PodMonitor` (`podmonitor-backend.yaml`) targeting the management port (8081) so prometheus-operator scrapes `/actuator/prometheus`. Gated by `monitoring.jobsMetrics.enabled`.
+- [x] Helm: `prometheusrule-jobs.yaml` with two alerts, gated by `monitoring.jobsAlert.enabled`:
+  - `photoupload_jobs_queued{status="QUEUED"} > 200 for 5m` → warning.
+  - `photoupload_jobs_queued{status="DEAD_LETTER"} > 0 for 1m` → critical (potential data loss).
 
 ### Risk
 Management port (8081) is already internal-only; no exposure concern.

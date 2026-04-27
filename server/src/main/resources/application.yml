@@ -69,6 +69,17 @@ file:
     processing-queue-capacity: "${FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY:50}"
     duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:true}"
     thumbnailer: "${FILE_UPLOAD_THUMBNAILER:vips}"
+jobs:
+  dispatcher:
+    enabled: "${JOBS_DISPATCHER_ENABLED:true}"
+  poll:
+    interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"
+  lease:
+    seconds: "${JOBS_LEASE_SECONDS:900}"
+  max-attempts: "${JOBS_MAX_ATTEMPTS:3}"
+  backpressure:
+    queue-depth-threshold: "${JOBS_BACKPRESSURE_QUEUE_DEPTH_THRESHOLD:200}"
+    refresh-ms: "${JOBS_BACKPRESSURE_REFRESH_MS:1000}"
 logging:
   level:
     ROOT: "info"
@@ -93,7 +104,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: "health,info,metrics"
+        include: "health,info,metrics,prometheus"
   endpoint:
     health:
       show-details: "always"

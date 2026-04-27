@@ -4,6 +4,7 @@ package com.oglimmer.photoupload.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.mapper.FileInfoMapper;
 import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
@@ -36,6 +37,8 @@ class FileStorageServicePathTest {
     UserContext userContext = Mockito.mock(UserContext.class);
     PlatformTransactionManager txManager = Mockito.mock(PlatformTransactionManager.class);
     FileProcessingService fileProcessingService = Mockito.mock(FileProcessingService.class);
+    JobEnqueueService jobEnqueueService = Mockito.mock(JobEnqueueService.class);
+    JobsProperties jobsProperties = new JobsProperties();
 
     FileStorageService svc =
         new FileStorageService(
@@ -50,7 +53,9 @@ class FileStorageServicePathTest {
             fileInfoMapper,
             userContext,
             txManager,
-            fileProcessingService);
+            fileProcessingService,
+            jobEnqueueService,
+            jobsProperties);
 
     // Not required for this specific test, but safe to ensure directory exists
     svc.init();

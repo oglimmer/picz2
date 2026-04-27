@@ -153,8 +153,8 @@ affinity: {}
 imagePullSecrets:
   - name: oglimmerregistrykey
 
-# Prometheus monitoring rules. Requires the prometheus-operator CRDs (PrometheusRule)
-# to be installed in the cluster — set storageAlert.enabled=false to skip if they aren't.
+# Prometheus monitoring rules. Requires the prometheus-operator CRDs (PrometheusRule
+# and PodMonitor) to be installed in the cluster — disable individual sections to skip.
 monitoring:
   storageAlert:
     enabled: true
@@ -164,4 +164,17 @@ monitoring:
     for: 10m
     # Extra labels to merge onto the PrometheusRule (e.g. release: kube-prometheus-stack)
     # so the in-cluster Prometheus picks the rule up.
+    additionalLabels: {}
+  # Scrapes /actuator/prometheus on the backend management port (8081). Disable if no
+  # prometheus-operator is installed; the app keeps publishing metrics regardless.
+  jobsMetrics:
+    enabled: true
+    interval: 30s
+    additionalLabels: {}
+  jobsAlert:
+    enabled: true
+    # Same default as `jobs.backpressure.queue-depth-threshold` so the alert fires when uploads
+    # are about to start bouncing with 503.
+    queuedThreshold: 200
+    queuedFor: 5m
     additionalLabels: {}

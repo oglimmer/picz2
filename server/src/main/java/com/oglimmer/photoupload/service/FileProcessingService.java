@@ -32,7 +32,15 @@ public class FileProcessingService {
   private final ThumbnailService thumbnailService;
   private final PlatformTransactionManager transactionManager;
 
+  /**
+   * Legacy async entry point used when {@code jobs.dispatcher.enabled=false}. Delegates to the
+   * synchronous {@link #processFile(Long)} on the file-processing executor.
+   */
   @Async(AsyncConfig.FILE_PROCESSING_EXECUTOR)
+  public void processFileAsync(Long fileMetadataId) {
+    processFile(fileMetadataId);
+  }
+
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
     FileMetadata metadata =
