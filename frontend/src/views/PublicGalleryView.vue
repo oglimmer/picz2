@@ -76,7 +76,11 @@
       v-else-if="files.length === 0"
       class="empty-state"
     >
-      <h2>No photos in this album</h2>
+      <div class="empty-inner">
+        <p class="empty-title">
+          No photos in this album
+        </p>
+      </div>
     </div>
 
     <!-- Empty state when no filter selected (only show if multiple tags available) -->
@@ -84,8 +88,14 @@
       v-else-if="!selectedTag && tagsUsedInAlbum.length > 1"
       class="empty-state"
     >
-      <h2>Please select a tag filter</h2>
-      <p>Choose a tag from the dropdown above to view photos</p>
+      <div class="empty-inner">
+        <p class="empty-title">
+          Please select a tag filter
+        </p>
+        <p class="empty-hint">
+          Choose a tag from the dropdown above to view photos
+        </p>
+      </div>
     </div>
 
     <!-- Gallery -->

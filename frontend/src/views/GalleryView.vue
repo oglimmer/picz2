@@ -610,8 +610,14 @@
       v-else-if="files.length === 0"
       class="empty-state"
     >
-      <h2>No photos in this album</h2>
-      <p>Upload photos using the macOS Share Extension</p>
+      <div class="empty-inner">
+        <p class="empty-title">
+          No photos in this album
+        </p>
+        <p class="empty-hint">
+          Upload photos using the macOS Share Extension
+        </p>
+      </div>
     </div>
 
     <!-- Empty state when presentation mode and no filter selected -->
@@ -619,8 +625,14 @@
       v-else-if="presentationMode && !selectedTag && tagsUsedInAlbum.length > 0"
       class="empty-state"
     >
-      <h2>Please select a tag filter</h2>
-      <p>Choose a tag from the dropdown above to view photos</p>
+      <div class="empty-inner">
+        <p class="empty-title">
+          Please select a tag filter
+        </p>
+        <p class="empty-hint">
+          Choose a tag from the dropdown above to view photos
+        </p>
+      </div>
     </div>
 
     <!-- Empty state when duplicate filter is active but no duplicates found -->
@@ -628,8 +640,14 @@
       v-else-if="duplicateFilterActive && displayedFiles.length === 0"
       class="empty-state"
     >
-      <h2>No duplicate filenames found</h2>
-      <p>All files in this album have unique names.</p>
+      <div class="empty-inner">
+        <p class="empty-title">
+          No duplicate filenames found
+        </p>
+        <p class="empty-hint">
+          All files in this album have unique names.
+        </p>
+      </div>
     </div>
 
     <!-- Gallery -->
