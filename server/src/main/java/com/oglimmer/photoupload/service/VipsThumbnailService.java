@@ -30,7 +30,13 @@ public class VipsThumbnailService {
   public Path[] generateAllThumbnails(Path originalFile, Path baseOutputPath) {
     Path[] result = new Path[3];
     Path parentDir = baseOutputPath.getParent();
-    String baseName = baseOutputPath.getFileName().toString();
+    // vipsthumbnail picks the saver from the destination extension. We always emit JPEG, so force
+    // .jpg here — otherwise a .png (or .gif/.webp) source would route to pngsave/gifsave/webpsave,
+    // which reject the [Q=N,optimize_coding,strip] save options below.
+    String rawName = baseOutputPath.getFileName().toString();
+    int dot = rawName.lastIndexOf('.');
+    String stem = dot > 0 ? rawName.substring(0, dot) : rawName;
+    String baseName = stem + ".jpg";
     parentDir.toFile().mkdirs();
 
     Path thumb = parentDir.resolve("thumb_" + baseName);

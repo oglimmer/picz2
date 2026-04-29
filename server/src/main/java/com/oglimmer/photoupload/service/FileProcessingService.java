@@ -155,6 +155,12 @@ public class FileProcessingService {
       // 2) Thumbnails (images)
       if (thumbnailService.isImageFile(mimeType)) {
         Path[] thumbnails = thumbnailService.generateAllThumbnails(currentFile, currentFile);
+        if (thumbnails[0] == null && thumbnails[1] == null && thumbnails[2] == null) {
+          // All sizes failed — bail out so we don't mark the asset DONE with no derivatives.
+          // The catch block below routes this through markFailed.
+          throw new StorageException(
+              "Thumbnail generation produced no output for " + originalName);
+        }
         if (thumbnails[0] != null) {
           metadata.setThumbnailPath(
               storeDerivative(
