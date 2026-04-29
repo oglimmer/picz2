@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-29 (Phase 4e R1+R2 landed: worker pod drains processing_jobs on its own profile, backend slimmed to api-only with dispatcher off, three additional services profile-gated during R2 pre-flight, Helm `| default true` boolean-falsy bug patched. R3 cleanup deferred until 24 h soak.)
+Last reviewed: 2026-04-29 (Phase 4e R1+R2 landed: worker pod drains processing_jobs on its own profile; backend slimmed to api-only; three additional services profile-gated during R2 pre-flight; Helm `| default true` boolean-falsy bug patched. R2 design correction: api-pod `jobsDispatcherEnabled` must be **true** so uploads enqueue properly — earlier plan claim of `false` did not match `FileStorageService` code paths; one stranded asset re-enqueued. R3 cleanup deferred until 24 h soak.)
 
 ---
 
@@ -275,11 +275,15 @@ Fail-fast contract: 503 within ~50 ms, never hang Tomcat threads. Resilience4j (
 
 **R1 — manifests only.** [x] **Landed 2026-04-29 ~18:00 (Helm rev 19).** `worker.enabled: true`, `worker.replicas: 0`, `backend.sprintProfilesActive: ""` (falls through to `application.yml` default `api,worker`). Manifest validation only; behaviour identical to pre-split.
 
-**R2 — worker takes processing.** [x] **Landed 2026-04-29 ~20:43 (Helm rev 20, image `picz2-be:1.0.33`).** `worker.replicas: 1`, `backend.sprintProfilesActive: "api"` (drops `worker`), `backend.jobsDispatcherEnabled: false` → api pod enqueues but never drains. `worker.sprintProfilesActive: "worker"`, `worker.jobsDispatcherEnabled: true`. Backend slimmed: `limits.memory 3Gi → 1Gi`, `requests.memory 1536Mi → 768Mi`, `-Xmx1024m → 512m`, `-Xms512m → 256m`. `SELECT … FOR UPDATE SKIP LOCKED` makes any rolling-update overlap safe. Soak 24 h before R3. Subtle invariant: `dispatcher.enabled` controls the **enqueue contract** (insert as `QUEUED` vs `INGESTED`), not the drain — drain is profile-gated separately.
+**R2 — worker takes processing.** [x] **Landed 2026-04-29 ~20:43 (Helm rev 20, image `picz2-be:1.0.33`); rev 21 corrected `jobsDispatcherEnabled` after first upload failed.** `worker.replicas: 1`, `backend.sprintProfilesActive: "api"` (drops `worker`), **`backend.jobsDispatcherEnabled: true`** (see correction below). `worker.sprintProfilesActive: "worker"`, `worker.jobsDispatcherEnabled: true`. Backend slimmed: `limits.memory 3Gi → 1Gi`, `requests.memory 1536Mi → 768Mi`, `-Xmx1024m → 512m`, `-Xms512m → 256m`. `SELECT … FOR UPDATE SKIP LOCKED` makes any rolling-update overlap safe. Soak 24 h before R3.
+
+  **Earlier-plan correction.** This document originally said R2 sets `backend.jobsDispatcherEnabled: false` "→ api pod enqueues but never drains" with a "subtle invariant" that the property only controls the enqueue contract. **That was wrong.** The actual code in `FileStorageService.storeFile` reads:
+  - `dispatcherEnabled=true` → row inserted as `QUEUED` + `processing_jobs` row written via `JobEnqueueService`. No legacy call.
+  - `dispatcherEnabled=false` → row inserted as `INGESTED` + **no `processing_jobs` row** + falls through to `legacy.processFileAsync(...)`. Requires `FileProcessingService` (worker-only). On the api pod that bean is absent → `IllegalStateException`. The first upload after R2 hit exactly this and stranded asset id 4992 as `INGESTED` with no job. R2 was corrected by setting the api pod's flag to `true`; drain remains worker-only because `JobDispatcher` is `@Profile(WORKER)` regardless of the property. Asset 4992 was manually re-enqueued (job 7) and processed cleanly.
 
   **R2 pre-flight findings** (caught by local boot smoke when Testcontainers couldn't run on Docker Desktop):
   - `AlbumService`, `UserService`, `AlbumSubscriptionService` were listed as "shared" in Phase 4a but each transitively depended on an api-only bean (`FileStorageService` / `EmailService`). Worker boot crashed `UnsatisfiedDependencyException`. Fixed by adding `@Profile(API)` (committed 24d5e43). Phase 4a list updated above.
-  - Helm template bug: `value: {{ .Values.backend.jobsDispatcherEnabled | default true | quote }}` rendered `false` as `"true"` because Go-template `default` treats boolean `false` as falsy. Same bug in worker template. Patched both — `default` removed; `values.yaml` is the source of truth.
+  - Helm template bug: `value: {{ .Values.backend.jobsDispatcherEnabled | default true | quote }}` rendered `false` as `"true"` because Go-template `default` treats boolean `false` as falsy. Same bug in worker template. Patched both — `default` removed; `values.yaml` is the source of truth. (Fixing this template bug is what unmasked the dispatcher-flag bug above — pre-fix, the api pod was always reading `true` regardless of values.)
 
 **R3 — cleanup.** Delete `processFileAsync` + executor-fallback branch from `FileStorageService`. Remove `AsyncConfig.fileProcessingExecutor` (now unused). Drop `INGESTED` legacy from the `ProcessingStatus` enum (DB column kept). Drop the `Optional<ThumbnailService>` shim from `FileStorageService` entirely; admin/rotate methods removed (per **D17**) and filed as Phase 4.5 follow-up. Drop `MimeTypePredicates` / `LocalFileCleanupService` forwarders from `ThumbnailService`. Drop the `Optional<FileStorageService>` / `Optional<ThumbnailService>` shims from `AlbumService` (the dead video-date backfill loop becomes a Phase 4.5 worker-job follow-up).
 
@@ -292,7 +296,7 @@ Fail-fast contract: 503 within ~50 ms, never hang Tomcat threads. Resilience4j (
 
 ### Risk / rollback
 
-R2 rollback: `backend.sprintProfilesActive=api,worker`, `backend.jobsDispatcherEnabled=true`, `worker.replicas=0`. Coexistence is safe at every step because of `SKIP LOCKED`. Per-pod `emptyDir` for processing scratch is the same restart-loses-in-flight property the PVC had post-Gap 8 — no new exposure.
+R2 rollback: `backend.sprintProfilesActive=""` (empty → application.yml default `api,worker`), `backend.jobsDispatcherEnabled=true` (was already true post-fix), `worker.replicas=0`. Coexistence is safe at every step because of `SKIP LOCKED`. Per-pod `emptyDir` for processing scratch is the same restart-loses-in-flight property the PVC had post-Gap 8 — no new exposure.
 
 ### Follow-ups (not blocking the split)
 

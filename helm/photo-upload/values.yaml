@@ -42,11 +42,16 @@ backend:
   # receive HTTP 503 with Retry-After so clients back off instead of stalling the pod.
   processingQueueCapacity: 50
 
-  # Phase 4 deployment-split knobs. R2: api pod runs api profile only, dispatcher off — backend
-  # still enqueues processing_jobs rows on upload but never drains them. Worker pod (replicas: 1
-  # below) takes over draining. R1 had both blank for a no-op manifest validation; we're past R1.
+  # Phase 4 deployment-split knobs. R2: api pod runs api profile only; the worker pod (replicas: 1
+  # below) drains processing_jobs. jobsDispatcherEnabled stays TRUE on the api pod because the
+  # property gates the **enqueue contract** in FileStorageService.storeFile (insert as QUEUED +
+  # write a processing_jobs row vs. legacy INGESTED + @Async). The drain side is profile-gated:
+  # JobDispatcher is @Profile(WORKER) and simply isn't loaded on the api pod regardless of this
+  # flag. Setting this to false on the api pod made uploads fail because there is no
+  # FileProcessingService bean to fall back to (worker-only). R1 had both blank for a no-op
+  # manifest validation; we're past R1.
   sprintProfilesActive: "api"
-  jobsDispatcherEnabled: false
+  jobsDispatcherEnabled: true
 
   # Persistent volume for uploads.
   #
