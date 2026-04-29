@@ -622,7 +622,7 @@
     >
       <GalleryItem
         v-for="(file, index) in displayedFiles"
-        :key="file.id"
+        :key="`${file.id}:${file.publicToken}`"
         :file="file"
         :available-tags="enabledAlbumTags"
         :is-draggable="!presentationMode && isLoggedIn && !duplicateFilterActive && !reorderModeActive"
@@ -1280,6 +1280,37 @@ export default {
 
         if (!response.ok) {
           throw new Error('Failed to rotate image')
+        }
+
+        // Mirror the api-side state flip locally so GalleryItem's thumbnailReady computed flips
+        // to false and the "Processing…" spinner replaces the thumbnail while the worker rotates.
+        // The poll loop below keeps it in sync (QUEUED → PROCESSING → DONE).
+        const target = files.value.find(f => f.id === fileId)
+        if (target) {
+          target.processingStatus = 'QUEUED'
+        }
+
+        // Rotate is async since Phase 4.5: api returns 202 after enqueuing a worker job. Poll
+        // /api/assets/{id}/status until DONE before reloading, otherwise the gallery would show
+        // stale derivatives. Cap the wait so a stuck worker surfaces as a user-visible error
+        // instead of an infinite spinner.
+        const pollDeadline = Date.now() + 60_000
+        while (Date.now() < pollDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          const statusRes = await fetchWithAuth(`${apiUrl}/api/assets/${fileId}/status`)
+          if (!statusRes.ok) {
+            throw new Error('Failed to read rotation status')
+          }
+          const status = await statusRes.json()
+          if (target && status.processingStatus) {
+            target.processingStatus = status.processingStatus
+          }
+          if (status.processingStatus === 'DONE') {
+            break
+          }
+          if (status.processingStatus === 'FAILED' || status.processingStatus === 'DEAD_LETTER') {
+            throw new Error(status.error || 'Rotation failed on the worker')
+          }
         }
 
         // Reload files to show the rotated image

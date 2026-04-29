@@ -4,6 +4,7 @@ package com.oglimmer.photoupload.service;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
+import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingJob;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
@@ -74,18 +75,25 @@ public class JobDispatcher {
     if (job == null) {
       return;
     }
+    JobType jobType = job.getJobType() != null ? job.getJobType() : JobType.PROCESS;
     log.info(
-        "Leased job {} (asset {}, attempt {}/{})",
+        "Leased {} job {} (asset {}, attempt {}/{})",
+        jobType,
         job.getId(),
         job.getAssetId(),
         job.getAttempts(),
         job.getMaxAttempts());
 
     try {
-      fileProcessingService.processFile(job.getAssetId());
+      switch (jobType) {
+        case PROCESS -> fileProcessingService.processFile(job.getAssetId());
+        case ROTATE_LEFT -> fileProcessingService.rotateAndReprocess(job.getAssetId());
+      }
     } catch (Exception e) {
-      // processFile catches its own exceptions today, but treat any leak defensively.
-      log.error("processFile threw for asset {}: {}", job.getAssetId(), e.getMessage(), e);
+      // The service-layer methods catch their own exceptions today, but treat any leak
+      // defensively so the lease is released cleanly.
+      log.error(
+          "{} threw for asset {}: {}", jobType, job.getAssetId(), e.getMessage(), e);
       jobLeaseService.markFailedOrDeadLetter(job.getId(), e.toString());
       return;
     }

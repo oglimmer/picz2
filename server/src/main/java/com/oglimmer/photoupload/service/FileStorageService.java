@@ -9,6 +9,7 @@ import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
@@ -1170,119 +1171,53 @@ public class FileStorageService {
   }
 
   /**
-   * Rotate an image 90 degrees counterclockwise (to the left). This physically rotates the image
-   * file and regenerates all thumbnails.
+   * Enqueue a rotate-90-CCW job for the given asset (Phase 4.5, D17). The actual ImageMagick work
+   * runs on the worker pod via {@link FileProcessingService#rotateAndReprocess(Long)} — the api
+   * pod no longer has the thumbnailer beans. Returns immediately so the controller can answer
+   * 202 Accepted; the UI polls {@code GET /api/assets/{id}/status} until DONE.
    *
-   * @param fileId The ID of the file to rotate
+   * <p>Same-TX guarantee: the {@code FileMetadata} status flip and the {@code processing_jobs} row
+   * insert commit together, so the dispatcher never sees a queued job for an asset whose row
+   * still says DONE (which would race the gallery's read-after-rotate).
    */
   public void rotateImageLeft(Long fileId) {
-    ThumbnailService thumb = requireThumbnailer();
-    log.info("========================================");
-    log.info("📸 Rotation request received for file ID: {}", fileId);
-
     User currentUser = userContext.getCurrentUser();
-    log.info("   User: {}", currentUser.getEmail());
 
     FileMetadata metadata =
         metadataRepository
             .findByIdAndUserId(fileId, currentUser.getId())
             .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
 
-    log.info("   File: {} ({})", metadata.getOriginalName(), metadata.getMimeType());
-    log.info(
-        "   Current rotation: {}°", metadata.getRotation() != null ? metadata.getRotation() : 0);
-
-    // Verify this is an image file
     if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
-      log.error("❌ Cannot rotate: not an image file");
       throw new ValidationException("Only image files can be rotated");
     }
-
-    // Get the file path
-    Path originalFile = toAbsolutePath(metadata.getFilePath());
-    log.info("   Original file path: {}", originalFile);
-    log.info("   File exists: {}", originalFile.toFile().exists());
-
-    if (!originalFile.toFile().exists()) {
-      log.error("❌ Image file not found on disk: {}", originalFile);
-      throw new ResourceNotFoundException("Image file not found on disk");
+    // Rotation needs the worker to download the original from S3, rotate it, and PUT it back.
+    // Pre-S3 rows (Gap 2a migration was completed) never reach this branch in practice, but
+    // reject loudly rather than silently succeeding without rotating bytes.
+    if (!StoragePaths.isS3Key(metadata.getFilePath())) {
+      throw new ValidationException(
+          "This asset is on legacy local storage. Migrate to object storage before rotating.");
     }
 
-    try {
-      // Rotate the original image file (disk I/O, no transaction needed)
-      log.info("   Starting image rotation...");
-      boolean rotateSuccess = thumb.rotateImageLeft(originalFile);
-      if (!rotateSuccess) {
-        log.error("❌ ThumbnailService.rotateImageLeft returned false");
-        throw new StorageException("Failed to rotate image file");
-      }
-      log.info("   ✅ Image file rotated successfully");
+    log.info(
+        "📸 Enqueuing rotate-left for asset {} ({}, current rotation {}°) by user {}",
+        fileId,
+        metadata.getOriginalName(),
+        metadata.getRotation() != null ? metadata.getRotation() : 0,
+        currentUser.getEmail());
 
-      // Delete existing thumbnails (disk I/O, no transaction needed)
-      log.info("   Deleting old thumbnails...");
-      localFileCleanupService.deleteThumbnails(
-          toAbsolutePath(metadata.getThumbnailPath()),
-          toAbsolutePath(metadata.getMediumPath()),
-          toAbsolutePath(metadata.getLargePath()));
-
-      // Regenerate all thumbnails with the rotated image (CPU/disk intensive, no transaction
-      // needed)
-      log.info("   Regenerating thumbnails...");
-      Path[] thumbnails = thumb.generateAllThumbnails(originalFile, originalFile);
-
-      // Update thumbnail paths
-      if (thumbnails[0] != null) {
-        metadata.setThumbnailPath(toRelativePath(thumbnails[0]));
-        log.info("   ✅ Generated thumbnail");
-      }
-      if (thumbnails[1] != null) {
-        metadata.setMediumPath(toRelativePath(thumbnails[1]));
-        log.info("   ✅ Generated medium");
-      }
-      if (thumbnails[2] != null) {
-        metadata.setLargePath(toRelativePath(thumbnails[2]));
-        log.info("   ✅ Generated large");
-      }
-
-      // Update rotation metadata (increment by 90 degrees, wrapping at 360)
-      int currentRotation = metadata.getRotation() != null ? metadata.getRotation() : 0;
-      int newRotation = (currentRotation + 90) % 360;
-      metadata.setRotation(newRotation);
-      log.info("   Updated rotation: {}° -> {}°", currentRotation, newRotation);
-
-      // Swap width and height since we rotated 90 degrees
-      if (metadata.getWidth() != null && metadata.getHeight() != null) {
-        Integer temp = metadata.getWidth();
-        metadata.setWidth(metadata.getHeight());
-        metadata.setHeight(temp);
-        log.info("   Swapped dimensions: {}x{}", metadata.getWidth(), metadata.getHeight());
-      }
-
-      // Regenerate public token to bust browser cache
-      String oldToken = metadata.getPublicToken();
-      byte[] bytes = new byte[24]; // 48 hex chars
-      new java.security.SecureRandom().nextBytes(bytes);
-      String newToken = java.util.HexFormat.of().formatHex(bytes);
-      metadata.setPublicToken(newToken);
-      log.info(
-          "   Updated public token to bust cache: {} -> {}",
-          oldToken != null ? oldToken.substring(0, 8) + "..." : "null",
-          newToken.substring(0, 8) + "...");
-
-      // Save updated metadata in a short transaction (only DB operation)
-      log.info("   Saving metadata to database...");
-      transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
-
-      log.info(
-          "✅ Successfully rotated image {} by 90° left (total rotation: {}°)",
-          metadata.getOriginalName(),
-          newRotation);
-      log.info("========================================");
-
-    } catch (Exception e) {
-      log.error("❌ Error rotating image {}: {}", metadata.getOriginalName(), e.getMessage(), e);
-      log.error("========================================");
-      throw new StorageException("Failed to rotate image: " + e.getMessage(), e);
-    }
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          FileMetadata locked =
+              metadataRepository
+                  .findById(fileId)
+                  .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+          locked.setProcessingStatus(ProcessingStatus.QUEUED);
+          locked.setProcessingAttempts(0);
+          locked.setProcessingError(null);
+          locked.setProcessingCompletedAt(null);
+          metadataRepository.save(locked);
+          jobEnqueueService.enqueue(fileId, JobType.ROTATE_LEFT);
+        });
   }
 }

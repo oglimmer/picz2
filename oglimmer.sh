@@ -14,6 +14,7 @@ DEFAULT_FRONTEND_IMAGE="picz2-fe"
 DEFAULT_BACKEND_IMAGE="picz2-be"
 DEFAULT_FRONTEND_DEPLOYMENT="photo-upload-frontend"
 DEFAULT_BACKEND_DEPLOYMENT="photo-upload-backend"
+DEFAULT_WORKER_DEPLOYMENT="photo-upload-worker"
 
 # Configuration variables (can be overridden by parameters)
 REGISTRIES=("${DEFAULT_REGISTRIES[@]}")
@@ -21,6 +22,7 @@ FRONTEND_IMAGES=()
 BACKEND_IMAGES=()
 FRONTEND_DEPLOYMENT="$DEFAULT_FRONTEND_DEPLOYMENT"
 BACKEND_DEPLOYMENT="$DEFAULT_BACKEND_DEPLOYMENT"
+WORKER_DEPLOYMENT="$DEFAULT_WORKER_DEPLOYMENT"
 
 # Directories
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
@@ -107,6 +109,7 @@ BUILD OPTIONS:
     --registries "R1,R2"        Comma-separated list of registries (default: ${DEFAULT_REGISTRIES[0]})
     --frontend-deploy NAME      Frontend deployment name (default: $DEFAULT_FRONTEND_DEPLOYMENT)
     --backend-deploy NAME       Backend deployment name (default: $DEFAULT_BACKEND_DEPLOYMENT)
+    --worker-deploy NAME        Worker deployment name (default: $DEFAULT_WORKER_DEPLOYMENT)
     --platform PLATFORM         Target platform: amd64 | arm64 | multi | auto (default: auto)
 
     -h, --help              Show this help message
@@ -129,7 +132,7 @@ EXAMPLES:
     ${SCRIPT_NAME} show                             # Show current version
 
 ENVIRONMENT VARIABLES:
-    FRONTEND_DEPLOYMENT / BACKEND_DEPLOYMENT    Override deployment names
+    FRONTEND_DEPLOYMENT / BACKEND_DEPLOYMENT / WORKER_DEPLOYMENT    Override deployment names
     PLATFORM                                    amd64 | arm64 | multi | auto
     DEFAULT_REGISTRIES_ENV                      Comma-separated registries
     VERBOSE / DRY_RUN / PUSH / RESTART / NO_CACHE  true/false toggles
@@ -167,6 +170,7 @@ parse_args() {
                 ;;
             --frontend-deploy) FRONTEND_DEPLOYMENT="$2"; shift 2 ;;
             --backend-deploy)  BACKEND_DEPLOYMENT="$2";  shift 2 ;;
+            --worker-deploy)   WORKER_DEPLOYMENT="$2";   shift 2 ;;
             --platform)        PLATFORM="$2";            shift 2 ;;
             -h|--help)         HELP=true; shift ;;
             *)
@@ -421,7 +425,11 @@ execute_build() {
 
     if [[ "$RESTART" == true ]]; then
         [[ "$BUILD_FRONTEND" == true ]] && restart_deployment "$FRONTEND_DEPLOYMENT"
+        # Backend and worker share the same image (Phase 4 split, see upload-concept-plan.md).
+        # Restarting only the backend leaves the worker on its already-cached :latest, which
+        # silently runs old code against new schema/jobs. Always roll both together.
         [[ "$BUILD_BACKEND"  == true ]] && restart_deployment "$BACKEND_DEPLOYMENT"
+        [[ "$BUILD_BACKEND"  == true ]] && restart_deployment "$WORKER_DEPLOYMENT"
     fi
 
     echo

@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -156,11 +157,13 @@ public class FileController {
 
   @PostMapping("/{id}/rotate")
   public ResponseEntity<MessageResponse> rotateImage(@PathVariable Long id) {
+    // Async since Phase 4.5: enqueues a ROTATE_LEFT job for the worker pod. Clients poll
+    // GET /api/assets/{id}/status until processingStatus=DONE before refreshing the gallery.
     fileStorageService.rotateImageLeft(id);
 
     MessageResponse response =
-        MessageResponse.builder().success(true).message("Image rotated successfully").build();
+        MessageResponse.builder().success(true).message("Rotation queued").build();
 
-    return ResponseEntity.ok(response);
+    return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
   }
 }

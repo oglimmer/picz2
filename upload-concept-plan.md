@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-29 (Phase 4e R1+R2 landed: worker pod drains processing_jobs on its own profile; backend slimmed to api-only; three additional services profile-gated during R2 pre-flight; Helm `| default true` boolean-falsy bug patched. R2 design correction: api-pod `jobsDispatcherEnabled` must be **true** so uploads enqueue properly — earlier plan claim of `false` did not match `FileStorageService` code paths; one stranded asset re-enqueued. R3 cleanup deferred until 24 h soak.)
+Last reviewed: 2026-04-29 (Phase 4e R1+R2 landed: worker pod drains processing_jobs on its own profile; backend slimmed to api-only; three additional services profile-gated during R2 pre-flight; Helm `| default true` boolean-falsy bug patched. R2 design correction: api-pod `jobsDispatcherEnabled` must be **true** so uploads enqueue properly — earlier plan claim of `false` did not match `FileStorageService` code paths; one stranded asset re-enqueued. R3 cleanup deferred until 24 h soak. **Phase 4.5 partial**: rotate rewritten as a worker-side `processing_jobs` job — `processing_jobs.job_type` column added (V32, default `PROCESS`), `JobType.{PROCESS,ROTATE_LEFT}` discriminates dispatch; api endpoint returns 202 + frontend polls `/api/assets/{id}/status`. Other admin paths — `generateMissingThumbnails`, `updateTranscodedVideoPaths`, `updateVideoThumbnailPaths`, `AlbumService` video-date backfill — still 5xx on api pod, deferred.)
 
 ---
 
@@ -90,6 +90,7 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 | D20 | Controller profile-gating shape                | Class-level `@Profile("api")` on each controller; grep-able. Avoid `@ComponentScan` excludes.                                          | accepted |
 | D21 | Legacy `@Async` cleanup release                | Bundle the removal in R3 (post-soak), not R2. Keeps R2 diff focused on deploy-shape change.                                            | accepted |
 | D22 | Worker default replicas                        | 1. Each pod has `Semaphore(1)`, so scale-out gives parallelism but isn't required day-1 on the single-node Pi cluster.                | accepted |
+| D23 | Per-job-type discriminator                     | Add `processing_jobs.job_type` (V32) with `JobType.{PROCESS,ROTATE_LEFT}` so admin operations reuse the lease/retry/dead-letter machinery instead of building a parallel queue. Revisits **D4** intentionally — the "single-purpose queue" stance held while there was only one job type. | accepted |
 
 ---
 
@@ -300,7 +301,11 @@ R2 rollback: `backend.sprintProfilesActive=""` (empty → application.yml defaul
 
 ### Follow-ups (not blocking the split)
 
-- [ ] **Phase 4.5**: rewrite admin / rotate endpoints as worker-side jobs (per **D17**). Until then, api pod admin endpoints return 503 / `IllegalStateException`-mapped error.
+- [~] **Phase 4.5**: rewrite admin / rotate endpoints as worker-side jobs (per **D17**).
+  - [x] **Rotate-left**: `processing_jobs.job_type` column added (V32, **D23**); `JobType.{PROCESS,ROTATE_LEFT}` discriminates dispatch; `FileProcessingService.rotateAndReprocess` runs on worker; `FileStorageService.rotateImageLeft` (api) flips `processing_status=QUEUED` + enqueues `ROTATE_LEFT` in same TX; `FileController` returns 202; `GalleryView.vue` polls `/api/assets/{id}/status` (1 s, 60 s cap) before reloading. Note: `IllegalStateException` was never mapped to 503 in `GlobalExceptionHandler` so the broken pre-fix endpoint actually returned 500 — moot now that the path works.
+  - [ ] `generateMissingThumbnails` (admin batch regen) — still calls `requireThumbnailer()` → 500 on api. Future: enqueue one `ROTATE_LEFT`-style job per missing-thumbs asset, or a new `REGEN_THUMBNAILS` `JobType`.
+  - [ ] `updateTranscodedVideoPaths`, `updateVideoThumbnailPaths` — same shape, video-side equivalents.
+  - [ ] `AlbumService` video-date backfill — runs synchronously; needs to enqueue worker jobs or be removed (per R3 cleanup).
 - [ ] **`/actuator/prometheus` returns 401** (pre-existing, surfaced during R2 verification). API pod's `SecurityConfig` only permits `/actuator/health/**` and `/actuator/info`; worker has no `SecurityConfig` so falls to Spring Security secure-by-default. Means the `PhotoUploadJobsBacklog` / `PhotoUploadJobsDeadLetter` alerts in `NOTES.txt` would never fire because the scrape itself fails. Permit `/actuator/prometheus` (cluster-network only) on both pods, or add a worker-side `WorkerSecurityConfig` (`@Profile(WORKER)`) that allows the actuator namespace.
 
 ---

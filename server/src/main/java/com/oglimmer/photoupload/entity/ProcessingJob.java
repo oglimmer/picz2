@@ -30,6 +30,10 @@ public class ProcessingJob {
   private Long assetId;
 
   @Enumerated(EnumType.STRING)
+  @Column(name = "job_type", nullable = false, length = 32)
+  private JobType jobType = JobType.PROCESS;
+
+  @Enumerated(EnumType.STRING)
   @Column(name = "status", nullable = false, length = 32)
   private JobStatus status = JobStatus.QUEUED;
 

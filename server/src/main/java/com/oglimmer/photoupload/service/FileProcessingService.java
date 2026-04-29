@@ -9,15 +9,18 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.exception.StorageException;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HexFormat;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -238,6 +241,143 @@ public class FileProcessingService {
       markFailed(tx, fileMetadataId, e);
     } catch (Exception e) {
       log.error("Unexpected error processing file {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } finally {
+      if (workdir != null) {
+        deleteRecursive(workdir);
+      }
+    }
+  }
+
+  /**
+   * Worker-side rotate (Phase 4.5, D17). Mirrors {@link #processFile(Long)}: lease the asset into
+   * PROCESSING, do all heavy work locally on the worker pod, then commit the result in one short
+   * TX. Bytes flow: download original from S3 → ImageMagick rotate-90-CCW → PUT same key →
+   * regenerate all derivatives → PUT derivative keys (overwrite). Metadata flips: {@code rotation}
+   * += 90 mod 360, swap {@code width}/{@code height}, regen {@code publicToken} (so the gallery
+   * URL changes and the browser cache misses), update {@code fileSize}.
+   *
+   * <p>Pre-conditions enforced by the api pod before enqueue: image MIME type and S3-backed
+   * {@code filePath}. We re-check defensively here so a stale or hand-crafted job row fails with a
+   * clear error instead of corrupting state.
+   */
+  public void rotateAndReprocess(Long fileMetadataId) {
+    TransactionTemplate tx = new TransactionTemplate(transactionManager);
+    FileMetadata metadata =
+        tx.execute(
+            status -> {
+              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+              if (found == null) {
+                return null;
+              }
+              found.setProcessingStatus(ProcessingStatus.PROCESSING);
+              found.setProcessingAttempts(
+                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+              found.setProcessingError(null);
+              return metadataRepository.save(found);
+            });
+    if (metadata == null) {
+      log.warn("rotateAndReprocess: metadata id {} not found (deleted?)", fileMetadataId);
+      return;
+    }
+
+    String originalName = metadata.getOriginalName();
+    String mimeType = metadata.getMimeType();
+    Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+
+    if (!thumbnailService.isImageFile(mimeType)) {
+      // Should never happen — api side validates. Treat as a permanent failure.
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException("Cannot rotate non-image asset (mime=" + mimeType + ")"));
+      return;
+    }
+    if (objectStorage.isEmpty() || !StoragePaths.isS3Key(metadata.getFilePath())) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException("Rotate requires the asset to be on object storage"));
+      return;
+    }
+
+    Path workdir = null;
+    try {
+      workdir =
+          Files.createDirectories(
+              fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+      Path localOriginal = workdir.resolve(metadata.getStoredFilename());
+      objectStorage.get().getToFile(metadata.getFilePath(), localOriginal);
+
+      log.info("🔄 Rotating asset {} ({}) 90° left", fileMetadataId, originalName);
+      boolean rotated = thumbnailService.rotateImageLeft(localOriginal);
+      if (!rotated) {
+        throw new StorageException("ImageMagick rotate failed for " + originalName);
+      }
+
+      // Push the rotated bytes back over the existing key. Same content type — we already
+      // know it's an image at this point.
+      objectStorage.get().putFile(metadata.getFilePath(), localOriginal, mimeType);
+      try {
+        metadata.setFileSize(Files.size(localOriginal));
+      } catch (IOException sizeError) {
+        log.warn(
+            "Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
+      }
+
+      // Regenerate thumbnails from the rotated original. Derivative keys are deterministic per
+      // assetId, so the PUT overwrites the old derivative bytes — no separate delete needed.
+      Path[] thumbnails = thumbnailService.generateAllThumbnails(localOriginal, localOriginal);
+      if (thumbnails[0] != null) {
+        metadata.setThumbnailPath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[0],
+                StoragePaths.derivativeThumbnailKey(fileMetadataId),
+                "image/jpeg"));
+      }
+      if (thumbnails[1] != null) {
+        metadata.setMediumPath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[1],
+                StoragePaths.derivativeMediumKey(fileMetadataId),
+                "image/jpeg"));
+      }
+      if (thumbnails[2] != null) {
+        metadata.setLargePath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[2],
+                StoragePaths.derivativeLargeKey(fileMetadataId),
+                "image/jpeg"));
+      }
+
+      int currentRotation = metadata.getRotation() != null ? metadata.getRotation() : 0;
+      metadata.setRotation((currentRotation + 90) % 360);
+      if (metadata.getWidth() != null && metadata.getHeight() != null) {
+        Integer oldWidth = metadata.getWidth();
+        metadata.setWidth(metadata.getHeight());
+        metadata.setHeight(oldWidth);
+      }
+
+      // Cache-bust: the gallery URL keys off publicToken, so every viewer's browser fetches the
+      // new derivative bytes after the next gallery reload instead of serving a stale image.
+      byte[] tokenBytes = new byte[24];
+      new SecureRandom().nextBytes(tokenBytes);
+      metadata.setPublicToken(HexFormat.of().formatHex(tokenBytes));
+
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
+      final FileMetadata toSave = metadata;
+      tx.executeWithoutResult(status -> metadataRepository.save(toSave));
+      log.info("✅ Rotated asset {} ({}) → {}°", fileMetadataId, originalName, toSave.getRotation());
+    } catch (IOException e) {
+      log.error("I/O error rotating file {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } catch (Exception e) {
+      log.error("Unexpected error rotating file {}", originalName, e);
       markFailed(tx, fileMetadataId, e);
     } finally {
       if (workdir != null) {
