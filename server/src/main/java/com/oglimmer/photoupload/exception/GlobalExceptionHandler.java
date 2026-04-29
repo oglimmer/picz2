@@ -70,6 +70,24 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
   }
 
+  @ExceptionHandler(MinioUnavailableException.class)
+  public ResponseEntity<ErrorResponse> handleMinioUnavailable(
+      MinioUnavailableException ex, HttpServletRequest request) {
+    // Logged at WARN, not ERROR — circuit-open is an expected, transient outage signal, not a bug.
+    log.warn("MinIO unavailable for {}: {}", request.getRequestURI(), ex.getMessage());
+
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.SERVICE_UNAVAILABLE.value(),
+            "Service Unavailable",
+            "Object storage is temporarily unreachable. Please retry shortly.",
+            request.getRequestURI());
+
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header("Retry-After", "30")
+        .body(error);
+  }
+
   @ExceptionHandler(FileProcessingException.class)
   public ResponseEntity<ErrorResponse> handleFileProcessingException(
       FileProcessingException ex, HttpServletRequest request) {

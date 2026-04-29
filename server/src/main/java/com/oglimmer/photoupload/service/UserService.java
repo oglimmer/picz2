@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ValidationException;
@@ -12,11 +13,13 @@ import java.util.Base64;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Profile(Profiles.API)
 @Slf4j
 @RequiredArgsConstructor
 public class UserService {

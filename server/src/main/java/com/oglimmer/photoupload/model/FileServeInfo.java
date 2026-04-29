@@ -31,4 +31,10 @@ public class FileServeInfo {
    * because background processing hasn't finished yet.
    */
   private boolean derivativeReady;
+
+  /**
+   * When non-null, the requested variant lives in object storage at this key, and {@link
+   * #filePath} is null. Mutually exclusive with {@code filePath} — exactly one of the two is set.
+   */
+  private String storageKey;
 }

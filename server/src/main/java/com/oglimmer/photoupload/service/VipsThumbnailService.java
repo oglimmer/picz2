@@ -1,12 +1,14 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.service.ThumbnailService.ThumbnailSize;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 /**
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Service;
  * source for the same target dimensions.
  */
 @Service
+@Profile(Profiles.WORKER)
 @Slf4j
 public class VipsThumbnailService {
 

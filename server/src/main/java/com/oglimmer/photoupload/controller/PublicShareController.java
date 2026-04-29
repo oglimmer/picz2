@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.model.AlbumInfo;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.service.AlbumService;
@@ -22,6 +25,7 @@ import org.springframework.web.bind.annotation.PathVariable;
  * redirects regular users to the Vue SPA. This approach works because bots don't execute
  * JavaScript.
  */
+@Profile(Profiles.API)
 @Controller
 @RequiredArgsConstructor
 public class PublicShareController {

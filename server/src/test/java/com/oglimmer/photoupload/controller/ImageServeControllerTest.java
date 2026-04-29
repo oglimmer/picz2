@@ -12,9 +12,10 @@ import com.oglimmer.photoupload.service.FileStorageService;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
@@ -26,7 +27,14 @@ class ImageServeControllerTest {
 
   @Mock FileStorageService fileStorageService;
 
-  @InjectMocks ImageServeController controller;
+  private ImageServeController controller;
+
+  @BeforeEach
+  void setUp() {
+    // Optional.empty() mirrors a deployment where storage.s3.enabled=false and the
+    // ObjectStorageService bean simply is not in the context.
+    controller = new ImageServeController(fileStorageService, Optional.empty());
+  }
 
   @Test
   void returnsAcceptedWhenDerivativeMissingAndProcessingNotDone() {
@@ -38,7 +46,8 @@ class ImageServeControllerTest {
             Paths.get("/nonexistent/photo.heic"),
             "photo.heic",
             ProcessingStatus.PROCESSING,
-            false);
+            false,
+            null);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb");
@@ -64,7 +73,8 @@ class ImageServeControllerTest {
             file,
             "served.jpg",
             ProcessingStatus.DONE,
-            false);
+            false,
+            null);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb");
@@ -87,7 +97,8 @@ class ImageServeControllerTest {
             file,
             "thumb.jpg",
             ProcessingStatus.DONE,
-            true);
+            true,
+            null);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb");

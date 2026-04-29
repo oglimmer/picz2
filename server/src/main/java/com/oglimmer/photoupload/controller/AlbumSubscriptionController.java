@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.model.AlbumSubscriptionRequest;
 import com.oglimmer.photoupload.model.AlbumSubscriptionResponse;
 import com.oglimmer.photoupload.service.AlbumSubscriptionService;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** REST controller for managing album subscriptions (public access) */
+@Profile(Profiles.API)
 @RestController
 @RequestMapping("/api/public/subscriptions")
 @Slf4j

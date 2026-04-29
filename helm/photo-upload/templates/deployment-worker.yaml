@@ -1,0 +1,173 @@
+{{- if .Values.worker.enabled }}
+# Worker pod: drains processing_jobs and runs the heavy pipeline. Same image as backend,
+# different SPRING_PROFILES_ACTIVE. No Service / no Ingress — the only inbound traffic is
+# Prometheus scraping the management port (8081), exposed via service-worker-metrics.yaml.
+# Replicas default to 0 in values.yaml; R1 validates manifests, R2 bumps to 1.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "photo-upload.worker.fullname" . }}
+  labels:
+    {{- include "photo-upload.worker.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas | default 0 }}
+  selector:
+    matchLabels:
+      {{- include "photo-upload.worker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "photo-upload.worker.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "photo-upload.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Values.worker.name }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        # Same image as backend. Tag falls through to backend's tag (or AppVersion) if left blank
+        # so a single release ships both pods at the same version by default.
+        image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Values.backend.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+        ports:
+        # Worker has no public HTTP listener (server.port=-1 in application-worker.yml).
+        # Only the management port is exposed — Prometheus scrapes it via the metrics Service,
+        # K8s probes hit it for liveness/readiness.
+        - name: management
+          containerPort: 8081
+          protocol: TCP
+        env:
+        - name: MARIADB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.host
+        - name: MARIADB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.port
+        - name: MARIADB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: database.name
+        - name: MARIADB_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: database.user
+        - name: MARIADB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: database.password
+        - name: JAVA_OPTS
+          value: {{ .Values.worker.javaOpts | quote }}
+        # Worker has no public HTTP API. Disable the main Tomcat connector so only the management
+        # port (8081) is up. NOTE: this MUST be an env var, not application-worker.yml: when both
+        # profiles load on the api pod (default deploy), a YAML override would kill 8080 there too.
+        - name: SERVER_PORT
+          value: "-1"
+        - name: SPRING_PROFILES_ACTIVE
+          value: {{ .Values.worker.sprintProfilesActive | default "worker" | quote }}
+        - name: JOBS_DISPATCHER_ENABLED
+          value: {{ .Values.worker.jobsDispatcherEnabled | default true | quote }}
+        - name: FILE_UPLOAD_BASE_PATH
+          value: {{ .Values.worker.workdir.mountPath | quote }}
+        - name: APP_BASE_URL
+          value: {{ .Values.backend.baseUrl | default "https://picz2.oglimmer.com" | quote }}
+        - name: FILE_UPLOAD_MAX_CONCURRENT_PROCESSING
+          value: {{ .Values.backend.maxConcurrentProcessing | default 1 | quote }}
+        - name: FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY
+          value: {{ .Values.backend.processingQueueCapacity | default 50 | quote }}
+        {{- if .Values.objectStorage.enabled }}
+        - name: STORAGE_S3_ENABLED
+          value: "true"
+        - name: STORAGE_S3_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.endpoint
+        - name: STORAGE_S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.bucket
+        - name: STORAGE_S3_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.region
+        - name: STORAGE_S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.accessKey
+        - name: STORAGE_S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.secretKey
+        {{- end }}
+        # Same probe topology as backend — actuator on the management port, full /health for
+        # startup, cheap probe groups for live/ready so a slow DB doesn't take the pod down.
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: management
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: management
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: management
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.worker.resources | nindent 10 }}
+        volumeMounts:
+        - name: workdir
+          mountPath: {{ .Values.worker.workdir.mountPath }}
+      volumes:
+      - name: workdir
+        # emptyDir only — durable bytes live in S3. The workdir holds .processing-tmp/{id}
+        # while a job runs and is wiped after each one.
+        emptyDir:
+          sizeLimit: {{ .Values.worker.workdir.sizeLimit | default "5Gi" }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

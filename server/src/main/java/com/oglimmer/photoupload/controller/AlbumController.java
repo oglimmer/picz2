@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.AlbumInfo;
@@ -36,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+@Profile(Profiles.API)
 @RestController
 @RequestMapping("/api/albums")
 @Slf4j

@@ -18,6 +18,7 @@
   <properties>
     <java.version>17</java.version>
     <testcontainers.version>1.20.4</testcontainers.version>
+    <awssdk.version>2.31.27</awssdk.version>
   </properties>
 
   <dependencyManagement>
@@ -26,6 +27,13 @@
         <groupId>org.testcontainers</groupId>
         <artifactId>testcontainers-bom</artifactId>
         <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${awssdk.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -102,6 +110,23 @@
       <artifactId>micrometer-registry-prometheus</artifactId>
     </dependency>
 
+    <!-- Resilience4j core circuit breaker. Phase 4d uses it to fail fast on MinIO outages so
+         Tomcat threads aren't pinned by 90 s SDK retries. We deliberately avoid the
+         resilience4j-spring-boot{2,3} starter (couples to specific Boot versions and adds AOP we
+         don't need); the breaker is wired explicitly inside ObjectStorageService. -->
+    <dependency>
+      <groupId>io.github.resilience4j</groupId>
+      <artifactId>resilience4j-circuitbreaker</artifactId>
+      <version>2.3.0</version>
+    </dependency>
+    <!-- Binds CircuitBreaker state/calls to the Micrometer registry, surfacing
+         `resilience4j_circuitbreaker_state{name="minio",...}` etc. on /actuator/prometheus. -->
+    <dependency>
+      <groupId>io.github.resilience4j</groupId>
+      <artifactId>resilience4j-micrometer</artifactId>
+      <version>2.3.0</version>
+    </dependency>
+
     <!-- Spring Boot Data JPA -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -163,6 +188,17 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- AWS SDK v2 — used to talk to MinIO (S3-compatible). Apache HTTP client matches the
+         existing JVM threading model (sync) better than the Netty default for our load. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>apache-client</artifactId>
     </dependency>
   </dependencies>
 

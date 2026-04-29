@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.config;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.security.CustomUserDetailsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -15,6 +18,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 
+@Profile(Profiles.API)
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor

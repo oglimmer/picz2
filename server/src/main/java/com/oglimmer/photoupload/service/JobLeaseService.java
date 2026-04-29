@@ -1,12 +1,14 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.JobStatus;
 import com.oglimmer.photoupload.entity.ProcessingJob;
 import com.oglimmer.photoupload.repository.ProcessingJobRepository;
 import java.time.Instant;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
  * long-running processing step in {@link JobDispatcher} runs outside any DB lock.
  */
 @Service
+@Profile(Profiles.WORKER)
 @RequiredArgsConstructor
 @Slf4j
 public class JobLeaseService {

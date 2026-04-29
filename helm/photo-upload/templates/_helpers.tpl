@@ -143,3 +143,32 @@ Frontend fullname
 {{- define "photo-upload.frontend.fullname" -}}
 {{- printf "%s-frontend" (include "photo-upload.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/*
+Worker fullname
+*/}}
+{{- define "photo-upload.worker.fullname" -}}
+{{- printf "%s-worker" (include "photo-upload.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Worker specific labels
+*/}}
+{{- define "photo-upload.worker.labels" -}}
+helm.sh/chart: {{ include "photo-upload.chart" . }}
+{{ include "photo-upload.worker.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/component: worker
+{{- end }}
+
+{{/*
+Worker selector labels
+*/}}
+{{- define "photo-upload.worker.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "photo-upload.name" . }}-worker
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: worker
+{{- end }}

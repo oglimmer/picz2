@@ -25,7 +25,8 @@ class ThumbnailServiceDispatchTest {
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
 
-    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
+    ThumbnailService svc =
+        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
 
     Path src = Paths.get("/tmp/x.jpg");
     Path base = Paths.get("/tmp/x.jpg");
@@ -46,7 +47,8 @@ class ThumbnailServiceDispatchTest {
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
 
-    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
+    ThumbnailService svc =
+        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
 
     // Magick path shells out to `convert`, which won't exist in CI; we only need to confirm the
     // vips service is not consulted. The shell-out itself is exercised by integration tests.
@@ -61,7 +63,8 @@ class ThumbnailServiceDispatchTest {
     VipsThumbnailService vips = mock(VipsThumbnailService.class);
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
-    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
+    ThumbnailService svc =
+        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
 
     Path a = Paths.get("/tmp/a");
     Path b = Paths.get("/tmp/b");
@@ -90,7 +93,8 @@ class ThumbnailServiceDispatchTest {
             new FileStorageProperties(),
             mock(VipsThumbnailService.class),
             mock(HeicConversionService.class),
-            mock(FfmpegService.class));
+            mock(FfmpegService.class),
+            mock(LocalFileCleanupService.class));
 
     assertThat(svc.isImageFile("image/jpeg")).isTrue();
     assertThat(svc.isImageFile("image/heic")).isFalse();

@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
@@ -11,14 +14,22 @@ import com.oglimmer.photoupload.model.RecordingResponse;
 import com.oglimmer.photoupload.model.RecordingsListResponse;
 import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.service.AnalyticsService;
+import com.oglimmer.photoupload.service.ObjectStorageService;
 import com.oglimmer.photoupload.service.SlideshowRecordingService;
 import com.oglimmer.photoupload.util.RangeRequestHandler;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.List;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,6 +41,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+@Profile(Profiles.API)
 @RestController
 @RequestMapping("/api")
 @Slf4j
@@ -38,6 +50,10 @@ public class SlideshowRecordingController {
 
   private final SlideshowRecordingService slideshowRecordingService;
   private final ObjectMapper objectMapper;
+  // Optional: present iff storage.s3.enabled=true. Used to mint short-lived presigned URLs for
+  // S3-backed recordings — the client follows the 302 directly to MinIO, which handles HTTP
+  // Range natively, so the API pod stays out of the audio data path.
+  private final Optional<ObjectStorageService> objectStorage;
   private final AnalyticsService analyticsService;
   private final SlideshowRecordingRepository slideshowRecordingRepository;
 
@@ -116,20 +132,12 @@ public class SlideshowRecordingController {
   public ResponseEntity<StreamingResponseBody> getRecordingAudio(
       @PathVariable Long id, @RequestHeader(value = "Range", required = false) String rangeHeader) {
     try {
-      // Get recording audio info
       RecordingAudioInfo audioInfo = slideshowRecordingService.getRecordingAudioInfo(id);
-
-      // Determine content type from filename extension
-      String contentType = "audio/webm";
-      if (audioInfo.getAudioFilename().endsWith(".ogg")) {
-        contentType = "audio/ogg";
-      } else if (audioInfo.getAudioFilename().endsWith(".mp3")) {
-        contentType = "audio/mpeg";
+      if (audioInfo.getStorageKey() != null) {
+        return serveAudioFromS3(audioInfo, rangeHeader);
       }
-
-      // Serve file with range request support
       return RangeRequestHandler.serveFileWithRangeSupport(
-          audioInfo.getAudioPath(), rangeHeader, contentType, audioInfo.getAudioFilename());
+          audioInfo.getAudioPath(), rangeHeader, contentTypeFor(audioInfo), audioInfo.getAudioFilename());
     } catch (Exception e) {
       log.error("Error serving recording audio", e);
       throw new RuntimeException("Error serving recording audio: " + e.getMessage(), e);
@@ -169,24 +177,71 @@ public class SlideshowRecordingController {
       @RequestHeader(value = "Range", required = false) String rangeHeader,
       HttpServletRequest request) {
     try {
-      // Get recording audio info by public token
       RecordingAudioInfo audioInfo =
           slideshowRecordingService.getRecordingAudioInfoByPublicToken(publicToken);
-
-      // Determine content type from filename extension
-      String contentType = "audio/webm";
-      if (audioInfo.getAudioFilename().endsWith(".ogg")) {
-        contentType = "audio/ogg";
-      } else if (audioInfo.getAudioFilename().endsWith(".mp3")) {
-        contentType = "audio/mpeg";
+      if (audioInfo.getStorageKey() != null) {
+        return serveAudioFromS3(audioInfo, rangeHeader);
       }
-
-      // Serve file with range request support
       return RangeRequestHandler.serveFileWithRangeSupport(
-          audioInfo.getAudioPath(), rangeHeader, contentType, audioInfo.getAudioFilename());
+          audioInfo.getAudioPath(), rangeHeader, contentTypeFor(audioInfo), audioInfo.getAudioFilename());
     } catch (Exception e) {
       log.error("Error serving recording audio by public token", e);
       throw new RuntimeException("Error serving recording audio: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Stream an S3-backed recording back to the client with HTTP Range support. The Range header
+   * is forwarded to MinIO so it does the slicing — the JVM only proxies bytes. We can't 302 to
+   * a presigned URL because MinIO has no public ingress; the API pod must mediate.
+   */
+  private ResponseEntity<StreamingResponseBody> serveAudioFromS3(
+      RecordingAudioInfo audioInfo, String rangeHeader) {
+    if (objectStorage.isEmpty()) {
+      throw new IllegalStateException(
+          "Recording is S3-backed but ObjectStorageService is disabled — "
+              + "check storage.s3.enabled");
+    }
+    ResponseInputStream<GetObjectResponse> stream =
+        objectStorage.get().openStream(audioInfo.getStorageKey(), rangeHeader);
+    GetObjectResponse meta = stream.response();
+    boolean partial = meta.contentRange() != null;
+
+    StreamingResponseBody body =
+        (OutputStream out) -> {
+          try (ResponseInputStream<GetObjectResponse> s = stream) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = s.read(buf)) > 0) {
+              out.write(buf, 0, n);
+            }
+          }
+        };
+
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.status(partial ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
+            .contentType(MediaType.parseMediaType(contentTypeFor(audioInfo)))
+            .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+            .header(
+                HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=\"" + audioInfo.getAudioFilename() + "\"");
+    if (meta.contentLength() != null) {
+      builder.contentLength(meta.contentLength());
+    }
+    if (partial) {
+      builder.header(HttpHeaders.CONTENT_RANGE, meta.contentRange());
+    }
+    return builder.body(body);
+  }
+
+  private String contentTypeFor(RecordingAudioInfo audioInfo) {
+    String name = audioInfo.getAudioFilename();
+    if (name != null && name.endsWith(".ogg")) {
+      return "audio/ogg";
+    }
+    if (name != null && name.endsWith(".mp3")) {
+      return "audio/mpeg";
+    }
+    return "audio/webm";
   }
 }

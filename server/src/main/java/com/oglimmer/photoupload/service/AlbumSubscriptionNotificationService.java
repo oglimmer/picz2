@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumSubscription;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -18,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /** Service for processing album subscription notifications on a schedule */
+@Profile(Profiles.API)
 @Service
 @Slf4j
 @RequiredArgsConstructor

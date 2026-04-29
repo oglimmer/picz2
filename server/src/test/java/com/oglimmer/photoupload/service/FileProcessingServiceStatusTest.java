@@ -59,7 +59,9 @@ class FileProcessingServiceStatusTest {
                       fm.getProcessingCompletedAt()));
               return fm;
             });
-    service = new FileProcessingService(properties, repository, thumbnailService, txManager);
+    service =
+        new FileProcessingService(
+            properties, repository, thumbnailService, txManager, java.util.Optional.empty());
   }
 
   private FileMetadata seedMetadata() {

@@ -14,6 +14,11 @@ server:
     accept-count: 20
     connection-timeout: 20000
 spring:
+  profiles:
+    # Phase 4a default: load both api and worker beans in one JVM. Phase 4e/R2 overrides this via
+    # SPRING_PROFILES_ACTIVE on the per-pod Deployment env (api on the upload pod, worker on the
+    # processing pod). Env always wins over this property.
+    active: "${SPRING_PROFILES_ACTIVE:api,worker}"
   servlet:
     multipart:
       enabled: true
@@ -69,6 +74,17 @@ file:
     processing-queue-capacity: "${FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY:50}"
     duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:true}"
     thumbnailer: "${FILE_UPLOAD_THUMBNAILER:vips}"
+storage:
+  s3:
+    enabled: "${STORAGE_S3_ENABLED:false}"
+    endpoint: "${STORAGE_S3_ENDPOINT:}"
+    access-key: "${STORAGE_S3_ACCESS_KEY:}"
+    secret-key: "${STORAGE_S3_SECRET_KEY:}"
+    bucket: "${STORAGE_S3_BUCKET:photo-upload}"
+    region: "${STORAGE_S3_REGION:us-east-1}"
+    path-style-access: "${STORAGE_S3_PATH_STYLE_ACCESS:true}"
+    auto-create-bucket: "${STORAGE_S3_AUTO_CREATE_BUCKET:true}"
+    presign-seconds: "${STORAGE_S3_PRESIGN_SECONDS:3600}"
 jobs:
   dispatcher:
     enabled: "${JOBS_DISPATCHER_ENABLED:true}"

@@ -13,6 +13,7 @@ import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import java.nio.file.Path;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
@@ -31,6 +32,7 @@ class FileStorageServicePathTest {
     ImageTagRepository imageTagRepo = Mockito.mock(ImageTagRepository.class);
     AlbumEnabledTagRepository albumEnabledTagRepo = Mockito.mock(AlbumEnabledTagRepository.class);
     ThumbnailService thumbSvc = Mockito.mock(ThumbnailService.class);
+    LocalFileCleanupService cleanupSvc = Mockito.mock(LocalFileCleanupService.class);
     JdbcTemplate jdbc = Mockito.mock(JdbcTemplate.class);
     AlbumRepository albumRepo = Mockito.mock(AlbumRepository.class);
     FileInfoMapper fileInfoMapper = Mockito.mock(FileInfoMapper.class);
@@ -47,15 +49,17 @@ class FileStorageServicePathTest {
             tagRepo,
             imageTagRepo,
             albumEnabledTagRepo,
-            thumbSvc,
+            Optional.of(thumbSvc),
+            cleanupSvc,
             jdbc,
             albumRepo,
             fileInfoMapper,
             userContext,
             txManager,
-            fileProcessingService,
+            Optional.of(fileProcessingService),
             jobEnqueueService,
-            jobsProperties);
+            jobsProperties,
+            Optional.empty());
 
     // Not required for this specific test, but safe to ensure directory exists
     svc.init();

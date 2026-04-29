@@ -3,7 +3,8 @@ package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
-import java.io.File;
+import com.oglimmer.photoupload.config.Profiles;
+import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 /**
@@ -20,6 +22,7 @@ import org.springframework.stereotype.Service;
  * is delegated to dedicated services.
  */
 @Service
+@Profile(Profiles.WORKER)
 @Slf4j
 @RequiredArgsConstructor
 public class ThumbnailService {
@@ -28,6 +31,7 @@ public class ThumbnailService {
   private final VipsThumbnailService vipsThumbnailService;
   private final HeicConversionService heicConversionService;
   private final FfmpegService ffmpegService;
+  private final LocalFileCleanupService localFileCleanupService;
 
   /**
    * Generate all thumbnail sizes for an image. Routes to vipsthumbnail by default; falls back to
@@ -142,26 +146,15 @@ public class ThumbnailService {
   }
 
   public boolean isImageFile(String mimeType) {
-    if (mimeType == null) {
-      return false;
-    }
-    return mimeType.startsWith("image/")
-        && !mimeType.equals("image/heic")
-        && !mimeType.equals("image/heif");
+    return MimeTypePredicates.isImageFile(mimeType);
   }
 
   public boolean isHeicFile(String mimeType) {
-    if (mimeType == null) {
-      return false;
-    }
-    return mimeType.equals("image/heic") || mimeType.equals("image/heif");
+    return MimeTypePredicates.isHeicFile(mimeType);
   }
 
   public boolean isVideoFile(String mimeType) {
-    if (mimeType == null) {
-      return false;
-    }
-    return mimeType.startsWith("video/");
+    return MimeTypePredicates.isVideoFile(mimeType);
   }
 
   public boolean transcodeVideo(Path originalFile, Path outputPath) {
@@ -173,7 +166,7 @@ public class ThumbnailService {
   }
 
   public void deleteTranscodedVideo(Path transcodedVideoPath) {
-    deleteIfExists(transcodedVideoPath, "transcoded video");
+    localFileCleanupService.deleteTranscodedVideo(transcodedVideoPath);
   }
 
   public boolean generateVideoThumbnail(Path videoFile, Path outputPath) {
@@ -223,24 +216,7 @@ public class ThumbnailService {
   }
 
   public void deleteThumbnails(Path thumbnailPath, Path mediumPath, Path largePath) {
-    deleteIfExists(thumbnailPath, "thumbnail");
-    deleteIfExists(mediumPath, "thumbnail");
-    deleteIfExists(largePath, "thumbnail");
-  }
-
-  private void deleteIfExists(Path path, String label) {
-    if (path == null) {
-      return;
-    }
-    try {
-      File file = path.toFile();
-      if (file.exists()) {
-        file.delete();
-        log.debug("Deleted {}: {}", label, path);
-      }
-    } catch (Exception e) {
-      log.warn("Failed to delete {} {}: {}", label, path, e.getMessage());
-    }
+    localFileCleanupService.deleteThumbnails(thumbnailPath, mediumPath, largePath);
   }
 
   @Getter

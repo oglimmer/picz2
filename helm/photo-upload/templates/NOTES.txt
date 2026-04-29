@@ -64,3 +64,85 @@ To view logs:
 
   Backend:  kubectl logs -l app.kubernetes.io/name={{ include "photo-upload.name" . }}-backend
   Frontend: kubectl logs -l app.kubernetes.io/name={{ include "photo-upload.name" . }}-frontend
+
+{{- if .Values.monitoring.scrape.enabled }}
+
+Prometheus monitoring (standalone prometheus chart, no operator):
+
+  Scraping is wired automatically via Service annotations on
+  {{ include "photo-upload.backend.fullname" . }}-metrics — the prometheus chart's
+  `kubernetes-service-endpoints` SD job picks it up. Verify with:
+
+    kubectl --namespace monitoring port-forward svc/prometheus-server 9090:80
+    open http://127.0.0.1:9090/targets   # look for the new endpoint
+
+  Alert rules are NOT installed by this chart (no PrometheusRule CRD in the cluster).
+  To enable alerts, paste the following into the `prometheus` release's values
+  under `serverFiles.alerting_rules.yml` and run `helm upgrade prometheus ...`:
+
+    groups:
+      - name: photo-upload-jobs
+        rules:
+          - alert: PhotoUploadJobsBacklog
+            expr: photoupload_jobs_queued{status="QUEUED"} > 200
+            for: 5m
+            labels:
+              severity: warning
+              app: {{ include "photo-upload.name" . }}
+            annotations:
+              summary: "Processing backlog above threshold"
+              description: |
+                QUEUED depth has exceeded 200 for 5m. Pre-split this means the in-pod
+                dispatcher is not keeping up; post-Phase-4e/R2 it means the worker pod
+                is not draining (scaled down, OOM'd, or genuinely overloaded). In both
+                cases uploads will start receiving HTTP 503.
+          - alert: PhotoUploadWorkerDown
+            # Fires only after the worker Deployment exists with replicas > 0 (Phase 4e/R2).
+            # `app.kubernetes.io/component=worker` matches both labels emitted by the worker
+            # Deployment template; we use kube_deployment_status_replicas_available so a 0-replica
+            # R1 manifest doesn't false-alert.
+            expr: |
+              kube_deployment_spec_replicas{deployment=~"{{ include "photo-upload.fullname" . }}-worker"} > 0
+              and on (deployment, namespace)
+              kube_deployment_status_replicas_available{deployment=~"{{ include "photo-upload.fullname" . }}-worker"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              app: {{ include "photo-upload.name" . }}
+            annotations:
+              summary: "Worker Deployment has zero ready replicas"
+              description: |
+                The worker pod is desired but no replica is ready. Processing has stalled
+                — the api pod will keep accepting uploads (writes hit S3 directly) but
+                rows pile up in QUEUED until the worker recovers.
+          - alert: PhotoUploadJobsDeadLetter
+            expr: photoupload_jobs_queued{status="DEAD_LETTER"} > 0
+            for: 1m
+            labels:
+              severity: critical
+              app: {{ include "photo-upload.name" . }}
+            annotations:
+              summary: "Processing job in DEAD_LETTER"
+              description: |
+                At least one processing job exhausted its retries. Inspect via
+                `GET /api/admin/dead-letter` and decide: delete, fix, or re-enqueue.
+      - name: photo-upload-storage
+        rules:
+          - alert: PhotoUploadPVCNearlyFull
+            expr: |
+              (
+                kubelet_volume_stats_used_bytes{namespace="{{ .Release.Namespace }}",persistentvolumeclaim=~"{{ include "photo-upload.fullname" . }}-.*"}
+                /
+                kubelet_volume_stats_capacity_bytes{namespace="{{ .Release.Namespace }}",persistentvolumeclaim=~"{{ include "photo-upload.fullname" . }}-.*"}
+              ) > 0.8
+            for: 10m
+            labels:
+              severity: warning
+              app: {{ include "photo-upload.name" . }}
+            annotations:
+              summary: "PVC {{ "{{ $labels.persistentvolumeclaim }}" }} above 80% full"
+              description: |
+                {{ "{{ $labels.persistentvolumeclaim }}" }} in namespace {{ "{{ $labels.namespace }}" }}
+                has been above 80% for 10m. Free space, expand the volume, or run
+                the retention sweep.
+{{- end }}

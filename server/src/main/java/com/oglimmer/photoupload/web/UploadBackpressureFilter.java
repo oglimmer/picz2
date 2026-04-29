@@ -1,14 +1,19 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.web;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.service.JobQueueDepthService;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.ThreadPoolExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -26,6 +31,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * JobQueueDepthService} gauge. When disabled (legacy {@code @Async} path), the filter falls back
  * to the in-memory executor queue.
  */
+@Profile(Profiles.API)
 @Component
 @Slf4j
 public class UploadBackpressureFilter extends OncePerRequestFilter {
@@ -35,15 +41,21 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
   private final ThreadPoolTaskExecutor fileProcessingExecutor;
   private final JobQueueDepthService jobQueueDepthService;
   private final JobsProperties jobsProperties;
+  // Optional: present when Resilience4j is on the classpath AND a "minio" breaker is configured
+  // (always true in current builds). If MinIO is OPEN we 503 the upload before parsing the body,
+  // saving the multipart staging cost during an outage.
+  private final Optional<CircuitBreaker> minioCircuitBreaker;
 
   public UploadBackpressureFilter(
       @Qualifier(AsyncConfig.FILE_PROCESSING_EXECUTOR)
           ThreadPoolTaskExecutor fileProcessingExecutor,
       JobQueueDepthService jobQueueDepthService,
-      JobsProperties jobsProperties) {
+      JobsProperties jobsProperties,
+      Optional<CircuitBreaker> minioCircuitBreaker) {
     this.fileProcessingExecutor = fileProcessingExecutor;
     this.jobQueueDepthService = jobQueueDepthService;
     this.jobsProperties = jobsProperties;
+    this.minioCircuitBreaker = minioCircuitBreaker;
   }
 
   @Override
@@ -72,6 +84,14 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
   }
 
   private boolean shouldReject() {
+    // Fail fast on MinIO outages BEFORE we look at queue depth or read the multipart body.
+    // The breaker stays CLOSED in the steady state so this is a single volatile read per upload.
+    if (minioCircuitBreaker.isPresent()
+        && minioCircuitBreaker.get().getState() == CircuitBreaker.State.OPEN) {
+      log.warn("Rejecting upload — minio circuit breaker is OPEN");
+      return true;
+    }
+
     if (jobsProperties.getDispatcher().isEnabled()) {
       long depth = jobQueueDepthService.getDepth();
       int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();

@@ -8,3 +8,8 @@ data:
   database.host: {{ include "photo-upload.database.host" . | quote }}
   database.port: {{ include "photo-upload.database.port" . | quote }}
   database.name: {{ include "photo-upload.database.name" . | quote }}
+  {{- if .Values.objectStorage.enabled }}
+  objectStorage.endpoint: {{ required "objectStorage.endpoint is required when objectStorage.enabled" .Values.objectStorage.endpoint | quote }}
+  objectStorage.bucket: {{ .Values.objectStorage.bucket | quote }}
+  objectStorage.region: {{ .Values.objectStorage.region | quote }}
+  {{- end }}

@@ -68,6 +68,14 @@ spec:
               key: database.password
         - name: JAVA_OPTS
           value: {{ .Values.backend.javaOpts | quote }}
+        {{- if .Values.backend.sprintProfilesActive }}
+        # When unset (default in R1), application.yml's `${SPRING_PROFILES_ACTIVE:api,worker}`
+        # default takes effect → both profiles load into this pod. R2 sets this to "api".
+        - name: SPRING_PROFILES_ACTIVE
+          value: {{ .Values.backend.sprintProfilesActive | quote }}
+        {{- end }}
+        - name: JOBS_DISPATCHER_ENABLED
+          value: {{ .Values.backend.jobsDispatcherEnabled | default true | quote }}
         - name: FILE_UPLOAD_BASE_PATH
           value: {{ .Values.backend.persistence.mountPath | quote }}
         - name: APP_BASE_URL
@@ -76,6 +84,35 @@ spec:
           value: {{ .Values.backend.maxConcurrentProcessing | default 1 | quote }}
         - name: FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY
           value: {{ .Values.backend.processingQueueCapacity | default 50 | quote }}
+        {{- if .Values.objectStorage.enabled }}
+        - name: STORAGE_S3_ENABLED
+          value: "true"
+        - name: STORAGE_S3_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.endpoint
+        - name: STORAGE_S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.bucket
+        - name: STORAGE_S3_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.region
+        - name: STORAGE_S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.accessKey
+        - name: STORAGE_S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.secretKey
+        {{- end }}
         # Liveness/readiness use the cheap probe groups (LivenessState/ReadinessState only,
         # no DB or disk indicators) so a slow database or Longhorn hiccup can't starve them.
         # Startup still hits the full /actuator/health so the pod isn't marked ready until
@@ -107,16 +144,19 @@ spec:
         resources:
           {{- toYaml .Values.backend.resources | nindent 10 }}
         volumeMounts:
-        {{- if .Values.backend.persistence.enabled }}
         - name: uploads
           mountPath: {{ .Values.backend.persistence.mountPath }}
-        {{- end }}
       volumes:
-      {{- if .Values.backend.persistence.enabled }}
       - name: uploads
+        {{- if and .Values.backend.persistence.enabled .Values.backend.persistence.mounted }}
         persistentVolumeClaim:
           claimName: {{ include "photo-upload.fullname" . }}-uploads
-      {{- end }}
+        {{- else }}
+        # PVC kept in-cluster (persistence.enabled=true) but not mounted (persistence.mounted=false).
+        # Backend uses an in-pod emptyDir for transient staging; durable photos / audio live in S3.
+        emptyDir:
+          sizeLimit: {{ .Values.backend.persistence.emptyDirSizeLimit | default "5Gi" }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

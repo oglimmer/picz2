@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.config.JobsProperties;
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ProcessingJob;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
@@ -9,6 +10,7 @@ import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import java.lang.management.ManagementFactory;
 import java.util.concurrent.Semaphore;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Component;
  * and video tooling already saturates the Pi's memory budget at {@code Semaphore(1)}, per D13.
  */
 @Component
+@Profile(Profiles.WORKER)
 @Slf4j
 public class JobDispatcher {
 

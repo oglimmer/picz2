@@ -42,15 +42,69 @@ backend:
   # receive HTTP 503 with Retry-After so clients back off instead of stalling the pod.
   processingQueueCapacity: 50
 
-  # Persistent volume for uploads
+  # Phase 4 deployment-split knobs. R1 leaves both blank → application.yml default
+  # (api,worker) loads both profiles into the api pod. R2 sets sprintProfilesActive=api and
+  # jobsDispatcherEnabled=false here so the api pod stops draining; the worker pod takes over.
+  sprintProfilesActive: ""
+  jobsDispatcherEnabled: true
+
+  # Persistent volume for uploads.
+  #
+  # `enabled` controls whether the PVC resource is rendered at all. After the S3 migration we
+  # keep the PVC defined (so it stays in-cluster as a backup of historical bytes) but stop
+  # mounting it into the pod via `mounted=false`. With mounted=false the deployment swaps in an
+  # emptyDir at `mountPath`, which is sufficient for Spring's transient .multipart-tmp,
+  # .processing-tmp/{id} workdirs, and .audio-tmp staging — all of which are wiped per
+  # request/job.
   persistence:
     enabled: true
+    mounted: false
     storageClass: ""
     accessMode: ReadWriteOnce
     # The live PVC was expanded in-cluster to 30Gi; K8s rejects shrinking a PVC, so this value
     # must match (or exceed) the actual provisioned capacity.
     size: 30Gi
     mountPath: /app/uploads
+    # Cap on the in-pod scratch volume when persistence.mounted=false. Comfortably above the
+    # peak transient footprint (largest in-flight upload + per-job derivative workdir + audio
+    # reencode temp). Bump if processing larger files becomes routine.
+    emptyDirSizeLimit: 5Gi
+
+# Worker (processing-side) configuration. Drains processing_jobs and runs the heavy
+# image/video pipeline. Same image as backend, different SPRING_PROFILES_ACTIVE.
+# In R1 we render the manifest with `replicas: 0` to validate scheduling without
+# behavioural change; R2 bumps to 1 and flips the api pod's profile to api-only.
+worker:
+  enabled: true
+  name: worker
+  image:
+    # Same image as backend; tag falls through to backend.image.tag if left blank.
+    repository: registry.oglimmer.com/picz2-be
+    pullPolicy: Always
+    tag: ""
+  # Stays at 0 until R1 manifest validation completes. R2 bumps to 1.
+  replicas: 0
+  # Heavy pipeline budget: ImageMagick / HEIC + ffmpeg can each push native memory toward
+  # 1.5 GiB. JVM heap is capped low (-Xmx512m) since most of the work happens in subprocesses.
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  # Worker-side JVM is small — actual encode RAM lives in vipsthumbnail / ffmpeg subprocesses.
+  # MaxRAMPercentage=35 caps heap on the small-pod side without us tuning per-pod -Xmx by hand.
+  javaOpts: "-Xmx512m -XX:MaxRAMPercentage=35.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"
+  # No PVC. Worker reads originals from S3 into emptyDir, produces derivatives locally, PUTs
+  # them back, then wipes the workdir. Sized comfortably above peak per-job footprint.
+  workdir:
+    sizeLimit: 5Gi
+    mountPath: /app/uploads
+  # Worker always uses the worker profile (loads JobDispatcher / FileProcessingService /
+  # ThumbnailService) and always runs the dispatcher.
+  sprintProfilesActive: "worker"
+  jobsDispatcherEnabled: true
 
 # Frontend configuration
 frontend:
@@ -71,6 +125,20 @@ frontend:
     requests:
       cpu: 100m
       memory: 128Mi
+
+# Object storage (MinIO / S3-compatible). When enabled, uploads, derivatives, and reads go
+# through this bucket. The bucket lives in-cluster; only the credentials should be overridden
+# per-environment via --set or an external secrets manager.
+objectStorage:
+  enabled: true
+  # In-cluster MinIO Service URL.
+  endpoint: "http://minio.minio.svc.cluster.local:9000"
+  bucket: "photo-upload"
+  region: "us-east-1"
+  # Defaults are placeholders and MUST be overridden in production. Prefer --set or sealed-secrets
+  # over committing real values to this file.
+  accessKey: ""
+  secretKey: ""
 
 # Database configuration (external MariaDB)
 database:
@@ -153,28 +221,19 @@ affinity: {}
 imagePullSecrets:
   - name: oglimmerregistrykey
 
-# Prometheus monitoring rules. Requires the prometheus-operator CRDs (PrometheusRule
-# and PodMonitor) to be installed in the cluster — disable individual sections to skip.
+# Prometheus scrape configuration. Targets the standalone `prometheus` Helm chart's
+# `kubernetes-service-endpoints` SD job, which picks up Services annotated with
+# `prometheus.io/scrape="true"`. No prometheus-operator / CRDs required.
+#
+# Alert rules are NOT managed by this chart in the standalone-Prometheus setup — they
+# live in the prometheus chart's `serverFiles.alerting_rules.yml`. See NOTES.txt for
+# the rule YAML to paste in once.
 monitoring:
-  storageAlert:
+  scrape:
     enabled: true
-    # Fraction (0–1) of capacity that triggers the alert. 0.8 = 80%.
-    threshold: 0.8
-    # Sustained-breach duration before the alert fires.
-    for: 10m
-    # Extra labels to merge onto the PrometheusRule (e.g. release: kube-prometheus-stack)
-    # so the in-cluster Prometheus picks the rule up.
-    additionalLabels: {}
-  # Scrapes /actuator/prometheus on the backend management port (8081). Disable if no
-  # prometheus-operator is installed; the app keeps publishing metrics regardless.
-  jobsMetrics:
-    enabled: true
-    interval: 30s
-    additionalLabels: {}
-  jobsAlert:
-    enabled: true
-    # Same default as `jobs.backpressure.queue-depth-threshold` so the alert fires when uploads
-    # are about to start bouncing with 503.
-    queuedThreshold: 200
-    queuedFor: 5m
-    additionalLabels: {}
+    # Backend management port (Spring Boot actuator). Must match `management.server.port`
+    # in application.yml and the `management` containerPort on the backend Deployment.
+    port: 8081
+    path: /actuator/prometheus
+    # Extra annotations to merge onto the metrics Service (e.g. prometheus.io/scheme).
+    additionalAnnotations: {}

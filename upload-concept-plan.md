@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-27 (Gap 1 implementation landed)
+Last reviewed: 2026-04-29 (Phase 3b direct-to-S3 writes landed; slideshow audio migrated to S3; backend PVC unmounted in favour of emptyDir; Gap 2b expanded into phased plan with D16–D22 accepted)
 
 ---
 
@@ -83,17 +83,24 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 | D13 | Worker concurrency                             | `Semaphore(1)` per worker pod. Add replicas if needed; do not oversubscribe ImageMagick/ffmpeg threads.              | accepted |
 | D14 | libvips refactor shape                         | Split into `VipsThumbnailService` (images), `HeicConversionService` (HEIC only), `FfmpegService` (video).            | open   |
 | D15 | Dead-letter behaviour                          | Move to `DEAD_LETTER` after `max_attempts=3`, keep original blob. `GET /api/admin/dead-letter` exposes them; UI deferred. | accepted |
+| D16 | Circuit-breaker library (Phase 4)              | Resilience4j with `resilience4j-spring-boot3`. Hand-rolled volatile-flag reinvents half of it; we already have actuator + Micrometer.  | accepted |
+| D17 | Rotate / admin-thumbs fate after split         | Leave non-functional for one release; admin endpoints throw 503 on api profile until a Phase 4.5 worker-job rewrite. Rare ops cost.   | accepted |
+| D18 | Audio reencode locality                        | Stays on api pod (`AudioReencodingService` not `@Profile`-gated). Audio is short and infrequent; no `processing_jobs` row exists.     | accepted |
+| D19 | Worker HTTP listener                           | `server.port=-1` in `application-worker.yml`; only management:8081 active. Keep main port off entirely.                              | accepted |
+| D20 | Controller profile-gating shape                | Class-level `@Profile("api")` on each controller; grep-able. Avoid `@ComponentScan` excludes.                                          | accepted |
+| D21 | Legacy `@Async` cleanup release                | Bundle the removal in R3 (post-soak), not R2. Keeps R2 diff focused on deploy-shape change.                                            | accepted |
+| D22 | Worker default replicas                        | 1. Each pod has `Semaphore(1)`, so scale-out gives parallelism but isn't required day-1 on the single-node Pi cluster.                | accepted |
 
 ---
 
 ## Gap 6 — Explicit processing status field (Phase 0)
 
-- [ ] Migration `V30__add_processing_status_to_file_metadata.sql`: adds `processing_status`, `processing_attempts`, `processing_error`, `processing_completed_at`. Backfill `DONE` where any derivative exists, else `FAILED`. Index on status.
-- [ ] Entity: `FileMetadata` gains a `ProcessingStatus` enum (`@Enumerated(STRING)`).
-- [ ] `FileStorageService.storeFile`: set `INGESTED` before save (becomes `QUEUED` once Gap 1 lands).
-- [ ] `FileProcessingService.processFile`: transition `PROCESSING → DONE/FAILED`; increment attempts on error.
-- [ ] `UploadController.uploadFile`: return `202 Accepted` with `processingStatus` in body.
-- [ ] New `GET /api/assets/{id}/status` for clients that want to poll.
+- [x] Migration `V30__add_processing_status_to_file_metadata.sql`: adds `processing_status`, `processing_attempts`, `processing_error`, `processing_completed_at`. Backfill `DONE` where any derivative exists, else `FAILED`. Index on status.
+- [x] Entity: `FileMetadata` gains a `ProcessingStatus` enum (`@Enumerated(STRING)`).
+- [x] `FileStorageService.storeFile`: sets `QUEUED` (dispatcher enabled) / `INGESTED` (legacy) before save.
+- [x] `FileProcessingService.processFile`: transitions `PROCESSING → DONE/FAILED`; increments attempts on error.
+- [x] `UploadController.uploadFile`: returns `202 Accepted` with `processingStatus` in body.
+- [x] `AssetStatusController` exposes `GET /api/assets/{id}/status`.
 - [ ] iOS: optional follow-up to render the status in the gallery (no compatibility break — `Uploader.urlSession` already accepts the full `2xx` range).
 
 ### Testing
@@ -108,12 +115,9 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 
 ## Gap 5 — libvips for image thumbnails (Phase 0)
 
-- [ ] Refactor `ThumbnailService` into `VipsThumbnailService` + `HeicConversionService` + `FfmpegService` (D14).
-  - `VipsThumbnailService`: `vipsthumbnail src --size NxN -o thumb_%s.jpg[Q=Q]`, three calls (one per size). Shrink-on-load → memory bounded by output, not input.
-  - `HeicConversionService`: keeps existing `convert` (libheif inside ImageMagick is the most reliable HEIC decoder).
-  - `FfmpegService`: wraps `transcodeVideo`, `generateVideoThumbnail`, `extractVideoCreationDate`. Adds explicit `process.waitFor(15, MINUTES)` + `destroyForcibly()` on timeout — current code has no timeout.
-- [ ] `Dockerfile`: install `libvips-tools`.
-- [ ] Feature flag: `file.upload.thumbnailer=vips|magick` for the first release so we can flip back.
+- [x] Refactor `ThumbnailService` into `VipsThumbnailService` + `HeicConversionService` + `FfmpegService` (D14). All three classes shipped; `ThumbnailService.generateAllThumbnails` dispatches to vips by default.
+- [x] `Dockerfile`: installs `libvips-tools` (and a hand-built libheif/ImageMagick chain for the HEIC fallback).
+- [x] Feature flag: `file.upload.thumbnailer=vips|magick`. Default `VIPS` (set in `FileStorageProperties.Thumbnailer`).
 
 ### Testing
 - [ ] Golden-file thumbnails for JPEG / 50MP JPEG / PNG / animated GIF / EXIF-rotated input.
@@ -126,7 +130,7 @@ vips handles unusual color profiles slightly differently. Flag-gated rollback.
 
 ## Gap 4-prep — PVC + MinIO alert (Phase 0, independent)
 
-- [ ] `prometheusrule-storage.yaml`: alert when any photo-upload PVC is `> 80%` for 10 min. Routed via existing email/Alertmanager.
+- [x] Alert rule body authored. **Substitution**: the cluster runs the standalone `prometheus` chart, *not* `prometheus-operator`, so the original `prometheusrule-storage.yaml` template was removed. The rule YAML now lives in `NOTES.txt` for one-time paste into the prometheus chart's `serverFiles.alerting_rules.yml`. Functionally equivalent; ownership boundary is the prometheus release rather than the photo-upload release.
 
 ---
 
@@ -158,10 +162,8 @@ vips handles unusual color profiles slightly differently. Flag-gated rollback.
 - [x] `JobMetricsConfig` registers one Micrometer `Gauge` per `JobStatus` value, all sharing the metric name `photoupload.jobs.queued` with a `status` tag (renders as `photoupload_jobs_queued{status=...}` in Prometheus).
 - [x] One scheduled `GROUP BY status` query refreshes a `volatile EnumMap` snapshot in `JobQueueDepthService`. Both the gauge suppliers and the backpressure filter read from that snapshot — no per-scrape DB cost, no Caffeine needed.
 - [x] `prometheus` added to actuator exposure; `micrometer-registry-prometheus` on the classpath.
-- [x] Helm: `PodMonitor` (`podmonitor-backend.yaml`) targeting the management port (8081) so prometheus-operator scrapes `/actuator/prometheus`. Gated by `monitoring.jobsMetrics.enabled`.
-- [x] Helm: `prometheusrule-jobs.yaml` with two alerts, gated by `monitoring.jobsAlert.enabled`:
-  - `photoupload_jobs_queued{status="QUEUED"} > 200 for 5m` → warning.
-  - `photoupload_jobs_queued{status="DEAD_LETTER"} > 0 for 1m` → critical (potential data loss).
+- [x] Helm: scrape discovery via annotation-based mechanism (cluster has standalone `prometheus`, no operator). A headless `*-metrics` Service with `prometheus.io/scrape="true"`, `prometheus.io/port="8081"`, `prometheus.io/path="/actuator/prometheus"` is picked up by the existing `kubernetes-service-endpoints` SD job. (Replaces the original `PodMonitor` template, which the operator-less cluster could not reconcile.)
+- [x] Helm: alert-rule YAML for jobs (`PhotoUploadJobsBacklog`, `PhotoUploadJobsDeadLetter`) emitted via `NOTES.txt` for paste into the prometheus chart's `serverFiles.alerting_rules.yml`. (Replaces the original `prometheusrule-jobs.yaml` template, same reason.)
 
 ### Risk
 Management port (8081) is already internal-only; no exposure concern.
@@ -170,13 +172,38 @@ Management port (8081) is already internal-only; no exposure concern.
 
 ## Gap 2a — Introduce MinIO (Phase 3)
 
-- [ ] Helm: hand-rolled `deployment-minio.yaml` (single replica, 512 Mi limit), `service-minio.yaml` (ports 9000/9001), `persistentvolumeclaim-minio.yaml` (30 Gi Longhorn), `secret-minio.yaml` for credentials.
-- [ ] Add `software.amazon.awssdk:s3` (more portable than `io.minio`).
-- [ ] New `ObjectStorageService` over `S3Client`: `putObject(key, file, mime)` via `RequestBody.fromFile` (never reads into heap), `getObject`, `deleteObject`, `presignGet`.
-- [ ] `FileStorageService.storeFile`: stream to local temp → checksum → `putObject("originals/{uuid}", tempFile)` → delete temp → save row with `filePath = "originals/{uuid}"`.
-- [ ] `FileProcessingService.processFile`: download original to local temp dir → vips/ffmpeg/magick (unchanged) → upload derivatives to `derivatives/{assetId}/{thumb,medium,large}.jpg` and `derivatives/{assetId}/transcoded.mp4` → `finally { deleteTempDir }`.
-- [ ] File-serve controllers: prefer presigned URLs; fall back to streamed `getObject` when auth requires it.
-- [ ] `FilesystemToS3Migrator` `CommandLineRunner` gated by `migration.fs-to-s3.enabled` (D10). Idempotent: HEAD-check before upload. Run as a one-off Job over a low-traffic window.
+MinIO already exists in-cluster at `minio.minio.svc.cluster.local:9000`, so the Helm work for MinIO itself (Deployment / Service / PVC) is owned by the platform side. The plan below tracks only the application changes.
+
+### Phase 3a — Foundation (landed)
+
+- [x] Skip `deployment-minio.yaml` / `service-minio.yaml` / `persistentvolumeclaim-minio.yaml` — MinIO is platform-managed.
+- [x] `software.amazon.awssdk:s3` + `apache-client` via the AWS SDK BOM.
+- [x] `ObjectStorageProperties`, `ObjectStorageConfig` (S3Client + S3Presigner beans, both `@ConditionalOnProperty(storage.s3.enabled)` so local dev without MinIO still boots).
+- [x] `ObjectStorageService`: `putFile(key, Path, mime)` via `RequestBody.fromFile` (never reads into heap), `getToFile`, `openStream`, `exists`, `delete`, `presignGet`.
+- [x] `BucketBootstrapper` `@PostConstruct` — creates the bucket if missing (idempotent), fails startup loudly if creds are wrong.
+- [x] Helm: secret entries for access/secret keys, configmap entries for endpoint/bucket/region, env wiring on the backend Deployment. Gated by `objectStorage.enabled` so the section is no-op when MinIO isn't desired.
+
+### Phase 3b — Switch the data plane (all three pieces landed)
+
+- [x] `FileStorageService.storeFile`: **direct-to-S3**, no durable disk write under app control. Reads `MultipartFile.getInputStream()` once for SHA-256 (Spring stages it transiently in `.multipart-tmp`), runs duplicate detection, then a second `getInputStream()` is piped to `objectStorage.putStream("originals/{stored_filename}", in, contentLength, contentType)`. Row saved with `filePath = "originals/{stored_filename}"`. Falls back to the legacy disk pattern when `ObjectStorageService` isn't injected (tests / non-S3 deploys).
+- [x] `FileProcessingService.processFile`: per-job temp workdir under `{uploadDir}/.processing-tmp/{id}/`. Original downloaded from S3 (when `filePath` is an S3 key), HEIC→JPEG converts locally and uploads the new key (and deletes the legacy HEIC key from S3), thumb/medium/large/transcoded run on local temps and each is `putFile`'d to its `derivatives/{assetId}/...` key. Workdir is wiped via `deleteRecursive` in `finally`. `file_size` updated to the post-HEIC JPEG size (closes the stale-column source for new uploads).
+- [x] **Serve layer** (read side) routed through `StoragePaths.isS3Key`. `ImageServeController` streams from `ObjectStorageService.openStream` when `FileServeInfo.storageKey` is set, otherwise serves the legacy disk Path. Both shapes coexist transparently — no flag day. (`FileController.downloadFile` legacy by-filename endpoint deferred — niche, not used by gallery.)
+- [x] **End-to-end smoke**: id=4989 / id=4990 uploads both landed `originals/...` + three derivatives; zero durable bytes on disk; serve via API → MinIO returns byte-identical bytes (sha256 match local-disk-as-known-source).
+
+### Phase 3c — Admin-driven migration (landed)
+
+- [x] `MigrationService` (admin-triggered, not a CommandLineRunner — operator-paced is safer for an oversubscribed Pi). Single-thread executor, `AtomicReference<MigrationRun>` for run state, cancel checked at row boundary.
+- [x] **Failure-safety properties**:
+  - Idempotent per file: `objectStorage.exists(key)` HEAD-check before every PUT, so a re-run after a crash never re-uploads bytes already in S3.
+  - Atomic per row: all five paths flip in a single TX. A row is never half-migrated.
+  - Resumable via DB state: rows whose `filePath` already starts with `originals/` are filtered out by the repository query; re-runs converge naturally.
+  - Skips `processing_status != DONE` rows so the migrator never races the dispatcher.
+  - Local files are *kept* (not moved) — reclaiming disk is a follow-up operator decision.
+- [x] **Endpoints** (gated by `storage.s3.enabled`):
+  - `POST /api/admin/migrate-to-s3` → 202 + run snapshot. 409 if a run is already in progress.
+  - `GET  /api/admin/migrate-to-s3/status` → current/last run snapshot.
+  - `POST /api/admin/migrate-to-s3/cancel` → graceful stop at next row boundary.
+- [x] Idempotency tests (`MigrationServiceTest`): re-upload skipped when key already in S3, no-op for already-migrated rows, throws on missing local file, concurrent start respects the singleton.
 
 ### Testing
 - [ ] `FileStorageServiceIT` against a MinIO Testcontainer.
@@ -190,15 +217,82 @@ MinIO single-replica is an SPOF for new writes. Acceptable for single-node K3s; 
 
 ## Gap 2b — Worker Deployment split (Phase 4)
 
-- [ ] Spring profiles: `api` and `worker`. Same JAR, different `SPRING_PROFILES_ACTIVE`. `JobDispatcher`, `FileProcessingService`, `ThumbnailService` only loaded under `worker`. `UploadController` only under `api`.
-- [ ] New Helm `deployment-worker.yaml` — same image, `SPRING_PROFILES_ACTIVE=worker`, no Service/Ingress. Resources `limits: { cpu: 4000m, memory: 2Gi }`, `requests: { memory: 1Gi }`. JVM `-Xmx512m -XX:MaxRAMPercentage=35.0`. `emptyDir` `/tmp/worker` for the encode area.
-- [ ] API pod slimmed: `limits.memory: 1Gi`, JVM `-Xmx512m`. No more ImageMagick budget needed.
-- [ ] Roll-out: deploy worker at `replicas: 0` first (validate manifests). Then `replicas: 1` + `jobs.dispatcher.enabled=false` on API. Watch metrics for 24 h. Then ship the cleanup release that removes the dispatcher code path from the `api` profile.
-- [ ] Add a circuit breaker on the upload pod that returns 503 when MinIO is unreachable; iOS already handles 503 gracefully.
+Splits the single backend Deployment into two: an **api** pod that handles HTTP + serves bytes, and a **worker** pod that drains `processing_jobs`. Same JAR, same image, different `SPRING_PROFILES_ACTIVE`. Sharing surface is **DB + MinIO only** — no shared filesystem, no in-process handoff. Phase 3 (object storage) is the prerequisite that makes this physically separable.
+
+### Phase 4-prep — decouple `FileStorageService` from `ThumbnailService`
+
+The api pod must boot without pulling Vips/Heic/Ffmpeg beans. Today `FileStorageService` injects `ThumbnailService` purely to call predicates (`isImageFile`/`isVideoFile`/`isHeicFile`) and pure file-deletion helpers (`deleteThumbnails`/`deleteTranscodedVideo`). The remaining heavy uses are in admin endpoints (rotate, `generateMissingThumbnails`, `updateTranscodedVideoPaths`, `updateVideoThumbnailPaths`) which per **D17** stay non-functional for one release post-split.
+
+- [x] New `MimeTypePredicates` static utility — `isImageFile`, `isHeicFile`, `isVideoFile`. No DI.
+- [x] New `LocalFileCleanupService` `@Component` — `deleteThumbnails`, `deleteTranscodedVideo`. No Vips/Heic/Ffmpeg deps.
+- [x] `FileStorageService.deleteFile` calls `LocalFileCleanupService` instead of `ThumbnailService`.
+- [x] `ThumbnailService` predicate methods become thin forwarders to `MimeTypePredicates`; cleanup methods delegate to `LocalFileCleanupService`. Both kept for backwards compat during the transition; remove in R3.
+- [x] All other callers (`FileProcessingService`, `SlideshowRecordingService`, etc.) keep using `thumbnailService.is*` until R3 cleanup; no churn now.
+
+### Phase 4a — Profile-gate beans (mergeable, no behaviour change)
+
+Both profiles still co-located in one Deployment. `SPRING_PROFILES_ACTIVE` defaults to `api,worker` so existing deploys keep working. New `Profiles` constants class for grep-ability.
+
+- [x] **Worker-only** (`@Profile(Profiles.WORKER)`): `JobDispatcher`, `FileProcessingService`, `ThumbnailService`, `VipsThumbnailService`, `HeicConversionService`, `FfmpegService`, `JobLeaseService`.
+- [x] **API-only** (`@Profile(Profiles.API)`, class-level per **D20**): all 18 controllers, `FileStorageService`, `SlideshowRecordingService`, `UploadBackpressureFilter`, `AsyncConfig`, `SecurityConfig`, `WebConfig`, `OpenApiConfig`, `MigrationService` / `RecordingMigrationService`, `VerificationService` / `RecordingVerificationService`, `EmailService`, `ApnsService`, `DeviceTokenService` (cron), `AlbumSubscriptionNotificationService` (cron). Last two **must** be api-gated or both pods double-fire the cron.
+- [x] **Both profiles** (no `@Profile`): all repositories, `ObjectStorageService` + `ObjectStorageConfig`, `BucketBootstrapper`, `JobEnqueueService`, `JobQueueDepthService`, `JobMetricsConfig`, `JobsProperties`, `AudioReencodingService` (per **D18**), all "utility" services (`AlbumService`, `TagService`, `UserService`, etc.) — worker happens to load these too but they have no schedulers and no heavy deps, so the cost is bytecode load only.
+- [x] `FileStorageService` switches `ThumbnailService` injection to `Optional<ThumbnailService>`; admin/rotate methods throw `IllegalStateException` when empty via a `requireThumbnailer()` helper (api pod, post-split). Per **D17** those endpoints are documented broken until Phase 4.5. **Also discovered**: `FileProcessingService` injection had the same shape (legacy `@Async` fallback path), so it's likewise wrapped in `Optional<>` with an `IllegalStateException` if `jobs.dispatcher.enabled=false` on api-only deploys. `AlbumService` gets `Optional<ThumbnailService>` for the same reason (video-date backfill skipped when absent).
+- [x] `application.yml` defaults `spring.profiles.active=${SPRING_PROFILES_ACTIVE:api,worker}` so existing deploys, dev runs, and the unit-test suite keep loading both profiles. Per-pod env (`api` / `worker`) overrides at R2.
+- [x] New `config/Profiles.java` constants class — `Profiles.API` / `Profiles.WORKER`, used in every `@Profile` annotation.
+- [x] Bean-context tests: `WorkerProfileContextTest` + `ApiProfileContextTest` (under `test/.../profile/`) assert presence/absence of the gated beans. Gated by `-Drun.testcontainers=true` like `ProcessingJobLeaseTest` because they need a real MariaDB to satisfy `ddl-auto: validate` + Flyway.
+
+### Phase 4b — Worker pod posture
+
+- [x] Disable the main HTTP listener on the worker pod via `SERVER_PORT=-1` env var on `deployment-worker.yaml` (per **D19**). **Initially shipped as `application-worker.yml`, which broke the api pod** — Spring loads profile-specific YAMLs whenever the profile is *active*, not "active alone", so on the default `api,worker` deploy the override killed Tomcat 8080 there too (502 on `/api/auth/check`). Env var on the worker Deployment scopes the override correctly.
+- [x] Confirmed `@EnableScheduling` is safe. The four `@Scheduled` beans split as: `JobDispatcher` (worker), `JobQueueDepthService` (both — refreshes a per-pod local cache, no side-effects), `DeviceTokenService` (api, cron), `AlbumSubscriptionNotificationService` (api, cron). No double-firing in any mode (api+worker, api-only, worker-only).
+- [x] `FileStorageService.init()` `@PostConstruct` (creates `.multipart-tmp`) is api-only after gating — fine, worker doesn't need it. `FileProcessingService` continues to create `.processing-tmp/{id}` lazily.
+
+### Phase 4c — Helm
+
+- [x] `values.yaml`: new `worker.*` section parallel to `backend.*` (replicas: 0 default for R1; `worker.image.tag` falls through to `backend.image.tag` so a single release ships both pods at the same version). Backend gets two new keys: `backend.sprintProfilesActive` (empty default → `application.yml`'s `${SPRING_PROFILES_ACTIVE:api,worker}` applies, no behaviour change) and `backend.jobsDispatcherEnabled` (defaults `true`). **Slim `backend.*`** (`limits.memory: 1Gi`, JVM `-Xmx512m`) is deferred to the R2 release commit so R1 truly stays no-op.
+- [x] `deployment-backend.yaml`: env `SPRING_PROFILES_ACTIVE` rendered only when non-empty; env `JOBS_DISPATCHER_ENABLED` always rendered (default `"true"`).
+- [x] New `deployment-worker.yaml` (`{{ if .Values.worker.enabled }}`): same image/env block as backend, `SPRING_PROFILES_ACTIVE=worker`, **no Service / no Ingress**, ports 8081 only, `emptyDir` mount at `/app/uploads`, resources `limits: { cpu: 4000m, memory: 2Gi }` / `requests: { cpu: 500m, memory: 1Gi }`, JVM `-Xmx512m -XX:MaxRAMPercentage=35.0`, `replicas: {{ .Values.worker.replicas }}` (default 0 in R1 per **D22**).
+- [x] New `service-worker-metrics.yaml`: clone of `service-backend-metrics.yaml` with worker selector + matching `prometheus.io/scrape` annotations.
+- [x] `_helpers.tpl`: `photo-upload.worker.{fullname,labels,selectorLabels}` helpers (mirror backend).
+- [x] `NOTES.txt`: added `PhotoUploadWorkerDown` rule (uses `kube_deployment_status_replicas_available == 0` so a 0-replica R1 manifest doesn't false-alert). `PhotoUploadJobsBacklog` description rewritten to cover both pre-split (in-pod dispatcher) and post-split (worker pod) semantics.
+- [x] `helm template` + `helm lint` clean (pre-existing warnings about missing object-storage creds in defaults are unrelated).
+
+### Phase 4d — Circuit breaker for "MinIO unreachable"
+
+Fail-fast contract: 503 within ~50 ms, never hang Tomcat threads. Resilience4j (per **D16**).
+
+- [x] Added `resilience4j-circuitbreaker` + `resilience4j-micrometer` (core libs, not the `-spring-boot3` starter — keeps us Spring Boot version-agnostic and skips AOP we don't need; the breaker is invoked explicitly from the service layer).
+- [x] `ObjectStorageService` runs each SDK call through `breaker.executeSupplier(...)` / `executeRunnable(...)`. `CallNotPermittedException` (breaker OPEN) is translated to `MinioUnavailableException` → `GlobalExceptionHandler` 503 with `Retry-After: 30`. Wrapping at the service layer means **all callers** (api `FileStorageService.storeFile`, `ImageServeController` / `SlideshowRecordingController` reads, worker `FileProcessingService` download/put) get the breaker for free, without per-controller annotations.
+- [x] SDK timeouts on the `S3Client`: `apiCallAttemptTimeout=2s`, `apiCallTimeout=5s` (defaults were unbounded → 90 s SDK retries pinned Tomcat threads on outage). Retry count not adjusted explicitly — `apiCallTimeout=5s` upper-bounds retries inside the budget; the breaker handles repeated-failure fast-fail.
+- [x] `UploadBackpressureFilter` injects `Optional<CircuitBreaker> minioCircuitBreaker`; when state is `OPEN` it returns 503 + `Retry-After: 30` **before** parsing the multipart body — saves the staging cost during a MinIO outage.
+- [x] Serve paths automatically covered by the service-layer wrap (`ImageServeController` and `SlideshowRecordingController` both call `ObjectStorageService.openStream(...)` which is breakered). No per-controller annotations needed.
+- [x] `health/MinioHealthIndicator` flips readiness DOWN when the breaker is OPEN; HALF_OPEN reports UNKNOWN to avoid flapping during recovery; CLOSED is UP. K8s removes the api pod from the Service for the duration of an outage.
+- [x] Worker-side automatically covered (same service-layer wrap). When the worker can't reach MinIO mid-job, the SDK timeout raises through the breaker → `FileProcessingService` catches → `markFailedOrDeadLetter` runs the existing failure path.
+- [x] Resilience4j defaults configured programmatically in `ResilienceConfig` (not `application.yml` — since we skipped the Spring Boot starter, the YAML auto-config keys aren't wired). Values match the plan: `failureRateThreshold=50`, `slowCallRateThreshold=100`, `slowCallDurationThreshold=3s`, `slidingWindowSize=20`, `minimumNumberOfCalls=5`, `waitDurationInOpenState=10s`, `permittedNumberOfCallsInHalfOpenState=2`, `automaticTransitionFromOpenToHalfOpenEnabled=true`.
+- [x] `TaggedCircuitBreakerMetrics` bound to Micrometer so `resilience4j_circuitbreaker_state{name="minio",...}` etc. surface on `/actuator/prometheus` for both api and worker pods.
+
+### Phase 4e — Roll-out
+
+**R1 — manifests only.** `worker.enabled: true`, `worker.replicas: 0`, `backend.sprintProfilesActive: "api,worker"`. Validates rendering only. Behaviour identical to today.
+
+**R2 — worker takes processing.** `worker.replicas: 1`, `backend.sprintProfilesActive: "api"` (drops `worker`), `backend.jobsDispatcherEnabled: false` → api pod enqueues but never drains. `worker.sprintProfilesActive: "worker"`, `worker.jobsDispatcherEnabled: true`. Slim backend resources/JVM in the same release. `SELECT … FOR UPDATE SKIP LOCKED` makes any rolling-update overlap safe by construction. Soak 24 h. Note the subtle invariant: `dispatcher.enabled` controls the **enqueue contract** (insert as `QUEUED` vs `INGESTED`), not the drain — drain is profile-gated separately.
+
+**R3 — cleanup.** Delete `processFileAsync` + executor-fallback branch from `FileStorageService`. Remove `AsyncConfig.fileProcessingExecutor` (now unused). Drop `INGESTED` legacy from the `ProcessingStatus` enum (DB column kept). Drop the `Optional<ThumbnailService>` shim from `FileStorageService` entirely; admin/rotate methods removed (per **D17**) and filed as Phase 4.5 follow-up. Drop `MimeTypePredicates` / `LocalFileCleanupService` forwarders from `ThumbnailService`.
 
 ### Testing
-- [ ] Chaos: `kubectl scale deployment worker --replicas=0` mid-processing → lease expires → resumes when worker comes back.
-- [ ] `--replicas=2` → `SKIP LOCKED` ensures no duplicate processing.
+
+- [x] `WorkerProfileContextTest` / `ApiProfileContextTest` assert bean presence per profile (gated by `-Drun.testcontainers=true`, same as `ProcessingJobLeaseTest`).
+- [ ] Cross-profile JVM Testcontainers: spin two `SpringApplicationBuilder().profiles(...).run()` contexts against one MariaDB. Api context inserts `FileMetadata` + `ProcessingJob`; worker context picks it up; both rows reach `DONE`.
+- [ ] Chaos: `kubectl scale deploy/worker --replicas=0` mid-job → lease expires → resume on restart. `--replicas=2` → no asset has `processing_attempts > 1`.
+- [ ] CB chaos: `kubectl scale deploy/minio -n minio --replicas=0` → upload returns 503 within ~50 ms once breaker is OPEN; restore → recovery within ~20 s.
+
+### Risk / rollback
+
+R2 rollback: `backend.sprintProfilesActive=api,worker`, `backend.jobsDispatcherEnabled=true`, `worker.replicas=0`. Coexistence is safe at every step because of `SKIP LOCKED`. Per-pod `emptyDir` for processing scratch is the same restart-loses-in-flight property the PVC had post-Gap 8 — no new exposure.
+
+### Follow-ups (not blocking the split)
+
+- [ ] **Phase 4.5**: rewrite admin / rotate endpoints as worker-side jobs (per **D17**). Until then, api pod admin endpoints return 503 / `IllegalStateException`-mapped error.
 
 ---
 
@@ -247,6 +341,49 @@ Stale TUS uploads leave dangling MinIO objects. Set `tusd -expire-after=168h`; r
 
 ### Risk
 Irreversible deletion. Hence the conservative 7-day default and the alert-first phase.
+
+---
+
+## Gap 8 — Slideshow audio to S3 + backend PVC unmount (Phase 3 follow-up, landed 2026-04-29)
+
+Not in the original plan; surfaced when verifying the photo migration was complete and discovering `SlideshowRecordingService` still wrote durably to `${uploadDir}/recordings/`. That blocked the goal of detaching the backend pod from the durable PVC, so audio was migrated under the same direct-to-S3 model as photos.
+
+### S3 key convention (D-new)
+
+Distinct prefix `audio/{audioFilename}` for migrated/new recordings. Legacy paths `recordings/{audioFilename}` continue to mean local-disk relative path. The `audio_path` column is therefore self-describing — `StoragePaths.isAudioS3Key(path)` is the only routing predicate. Different prefix from photos (which already use `originals/`/`derivatives/`) so the audio migration cannot collide with the photo `recordings/` legacy convention.
+
+### Code
+
+- [x] `StoragePaths.AUDIO_PREFIX = "audio/"` plus `audioKey(filename)` and `isAudioS3Key(path)` helpers.
+- [x] `SlideshowRecordingService.saveRecording`: stream → temp file in `{uploadDir}/.audio-tmp/` → `audioReencodingService.reencodeAudio` (ffmpeg needs a local file) → `objectStorage.putFile(audio/{filename}, …)` → delete temp → store `audio_path = "audio/{filename}"`. Legacy disk path retained for non-S3 deployments via `Optional<ObjectStorageService>` injection.
+- [x] `SlideshowRecordingService.deleteRecording` is S3-aware: deletes the S3 object when the key is `audio/...`, falls through to the legacy file delete otherwise.
+- [x] `SlideshowRecordingController.getRecordingAudio` and `getRecordingAudioByPublicToken`: when `RecordingAudioInfo.storageKey` is set, in-band stream from MinIO with HTTP `Range` forwarded via `objectStorage.openStream(key, rangeHeader)`. Returns 200 / 206 + `Content-Range` as appropriate. (We deliberately did **not** 302 to a presigned URL because MinIO has no public ingress; the API pod must mediate.)
+- [x] `RecordingAudioInfo` carries `audioPath` (legacy local) **xor** `storageKey` (S3 backed), mirroring `FileServeInfo`.
+- [x] `SlideshowRecordingRepository` gains `countRecordingsOnLocalDisk`, `findRecordingsOnLocalDisk`, `findRecordingsOnObjectStorage` (keyset-paginated).
+
+### Migration & verification
+
+- [x] `RecordingMigrationService` mirrors `MigrationService`: HEAD-before-PUT, atomic per-row flip, idempotent re-runs.
+- [x] `RecordingVerificationService` mirrors the photo `VerificationService` hash mode. SHA-256 of `uploads/recordings/{filename}` vs SHA-256 of the MinIO object.
+- [x] Endpoints (gated by `storage.s3.enabled`):
+  - `POST /api/admin/migrate-recordings`, `GET .../status`, `POST .../cancel`
+  - `POST /api/admin/migrate-recordings/verify`, `GET .../verify/status`, `POST .../verify/cancel`
+- [x] **Outcome**: 41/41 recordings migrated, hash-verified 41/41 (0 missing, 0 hashMismatch, 0 errored).
+
+### Helm — PVC unmount
+
+- [x] `backend.persistence.mounted` (default `false` in chart values) toggles the deployment's `uploads` volume between `persistentVolumeClaim` and `emptyDir { sizeLimit: 5Gi }`. `enabled` still controls whether the PVC resource is rendered, so the PVC stays defined and Bound while detached from the running pod.
+- [x] `backend.persistence.emptyDirSizeLimit` (default `5Gi`) sized comfortably above peak transient footprint (largest in-flight upload + per-job derivative workdir + audio reencode temp).
+- [x] **Outcome**: live backend pod runs against `emptyDir` only. PVC remains Bound (30 GiB Longhorn) for byte-level recovery if ever needed; can be cleaned out / `--set persistence.enabled=false`'d later.
+
+### Risk / rollback
+
+`emptyDir` is per-pod ephemeral. A pod restart mid-upload kills any `.multipart-tmp` body Spring is currently staging — same property the PVC had, since per-request multipart was never durable. Rollback is `--set backend.persistence.mounted=true`.
+
+### Follow-up
+
+- [ ] Wipe the historical contents of the unmounted PVC (24 GB photos + 55 MB recordings, all in MinIO and hash-verified).
+- [ ] Once confidence is established, `--set backend.persistence.enabled=false` retires the PVC entirely.
 
 ---
 

@@ -1,0 +1,30 @@
+{{- if and .Values.worker.enabled .Values.monitoring.scrape.enabled }}
+# Headless Service for Prometheus scrape of the worker pod's management port. Mirrors
+# service-backend-metrics.yaml — the standalone prometheus chart's
+# `kubernetes-service-endpoints` SD job picks up annotated Services. Without this we'd lose
+# per-worker JVM/heap metrics; queue-depth gauges would still be visible from the api pod
+# (both pods publish them, same DB), but per-pod GC / heap diagnostics would be one-sided.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "photo-upload.worker.fullname" . }}-metrics
+  labels:
+    {{- include "photo-upload.worker.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.monitoring.scrape.port | quote }}
+    prometheus.io/path: {{ .Values.monitoring.scrape.path | quote }}
+    {{- with .Values.monitoring.scrape.additionalAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ .Values.monitoring.scrape.port }}
+      targetPort: management
+      protocol: TCP
+      name: management
+  selector:
+    {{- include "photo-upload.worker.selectorLabels" . | nindent 4 }}
+{{- end }}

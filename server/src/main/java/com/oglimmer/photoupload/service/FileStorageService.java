@@ -1,6 +1,9 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
+import org.springframework.context.annotation.Profile;
+
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.Album;
@@ -22,6 +25,8 @@ import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
+import com.oglimmer.photoupload.storage.StoragePaths;
+import com.oglimmer.photoupload.util.MimeTypePredicates;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,6 +57,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
+@Profile(Profiles.API)
 @Service
 @Slf4j
 public class FileStorageService {
@@ -96,15 +102,26 @@ public class FileStorageService {
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
-  private final ThumbnailService thumbnailService;
+  // Worker-only after the deployment split (Phase 4a). The api pod boots with this empty; the
+  // remaining heavy admin methods (rotate, generateMissingThumbnails, etc.) throw when invoked
+  // until they are rewritten as worker-side jobs (Phase 4.5, D17).
+  private final Optional<ThumbnailService> thumbnailService;
+  private final LocalFileCleanupService localFileCleanupService;
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
-  private final FileProcessingService fileProcessingService;
+  // Worker-only after Phase 4a. The legacy @Async fallback (used when
+  // {@code jobs.dispatcher.enabled=false}) is the only call site; on api-only deploys with the
+  // dispatcher enabled, the empty Optional is never read. Misconfigurations fail fast.
+  private final Optional<FileProcessingService> fileProcessingService;
   private final JobEnqueueService jobEnqueueService;
   private final JobsProperties jobsProperties;
+  // Optional: present iff storage.s3.enabled=true. When present, the upload path PUTs the body
+  // directly to MinIO and stores an S3 key in file_path; the local PVC is used only for Spring's
+  // transient .multipart-tmp staging (auto-cleaned per request) and per-job processing scratch.
+  private final Optional<ObjectStorageService> objectStorage;
 
   public FileStorageService(
       FileStorageProperties properties,
@@ -112,21 +129,24 @@ public class FileStorageService {
       TagRepository tagRepository,
       ImageTagRepository imageTagRepository,
       AlbumEnabledTagRepository albumEnabledTagRepository,
-      ThumbnailService thumbnailService,
+      Optional<ThumbnailService> thumbnailService,
+      LocalFileCleanupService localFileCleanupService,
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
-      FileProcessingService fileProcessingService,
+      Optional<FileProcessingService> fileProcessingService,
       JobEnqueueService jobEnqueueService,
-      JobsProperties jobsProperties) {
+      JobsProperties jobsProperties,
+      Optional<ObjectStorageService> objectStorage) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
     this.imageTagRepository = imageTagRepository;
     this.albumEnabledTagRepository = albumEnabledTagRepository;
     this.thumbnailService = thumbnailService;
+    this.localFileCleanupService = localFileCleanupService;
     this.jdbcTemplate = jdbcTemplate;
     this.fileInfoMapper = fileInfoMapper;
     this.albumRepository = albumRepository;
@@ -136,6 +156,7 @@ public class FileStorageService {
     this.fileProcessingService = fileProcessingService;
     this.jobEnqueueService = jobEnqueueService;
     this.jobsProperties = jobsProperties;
+    this.objectStorage = objectStorage;
   }
 
   @PostConstruct
@@ -176,6 +197,19 @@ public class FileStorageService {
    */
   public Path resolveFilePath(String relativePath) {
     return toAbsolutePath(relativePath);
+  }
+
+  /**
+   * Resolve the thumbnailer for admin/rotate paths. Empty on api-only deployments after the worker
+   * split (Phase 4a, D17) — those endpoints are documented broken until the Phase 4.5 worker-job
+   * rewrite. Throws so the controller maps to a clear 5xx instead of NPE'ing later.
+   */
+  private ThumbnailService requireThumbnailer() {
+    return thumbnailService.orElseThrow(
+        () ->
+            new IllegalStateException(
+                "Image processing is not available on this pod (worker profile required). "
+                    + "Admin/rotate endpoints are deferred to a worker-side job; see plan D17."));
   }
 
   public FileInfo storeFile(MultipartFile file, Long albumId, String contentId) throws IOException {
@@ -236,23 +270,24 @@ public class FileStorageService {
       }
     }
 
-    // Generate a unique final name and a sibling temp file. We stream the upload to the
-    // temp path while computing the SHA-256 in a single pass — no full-file heap buffering,
-    // so upload memory is O(64 KiB) regardless of file size.
+    // Generate a unique final name. With direct-to-S3 we never write a durable file under our
+    // own control: Spring's multipart parser stages the body in .multipart-tmp (transient), we
+    // hash it in one pass, then PUT the same staged body to MinIO in a second read. No
+    // ATOMIC_MOVE on the PVC, no .tmp left behind on errors.
     String originalFilename = file.getOriginalFilename();
     String extension = getFileExtension(originalFilename);
     String nameWithoutExtension = getFilenameWithoutExtension(originalFilename);
     String uniqueSuffix =
         System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
-    Path targetLocation = this.fileStorageLocation.resolve(newFilename);
-    Path tempLocation = this.fileStorageLocation.resolve("." + newFilename + ".tmp");
+    boolean useObjectStorage = objectStorage.isPresent();
 
-    final String checksum = streamToDiskWithChecksum(file, tempLocation);
+    // Pre-compute the checksum so duplicate detection can fail fast before we touch S3 / disk.
+    // Reads MultipartFile.getInputStream() once — Spring serves it from the multipart staging
+    // file, which is on the PVC but auto-cleaned per request.
+    final String checksum = computeSha256(file);
 
     // Check for duplicate by checksum (same album and other albums) in a single transaction.
-    // If the payload matches an existing file, drop what we just streamed and return the
-    // existing record — the streamed bytes were cheap (disk, not heap).
     FileInfo duplicateByChecksum =
         !properties.isDuplicateDetectionEnabled()
             ? null
@@ -291,26 +326,37 @@ public class FileStorageService {
                   return null;
                 });
     if (duplicateByChecksum != null) {
-      try {
-        Files.deleteIfExists(tempLocation);
-      } catch (IOException e) {
-        log.warn("Could not delete temp file after duplicate detection: {}", tempLocation, e);
-      }
       return duplicateByChecksum;
     }
 
-    // Promote temp file to its final name. ATOMIC_MOVE ensures readers never see a half-written
-    // file.
-    Files.move(tempLocation, targetLocation, StandardCopyOption.ATOMIC_MOVE);
-
     String contentType = file.getContentType();
-    log.info("✅ File uploaded: {} ({})", originalFilename, formatBytes(file.getSize()));
+
+    // Persist the bytes. With S3 enabled the storage of record is MinIO; otherwise fall back to
+    // the legacy local-disk write so tests / non-S3 deployments still function.
+    final String storedPath;
+    if (useObjectStorage) {
+      String storageKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
+      try (InputStream in = file.getInputStream()) {
+        objectStorage.get().putStream(storageKey, in, file.getSize(), contentType);
+      }
+      storedPath = storageKey;
+      log.info("✅ File uploaded to S3: {} ({})", originalFilename, formatBytes(file.getSize()));
+    } else {
+      Path targetLocation = this.fileStorageLocation.resolve(newFilename);
+      Path tempLocation = this.fileStorageLocation.resolve("." + newFilename + ".tmp");
+      try (InputStream in = file.getInputStream()) {
+        Files.copy(in, tempLocation, StandardCopyOption.REPLACE_EXISTING);
+      }
+      Files.move(tempLocation, targetLocation, StandardCopyOption.ATOMIC_MOVE);
+      storedPath = toRelativePath(targetLocation);
+      log.info("✅ File uploaded to disk: {} ({})", originalFilename, formatBytes(file.getSize()));
+    }
 
     // Insert metadata row immediately with null thumbnails/transcoded paths — processing
     // will fill those in asynchronously and save again.
-    final Path finalTargetLocation = targetLocation;
     final String finalNewFilename = newFilename;
     final String finalContentType = contentType;
+    final String finalStoredPath = storedPath;
     FileInfo result =
         transactionTemplate.execute(
             status -> {
@@ -319,7 +365,7 @@ public class FileStorageService {
               metadata.setStoredFilename(finalNewFilename);
               metadata.setFileSize(file.getSize());
               metadata.setMimeType(finalContentType);
-              metadata.setFilePath(toRelativePath(finalTargetLocation));
+              metadata.setFilePath(finalStoredPath);
               metadata.setUploadedAt(Instant.now());
               metadata.setChecksum(checksum);
               metadata.setContentId(contentId);
@@ -356,8 +402,14 @@ public class FileStorageService {
       // Legacy path: hand the new asset id to the @Async executor directly. If the executor
       // queue is full and AbortPolicy rejects us, the row already exists and can be
       // reprocessed later; we log and return success so the client doesn't double-upload.
+      FileProcessingService legacy =
+          fileProcessingService.orElseThrow(
+              () ->
+                  new IllegalStateException(
+                      "jobs.dispatcher.enabled=false but FileProcessingService is not loaded "
+                          + "(worker profile required). Enable the dispatcher on api-only deploys."));
       try {
-        fileProcessingService.processFileAsync(result.getId());
+        legacy.processFileAsync(result.getId());
       } catch (TaskRejectedException e) {
         log.warn(
             "Processing task rejected after insert for {} (id={}); row retained for later reprocess",
@@ -501,30 +553,24 @@ public class FileStorageService {
   }
 
   /**
-   * Copy the uploaded part to {@code target} while computing its SHA-256. Uses a fixed-size 64 KiB
-   * buffer so memory use is independent of file size — a 500 MB upload costs 64 KiB, not 500 MB.
-   * The target temp file is removed on any error so we never leak partial files.
+   * Compute SHA-256 of an uploaded part by reading {@link MultipartFile#getInputStream()} once.
+   * Spring serves the body from its multipart staging file, so this is a streaming read with a
+   * 64 KiB buffer — memory use is independent of file size.
    */
-  private String streamToDiskWithChecksum(MultipartFile file, Path target) throws IOException {
+  private String computeSha256(MultipartFile file) throws IOException {
     MessageDigest digest;
     try {
       digest = MessageDigest.getInstance("SHA-256");
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("SHA-256 unavailable", e);
     }
-
+    byte[] buf = new byte[64 * 1024];
     try (InputStream in = file.getInputStream();
         DigestInputStream dis = new DigestInputStream(in, digest)) {
-      Files.copy(dis, target, StandardCopyOption.REPLACE_EXISTING);
-    } catch (IOException e) {
-      try {
-        Files.deleteIfExists(target);
-      } catch (IOException cleanupError) {
-        e.addSuppressed(cleanupError);
+      while (dis.read(buf) > 0) {
+        // DigestInputStream feeds the digest as a side effect of read.
       }
-      throw e;
     }
-
     byte[] hash = digest.digest();
     StringBuilder hex = new StringBuilder(hash.length * 2);
     for (byte b : hash) {
@@ -555,13 +601,14 @@ public class FileStorageService {
         log.info("Deleted file: {}", metadata.getStoredFilename());
 
         // Delete thumbnails
-        thumbnailService.deleteThumbnails(
+        localFileCleanupService.deleteThumbnails(
             toAbsolutePath(metadata.getThumbnailPath()),
             toAbsolutePath(metadata.getMediumPath()),
             toAbsolutePath(metadata.getLargePath()));
 
         // Delete transcoded video if exists
-        thumbnailService.deleteTranscodedVideo(toAbsolutePath(metadata.getTranscodedVideoPath()));
+        localFileCleanupService.deleteTranscodedVideo(
+            toAbsolutePath(metadata.getTranscodedVideoPath()));
       } catch (IOException e) {
         log.error("Error deleting file", e);
         throw new StorageException("Could not delete file: " + e.getMessage(), e);
@@ -694,6 +741,7 @@ public class FileStorageService {
    * @param overwrite If true, regenerate all thumbnails even if they already exist
    */
   public Map<String, Object> generateMissingThumbnails(boolean overwrite) {
+    ThumbnailService thumb = requireThumbnailer();
     int processed = 0;
     int succeeded = 0;
     int failed = 0;
@@ -714,7 +762,7 @@ public class FileStorageService {
       }
 
       // Skip if not an image
-      if (!thumbnailService.isImageFile(metadata.getMimeType())) {
+      if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
         skipped++;
         continue;
       }
@@ -731,14 +779,14 @@ public class FileStorageService {
 
         // If overwriting, delete existing thumbnails first (disk I/O, no transaction needed)
         if (overwrite) {
-          thumbnailService.deleteThumbnails(
+          localFileCleanupService.deleteThumbnails(
               toAbsolutePath(metadata.getThumbnailPath()),
               toAbsolutePath(metadata.getMediumPath()),
               toAbsolutePath(metadata.getLargePath()));
         }
 
         // Generate thumbnails (CPU/disk intensive, no transaction needed)
-        Path[] thumbnails = thumbnailService.generateAllThumbnails(originalFile, originalFile);
+        Path[] thumbnails = thumb.generateAllThumbnails(originalFile, originalFile);
 
         boolean anyGenerated = false;
         if (thumbnails[0] != null) {
@@ -1034,7 +1082,11 @@ public class FileStorageService {
       mimeType = "video/mp4";
     }
 
-    Path absolutePath = toAbsolutePath(filePath);
+    // Migrated rows hold an S3 object key (originals/... or derivatives/...). Leave the local
+    // Path null in that case so the controller fails loudly if it forgets to check storageKey,
+    // and route serve via ObjectStorageService instead.
+    boolean s3Backed = StoragePaths.isS3Key(filePath);
+    Path absolutePath = s3Backed ? null : toAbsolutePath(filePath);
 
     return new FileServeInfo(
         mimeType,
@@ -1043,7 +1095,8 @@ public class FileStorageService {
         absolutePath,
         metadata.getStoredFilename(),
         metadata.getProcessingStatus(),
-        derivativeReady);
+        derivativeReady,
+        s3Backed ? filePath : null);
   }
 
   private FileInfo convertToFileInfo(FileMetadata metadata) {
@@ -1123,6 +1176,7 @@ public class FileStorageService {
    * @param fileId The ID of the file to rotate
    */
   public void rotateImageLeft(Long fileId) {
+    ThumbnailService thumb = requireThumbnailer();
     log.info("========================================");
     log.info("📸 Rotation request received for file ID: {}", fileId);
 
@@ -1139,7 +1193,7 @@ public class FileStorageService {
         "   Current rotation: {}°", metadata.getRotation() != null ? metadata.getRotation() : 0);
 
     // Verify this is an image file
-    if (!thumbnailService.isImageFile(metadata.getMimeType())) {
+    if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
       log.error("❌ Cannot rotate: not an image file");
       throw new ValidationException("Only image files can be rotated");
     }
@@ -1157,7 +1211,7 @@ public class FileStorageService {
     try {
       // Rotate the original image file (disk I/O, no transaction needed)
       log.info("   Starting image rotation...");
-      boolean rotateSuccess = thumbnailService.rotateImageLeft(originalFile);
+      boolean rotateSuccess = thumb.rotateImageLeft(originalFile);
       if (!rotateSuccess) {
         log.error("❌ ThumbnailService.rotateImageLeft returned false");
         throw new StorageException("Failed to rotate image file");
@@ -1166,7 +1220,7 @@ public class FileStorageService {
 
       // Delete existing thumbnails (disk I/O, no transaction needed)
       log.info("   Deleting old thumbnails...");
-      thumbnailService.deleteThumbnails(
+      localFileCleanupService.deleteThumbnails(
           toAbsolutePath(metadata.getThumbnailPath()),
           toAbsolutePath(metadata.getMediumPath()),
           toAbsolutePath(metadata.getLargePath()));
@@ -1174,7 +1228,7 @@ public class FileStorageService {
       // Regenerate all thumbnails with the rotated image (CPU/disk intensive, no transaction
       // needed)
       log.info("   Regenerating thumbnails...");
-      Path[] thumbnails = thumbnailService.generateAllThumbnails(originalFile, originalFile);
+      Path[] thumbnails = thumb.generateAllThumbnails(originalFile, originalFile);
 
       // Update thumbnail paths
       if (thumbnails[0] != null) {

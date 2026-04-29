@@ -1,0 +1,30 @@
+{{- if .Values.monitoring.scrape.enabled }}
+# Headless Service that exists purely so the standalone prometheus chart's
+# `kubernetes-service-endpoints` SD job discovers and scrapes the management
+# port. Keeping it separate from the API Service avoids enumerating both
+# 8080 and 8081 endpoints (which the relabel rule would then collapse to a
+# single target with implementation-defined dedup behaviour).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "photo-upload.backend.fullname" . }}-metrics
+  labels:
+    {{- include "photo-upload.backend.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.monitoring.scrape.port | quote }}
+    prometheus.io/path: {{ .Values.monitoring.scrape.path | quote }}
+    {{- with .Values.monitoring.scrape.additionalAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: {{ .Values.monitoring.scrape.port }}
+      targetPort: management
+      protocol: TCP
+      name: management
+  selector:
+    {{- include "photo-upload.backend.selectorLabels" . | nindent 4 }}
+{{- end }}
