@@ -74,8 +74,10 @@ spec:
         - name: SPRING_PROFILES_ACTIVE
           value: {{ .Values.backend.sprintProfilesActive | quote }}
         {{- end }}
+        # `| default true` would treat the legitimate value `false` as falsy and flip it to
+        # "true" — values.yaml is the source of truth for the default instead.
         - name: JOBS_DISPATCHER_ENABLED
-          value: {{ .Values.backend.jobsDispatcherEnabled | default true | quote }}
+          value: {{ .Values.backend.jobsDispatcherEnabled | quote }}
         - name: FILE_UPLOAD_BASE_PATH
           value: {{ .Values.backend.persistence.mountPath | quote }}
         - name: APP_BASE_URL

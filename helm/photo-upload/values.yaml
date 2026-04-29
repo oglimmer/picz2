@@ -20,21 +20,21 @@ backend:
     port: 8080
 
   resources:
-    # Honest budget after streaming uploads + bounded native memory: steady state ~1.2 GiB, peak
-    # with one ImageMagick subprocess ~2.2 GiB. 3Gi limit gives headroom; requests raised so the
-    # scheduler actually reserves the working set instead of relying on burst oversubscription.
+    # R2 slim: api pod no longer runs ImageMagick / ffmpeg / vips. Heavy work moved to the worker
+    # pod (Phase 4e). Steady-state api footprint is just heap + Tomcat NIO + S3 SDK direct buffers.
+    # 1Gi limit is comfortable; requests sized at 768Mi so the scheduler reserves the working set.
     limits:
       cpu: 4000m
-      memory: 3Gi
+      memory: 1Gi
     requests:
       cpu: 500m
-      memory: 1536Mi
+      memory: 768Mi
 
-  # Heap caps at 1Gi; direct-memory cap at 256Mi prevents Tomcat NIO's DirectByteBuffer pool from
-  # quietly growing to Xmx. ExitOnOutOfMemoryError turns any heap OOM into a fast pod restart
-  # instead of a staggering zombie. NativeMemoryTracking=summary keeps jcmd VM.native_memory
-  # available for diagnosis without meaningful runtime cost.
-  javaOpts: "-Xmx1024m -Xms512m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"
+  # R2 slim: heap halved to 512m since api no longer holds derivative bytes in flight. Direct-memory
+  # cap at 256Mi prevents Tomcat NIO's DirectByteBuffer pool from quietly growing to Xmx.
+  # ExitOnOutOfMemoryError turns any heap OOM into a fast pod restart instead of a staggering
+  # zombie. NativeMemoryTracking=summary keeps jcmd VM.native_memory available for diagnosis.
+  javaOpts: "-Xmx512m -Xms256m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"
 
   # Max concurrent image/video processing operations (HEIC conversion, thumbnails, transcoding)
   maxConcurrentProcessing: 1
@@ -42,11 +42,11 @@ backend:
   # receive HTTP 503 with Retry-After so clients back off instead of stalling the pod.
   processingQueueCapacity: 50
 
-  # Phase 4 deployment-split knobs. R1 leaves both blank → application.yml default
-  # (api,worker) loads both profiles into the api pod. R2 sets sprintProfilesActive=api and
-  # jobsDispatcherEnabled=false here so the api pod stops draining; the worker pod takes over.
-  sprintProfilesActive: ""
-  jobsDispatcherEnabled: true
+  # Phase 4 deployment-split knobs. R2: api pod runs api profile only, dispatcher off — backend
+  # still enqueues processing_jobs rows on upload but never drains them. Worker pod (replicas: 1
+  # below) takes over draining. R1 had both blank for a no-op manifest validation; we're past R1.
+  sprintProfilesActive: "api"
+  jobsDispatcherEnabled: false
 
   # Persistent volume for uploads.
   #
@@ -82,8 +82,9 @@ worker:
     repository: registry.oglimmer.com/picz2-be
     pullPolicy: Always
     tag: ""
-  # Stays at 0 until R1 manifest validation completes. R2 bumps to 1.
-  replicas: 0
+  # R2: 1 worker pod drains processing_jobs. Each pod has Semaphore(1), so scale-out gives
+  # parallelism but isn't required day-1 on the single-node Pi cluster (per D22).
+  replicas: 1
   # Heavy pipeline budget: ImageMagick / HEIC + ffmpeg can each push native memory toward
   # 1.5 GiB. JVM heap is capped low (-Xmx512m) since most of the work happens in subprocesses.
   resources:

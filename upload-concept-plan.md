@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-29 (Phase 3b direct-to-S3 writes landed; slideshow audio migrated to S3; backend PVC unmounted in favour of emptyDir; Gap 2b expanded into phased plan with D16–D22 accepted)
+Last reviewed: 2026-04-29 (Phase 4e R1+R2 landed: worker pod drains processing_jobs on its own profile, backend slimmed to api-only with dispatcher off, three additional services profile-gated during R2 pre-flight, Helm `| default true` boolean-falsy bug patched. R3 cleanup deferred until 24 h soak.)
 
 ---
 
@@ -234,8 +234,8 @@ The api pod must boot without pulling Vips/Heic/Ffmpeg beans. Today `FileStorage
 Both profiles still co-located in one Deployment. `SPRING_PROFILES_ACTIVE` defaults to `api,worker` so existing deploys keep working. New `Profiles` constants class for grep-ability.
 
 - [x] **Worker-only** (`@Profile(Profiles.WORKER)`): `JobDispatcher`, `FileProcessingService`, `ThumbnailService`, `VipsThumbnailService`, `HeicConversionService`, `FfmpegService`, `JobLeaseService`.
-- [x] **API-only** (`@Profile(Profiles.API)`, class-level per **D20**): all 18 controllers, `FileStorageService`, `SlideshowRecordingService`, `UploadBackpressureFilter`, `AsyncConfig`, `SecurityConfig`, `WebConfig`, `OpenApiConfig`, `MigrationService` / `RecordingMigrationService`, `VerificationService` / `RecordingVerificationService`, `EmailService`, `ApnsService`, `DeviceTokenService` (cron), `AlbumSubscriptionNotificationService` (cron). Last two **must** be api-gated or both pods double-fire the cron.
-- [x] **Both profiles** (no `@Profile`): all repositories, `ObjectStorageService` + `ObjectStorageConfig`, `BucketBootstrapper`, `JobEnqueueService`, `JobQueueDepthService`, `JobMetricsConfig`, `JobsProperties`, `AudioReencodingService` (per **D18**), all "utility" services (`AlbumService`, `TagService`, `UserService`, etc.) — worker happens to load these too but they have no schedulers and no heavy deps, so the cost is bytecode load only.
+- [x] **API-only** (`@Profile(Profiles.API)`, class-level per **D20**): all 18 controllers, `FileStorageService`, `SlideshowRecordingService`, `UploadBackpressureFilter`, `AsyncConfig`, `SecurityConfig`, `WebConfig`, `OpenApiConfig`, `MigrationService` / `RecordingMigrationService`, `VerificationService` / `RecordingVerificationService`, `EmailService`, `ApnsService`, `DeviceTokenService` (cron), `AlbumSubscriptionNotificationService` (cron), **`AlbumService` / `UserService` / `AlbumSubscriptionService`** (added during R2 pre-flight — each transitively depends on `FileStorageService` or `EmailService`). Last two crons **must** be api-gated or both pods double-fire.
+- [x] **Both profiles** (no `@Profile`): all repositories, `ObjectStorageService` + `ObjectStorageConfig`, `BucketBootstrapper`, `JobEnqueueService`, `JobQueueDepthService`, `JobMetricsConfig`, `JobsProperties`, `AudioReencodingService` (per **D18**), shared "utility" services (`TagService`, `GallerySettingService`, etc.). Original plan listed `AlbumService` / `UserService` / `AlbumSubscriptionService` here; R2 pre-flight boot smoke caught that each injects an api-only bean (`FileStorageService` for `AlbumService`, `EmailService` for the other two) — they were promoted to API-only above.
 - [x] `FileStorageService` switches `ThumbnailService` injection to `Optional<ThumbnailService>`; admin/rotate methods throw `IllegalStateException` when empty via a `requireThumbnailer()` helper (api pod, post-split). Per **D17** those endpoints are documented broken until Phase 4.5. **Also discovered**: `FileProcessingService` injection had the same shape (legacy `@Async` fallback path), so it's likewise wrapped in `Optional<>` with an `IllegalStateException` if `jobs.dispatcher.enabled=false` on api-only deploys. `AlbumService` gets `Optional<ThumbnailService>` for the same reason (video-date backfill skipped when absent).
 - [x] `application.yml` defaults `spring.profiles.active=${SPRING_PROFILES_ACTIVE:api,worker}` so existing deploys, dev runs, and the unit-test suite keep loading both profiles. Per-pod env (`api` / `worker`) overrides at R2.
 - [x] New `config/Profiles.java` constants class — `Profiles.API` / `Profiles.WORKER`, used in every `@Profile` annotation.
@@ -273,11 +273,15 @@ Fail-fast contract: 503 within ~50 ms, never hang Tomcat threads. Resilience4j (
 
 ### Phase 4e — Roll-out
 
-**R1 — manifests only.** `worker.enabled: true`, `worker.replicas: 0`, `backend.sprintProfilesActive: "api,worker"`. Validates rendering only. Behaviour identical to today.
+**R1 — manifests only.** [x] **Landed 2026-04-29 ~18:00 (Helm rev 19).** `worker.enabled: true`, `worker.replicas: 0`, `backend.sprintProfilesActive: ""` (falls through to `application.yml` default `api,worker`). Manifest validation only; behaviour identical to pre-split.
 
-**R2 — worker takes processing.** `worker.replicas: 1`, `backend.sprintProfilesActive: "api"` (drops `worker`), `backend.jobsDispatcherEnabled: false` → api pod enqueues but never drains. `worker.sprintProfilesActive: "worker"`, `worker.jobsDispatcherEnabled: true`. Slim backend resources/JVM in the same release. `SELECT … FOR UPDATE SKIP LOCKED` makes any rolling-update overlap safe by construction. Soak 24 h. Note the subtle invariant: `dispatcher.enabled` controls the **enqueue contract** (insert as `QUEUED` vs `INGESTED`), not the drain — drain is profile-gated separately.
+**R2 — worker takes processing.** [x] **Landed 2026-04-29 ~20:43 (Helm rev 20, image `picz2-be:1.0.33`).** `worker.replicas: 1`, `backend.sprintProfilesActive: "api"` (drops `worker`), `backend.jobsDispatcherEnabled: false` → api pod enqueues but never drains. `worker.sprintProfilesActive: "worker"`, `worker.jobsDispatcherEnabled: true`. Backend slimmed: `limits.memory 3Gi → 1Gi`, `requests.memory 1536Mi → 768Mi`, `-Xmx1024m → 512m`, `-Xms512m → 256m`. `SELECT … FOR UPDATE SKIP LOCKED` makes any rolling-update overlap safe. Soak 24 h before R3. Subtle invariant: `dispatcher.enabled` controls the **enqueue contract** (insert as `QUEUED` vs `INGESTED`), not the drain — drain is profile-gated separately.
 
-**R3 — cleanup.** Delete `processFileAsync` + executor-fallback branch from `FileStorageService`. Remove `AsyncConfig.fileProcessingExecutor` (now unused). Drop `INGESTED` legacy from the `ProcessingStatus` enum (DB column kept). Drop the `Optional<ThumbnailService>` shim from `FileStorageService` entirely; admin/rotate methods removed (per **D17**) and filed as Phase 4.5 follow-up. Drop `MimeTypePredicates` / `LocalFileCleanupService` forwarders from `ThumbnailService`.
+  **R2 pre-flight findings** (caught by local boot smoke when Testcontainers couldn't run on Docker Desktop):
+  - `AlbumService`, `UserService`, `AlbumSubscriptionService` were listed as "shared" in Phase 4a but each transitively depended on an api-only bean (`FileStorageService` / `EmailService`). Worker boot crashed `UnsatisfiedDependencyException`. Fixed by adding `@Profile(API)` (committed 24d5e43). Phase 4a list updated above.
+  - Helm template bug: `value: {{ .Values.backend.jobsDispatcherEnabled | default true | quote }}` rendered `false` as `"true"` because Go-template `default` treats boolean `false` as falsy. Same bug in worker template. Patched both — `default` removed; `values.yaml` is the source of truth.
+
+**R3 — cleanup.** Delete `processFileAsync` + executor-fallback branch from `FileStorageService`. Remove `AsyncConfig.fileProcessingExecutor` (now unused). Drop `INGESTED` legacy from the `ProcessingStatus` enum (DB column kept). Drop the `Optional<ThumbnailService>` shim from `FileStorageService` entirely; admin/rotate methods removed (per **D17**) and filed as Phase 4.5 follow-up. Drop `MimeTypePredicates` / `LocalFileCleanupService` forwarders from `ThumbnailService`. Drop the `Optional<FileStorageService>` / `Optional<ThumbnailService>` shims from `AlbumService` (the dead video-date backfill loop becomes a Phase 4.5 worker-job follow-up).
 
 ### Testing
 
@@ -293,6 +297,7 @@ R2 rollback: `backend.sprintProfilesActive=api,worker`, `backend.jobsDispatcherE
 ### Follow-ups (not blocking the split)
 
 - [ ] **Phase 4.5**: rewrite admin / rotate endpoints as worker-side jobs (per **D17**). Until then, api pod admin endpoints return 503 / `IllegalStateException`-mapped error.
+- [ ] **`/actuator/prometheus` returns 401** (pre-existing, surfaced during R2 verification). API pod's `SecurityConfig` only permits `/actuator/health/**` and `/actuator/info`; worker has no `SecurityConfig` so falls to Spring Security secure-by-default. Means the `PhotoUploadJobsBacklog` / `PhotoUploadJobsDeadLetter` alerts in `NOTES.txt` would never fire because the scrape itself fails. Permit `/actuator/prometheus` (cluster-network only) on both pods, or add a worker-side `WorkerSecurityConfig` (`@Profile(WORKER)`) that allows the actuator namespace.
 
 ---
 
