@@ -104,10 +104,9 @@ public class TagService {
     String oldName = tag.getName();
     tag.setName(newTagName);
 
-    Tag updatedTag = tagRepository.save(tag);
     log.info("Updated tag: {} -> {} for user: {}", oldName, newTagName, currentUser.getEmail());
 
-    return tagMapper.tagToTagInfo(updatedTag);
+    return tagMapper.tagToTagInfo(tag);
   }
 
   @Transactional

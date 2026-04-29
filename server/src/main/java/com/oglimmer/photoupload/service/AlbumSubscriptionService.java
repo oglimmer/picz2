@@ -65,7 +65,6 @@ public class AlbumSubscriptionService {
             "Subscription already exists. Confirmation email resent.");
       }
 
-      subscriptionRepository.save(subscription);
       return mapToResponse(subscription, "Subscription updated successfully.");
     }
 
@@ -117,7 +116,6 @@ public class AlbumSubscriptionService {
     }
 
     subscription.setConfirmed(true);
-    subscriptionRepository.save(subscription);
 
     log.info(
         "Subscription confirmed for email: {} on album: {}",
@@ -144,7 +142,6 @@ public class AlbumSubscriptionService {
                         "Subscription", "unsubscribeToken", unsubscribeToken));
 
     subscription.setActive(false);
-    subscriptionRepository.save(subscription);
 
     log.info(
         "Subscription deactivated via token for email: {} on album: {}",
@@ -180,7 +177,6 @@ public class AlbumSubscriptionService {
                             + album.getName()));
 
     subscription.setActive(false);
-    subscriptionRepository.save(subscription);
 
     log.info("Subscription deactivated for email: {} on album: {}", email, album.getName());
 

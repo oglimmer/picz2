@@ -87,7 +87,6 @@ public class UserService {
     user.setVerificationToken(null);
     user.setVerificationTokenExpiry(null);
 
-    userRepository.save(user);
     log.info("User {} verified successfully", user.getEmail());
 
     // Send welcome email
@@ -114,7 +113,6 @@ public class UserService {
     user.setVerificationToken(token);
     user.setVerificationTokenExpiry(Instant.now().plus(24, ChronoUnit.HOURS));
 
-    userRepository.save(user);
     log.info("Resending verification email for user: {}", user.getEmail());
 
     // Send verification email
@@ -138,7 +136,6 @@ public class UserService {
     user.setPasswordResetToken(token);
     user.setPasswordResetTokenExpiry(Instant.now().plus(1, ChronoUnit.HOURS));
 
-    userRepository.save(user);
     log.info("Password reset requested for user: {}", user.getEmail());
 
     // Send reset email
@@ -168,7 +165,6 @@ public class UserService {
     user.setPasswordResetToken(null);
     user.setPasswordResetTokenExpiry(null);
 
-    userRepository.save(user);
     log.info("Password reset successfully for user: {}", user.getEmail());
   }
 
@@ -203,7 +199,6 @@ public class UserService {
 
     // Update to new password
     user.setPassword(passwordEncoder.encode(newPassword));
-    userRepository.save(user);
     log.info("Password changed successfully for user: {}", user.getEmail());
   }
 

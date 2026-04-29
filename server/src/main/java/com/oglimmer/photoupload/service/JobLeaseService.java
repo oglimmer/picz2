@@ -59,7 +59,6 @@ public class JobLeaseService {
     job.setLeasedUntil(null);
     job.setLeasedBy(null);
     job.setLastError(null);
-    jobRepository.save(job);
   }
 
   /**
@@ -91,7 +90,6 @@ public class JobLeaseService {
     job.setLeasedUntil(null);
     job.setLeasedBy(null);
     job.setLastError(truncate(errorMessage));
-    jobRepository.save(job);
   }
 
   private String truncate(String s) {

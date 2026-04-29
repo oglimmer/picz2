@@ -123,7 +123,6 @@ public class AlbumService {
     }
 
     album.setUpdatedAt(Instant.now());
-    album = albumRepository.save(album);
 
     log.info("Updated album: {} for user: {}", album.getName(), currentUser.getEmail());
     return convertToAlbumInfo(album);
@@ -177,7 +176,6 @@ public class AlbumService {
       Long albumId = albumIds.get(i);
       Album album = albumRepository.findByUserAndId(currentUser, albumId).orElseThrow();
       album.setDisplayOrder(i);
-      albumRepository.save(album);
     }
 
     log.info("Reordered {} albums for user: {}", albumIds.size(), currentUser.getEmail());

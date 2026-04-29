@@ -39,7 +39,7 @@ public class DeviceTokenService {
       token.setIsActive(true);
       token.setFailureCount(0); // Reset on re-registration
       log.info("Updated existing device token for email: {}", request.getEmail());
-      return deviceTokenRepository.save(token);
+      return token;
     }
 
     DeviceToken newToken = new DeviceToken();
@@ -60,7 +60,6 @@ public class DeviceTokenService {
         .ifPresent(
             token -> {
               token.setIsActive(false);
-              deviceTokenRepository.save(token);
               log.info("Deactivated device token: {}", deviceToken);
             });
   }
@@ -84,7 +83,6 @@ public class DeviceTokenService {
                     deviceToken,
                     token.getFailureCount());
               }
-              deviceTokenRepository.save(token);
             });
   }
 

@@ -49,7 +49,6 @@ public class AnalyticsService {
     logEvent(EventType.AUDIO_PLAY, album, filterTag, recordingId, request);
   }
 
-  @Transactional
   private void logEvent(
       EventType eventType,
       Album album,
@@ -181,7 +180,6 @@ public class AnalyticsService {
             .findByUserAndId(userContext.getCurrentUser(), albumId)
             .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId.toString()));
     album.setAnalyticsPaused(paused);
-    albumRepository.save(album);
     log.info("Analytics {} for album: {}", paused ? "paused" : "resumed", albumId);
     return paused;
   }

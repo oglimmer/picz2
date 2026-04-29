@@ -70,7 +70,6 @@ public class AlbumSubscriptionNotificationService {
         // Update last notified timestamp if any notification was sent
         if (notificationSent) {
           subscription.setLastNotifiedAt(Instant.now());
-          subscriptionRepository.save(subscription);
         }
 
       } catch (Exception e) {
