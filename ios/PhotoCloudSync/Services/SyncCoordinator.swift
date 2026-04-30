@@ -382,8 +382,17 @@ final class SyncCoordinator: ObservableObject {
             }
 
             switch outcome {
-            case .success, .clientError, .transport:
-                // success: done; clientError: permanent failure; transport: system-retried.
+            case let .success(serverAssetId):
+                // Bytes landed; the worker pod still has thumbnail/transcode
+                // work to do. Poll /api/assets/{id}/status so we surface
+                // post-upload pipeline failures (FAILED / DEAD_LETTER) instead
+                // of silently treating "2xx" as the end of the story.
+                if let serverAssetId {
+                    ProcessingStatusPoller.shared.poll(serverAssetId: serverAssetId, contentId: assetId, api: self.api)
+                }
+                self.drainQueue()
+            case .clientError, .transport:
+                // clientError: permanent failure; transport: system-retried.
                 self.drainQueue()
             case let .backpressure(retryAfter):
                 // Server asked us to back off. Re-enqueue this asset and pause

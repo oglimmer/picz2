@@ -34,6 +34,23 @@ class SyncLogger: ObservableObject {
         addLog(isManual: false, success: true, message: message)
     }
 
+    // Worker-pod processing landed on FAILED / DEAD_LETTER after the upload
+    // 2xx. The bytes are on the server but no thumbnails / transcoded variants
+    // exist, so the asset will not appear in gallery — surface this so the
+    // user knows to investigate.
+    func logProcessingFailure(assetId: String, error: String) {
+        let message = "Processing failed for \(assetId.prefix(8))...: \(error)"
+        addLog(isManual: false, success: false, message: message)
+    }
+
+    // Polling exhausted its 60 s budget without seeing a terminal status. Not
+    // a failure — the worker may still be catching up — but worth logging so
+    // the user sees that the asset isn't necessarily ready in gallery yet.
+    func logProcessingTimeout(assetId: String) {
+        let message = "Still processing \(assetId.prefix(8))... on server"
+        addLog(isManual: false, success: true, message: message)
+    }
+
     func logBackgroundSync(success: Bool, message: String) {
         addLog(isManual: false, success: success, message: "Background sync: \(message)")
     }

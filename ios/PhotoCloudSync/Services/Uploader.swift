@@ -2,21 +2,29 @@ import CryptoKit
 import Foundation
 import Photos
 
-final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate {
     static let shared = Uploader()
 
     private let sessionId = "com.oglimmer.photosync.upload"
     private(set) var session: URLSession!
     private let fileManager = FileManager.default
 
+    // Buffered response bodies, keyed by URLSessionTask.taskIdentifier, used to
+    // extract the server-side asset id from the upload 202 response so the
+    // SyncCoordinator can poll /api/assets/{id}/status afterwards. Mutated
+    // only on the URLSession's delegate queue (single-threaded per session).
+    private var responseBodyByTaskId: [Int: Data] = [:]
+
     // Called by AppDelegate when background session finished delivering events
     var onAllBackgroundEventsComplete: ((String) -> Void)?
 
     // Fires for every task that finished (success, failure, backpressure).
     // SyncCoordinator uses this to free a concurrency slot and re-enqueue
-    // on HTTP 503 with the honored Retry-After delay.
+    // on HTTP 503 with the honored Retry-After delay. The server-side asset
+    // id (when parseable from the 2xx body) rides along on .success so the
+    // coordinator can spin up status polling for it.
     enum UploadOutcome {
-        case success
+        case success(serverAssetId: Int?)
         case clientError       // non-retryable 4xx (except 429)
         case transport         // network / session error, system will retry
         case backpressure(TimeInterval) // HTTP 429/503, with retry delay
@@ -168,7 +176,16 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
 
     // MARK: - URLSession Delegate
 
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // Background URLSessionUploadTask is a URLSessionDataTask; the 202
+        // response body is delivered here in chunks. Buffer it so the
+        // didCompleteWithError path can parse out the server-side asset id.
+        responseBodyByTaskId[dataTask.taskIdentifier, default: Data()].append(data)
+    }
+
     func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let bufferedBody = responseBodyByTaskId.removeValue(forKey: task.taskIdentifier)
+
         defer {
             // Clean up temp files if present in taskDescription
             if let desc = task.taskDescription {
@@ -205,7 +222,8 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
                 UploadStore.shared.markUploaded(assetId, checksum: checksum)
                 SyncCoordinator.shared.onUploadedOne(assetId: assetId)
                 SyncLogger.shared.logUploadSuccess(assetId: assetId)
-                onTaskFinished?(assetId, .success)
+                let serverAssetId = bufferedBody.flatMap(parseServerAssetId(from:))
+                onTaskFinished?(assetId, .success(serverAssetId: serverAssetId))
             } else if code == 429 || code == 503 {
                 // Server backpressure — expected signal, not a failure. Log as
                 // informational so the user doesn't see a red error entry.
@@ -224,8 +242,19 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
             UploadStore.shared.markUploaded(assetId, checksum: checksum)
             SyncCoordinator.shared.onUploadedOne(assetId: assetId)
             SyncLogger.shared.logUploadSuccess(assetId: assetId)
-            onTaskFinished?(assetId, .success)
+            onTaskFinished?(assetId, .success(serverAssetId: nil))
         }
+    }
+
+    // Pulls `file.id` out of the upload 202 body. Defensive: any decoding
+    // failure (truncated body in background relaunch, server schema change)
+    // falls back to nil and just disables polling for that asset.
+    private func parseServerAssetId(from data: Data) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let file = json["file"] as? [String: Any],
+              let id = file["id"] as? Int
+        else { return nil }
+        return id
     }
 
     private func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval? {

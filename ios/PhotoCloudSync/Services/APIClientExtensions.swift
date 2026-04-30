@@ -97,6 +97,15 @@ extension APIClient {
         fetchFiles(albumId: albumId, tag: nil, completion: completion)
     }
 
+    // MARK: - Asset Processing Status
+
+    func getAssetStatus(id: Int, completion: @escaping (Result<AssetProcessingStatusResponse, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/assets/\(id)/status"))
+        request.httpMethod = "GET"
+        addBasicAuth(to: &request)
+        performRequest(request, expecting: AssetProcessingStatusResponse.self, completion: completion)
+    }
+
     // MARK: - Helper: Perform Request
 
     private func performRequest<T: Decodable>(_ request: URLRequest, expecting _: T.Type, completion: @escaping (Result<T, Error>) -> Void) {
