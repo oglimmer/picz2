@@ -49,6 +49,7 @@
           v-if="canDuplicate"
           class="tile-btn"
           title="Duplicate album"
+          :disabled="isDeleting"
           @click.stop="$emit('duplicate', album.id)"
         >
           <svg
@@ -74,6 +75,7 @@
           v-if="canDelete"
           class="tile-btn tile-btn--danger"
           title="Delete album"
+          :disabled="isDeleting"
           @click.stop="$emit('delete', album.id)"
         >
           <svg
@@ -89,6 +91,24 @@
           </svg>
         </button>
       </div>
+
+      <!-- Deletion overlay -->
+      <div
+        v-if="isDeleting"
+        class="tile-deleting-overlay"
+        @click.stop
+      >
+        <svg
+          class="tile-deleting-spinner"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+        </svg>
+        <span class="tile-deleting-label">Deleting…</span>
+      </div>
     </div>
   </div>
 </template>
@@ -103,12 +123,14 @@ interface Props {
   canDelete?: boolean
   canDuplicate?: boolean
   tileIndex?: number
+  isDeleting?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   canDelete: false,
   canDuplicate: false,
-  tileIndex: 0
+  tileIndex: 0,
+  isDeleting: false
 })
 
 defineEmits<{
@@ -120,3 +142,36 @@ defineEmits<{
 const { getAlbumCoverUrl } = useApi()
 const coverUrl = computed(() => getAlbumCoverUrl(props.album))
 </script>
+
+<style scoped>
+.tile-deleting-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: inherit;
+  z-index: 10;
+  pointer-events: all;
+}
+
+.tile-deleting-spinner {
+  width: 28px;
+  height: 28px;
+  color: #fff;
+  animation: spin 1s linear infinite;
+}
+
+.tile-deleting-label {
+  font-size: 0.75rem;
+  color: #fff;
+  letter-spacing: 0.05em;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>

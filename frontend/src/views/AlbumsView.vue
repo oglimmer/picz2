@@ -219,6 +219,7 @@
         :tile-index="idx"
         :can-delete="isLoggedIn"
         :can-duplicate="isLoggedIn"
+        :is-deleting="deletingAlbumId === album.id"
         @click="handleOpenAlbum(album)"
         @delete="handleDeleteAlbum"
         @duplicate="handleDuplicateAlbum"
@@ -245,7 +246,8 @@ const router = useRouter()
 const { isLoggedIn } = useAuth()
 const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
 const { availableTags, loadTags } = useTags()
-const { error: showError } = useNotifications()
+const { error: showError, info, success: showSuccess, removeNotification } = useNotifications()
+const deletingAlbumId = ref<number | null>(null)
 const { confirm: confirmDialog } = useConfirm()
 
 type GridSize = 'small' | 'medium' | 'large'
@@ -319,11 +321,18 @@ async function handleDeleteAlbum(albumId: number) {
 
   if (!confirmed) return
 
+  deletingAlbumId.value = albumId
+  const toastId = info(`Deleting "${album.name}"…`, 0)
   try {
     await deleteAlbum(albumId)
+    removeNotification(toastId)
+    showSuccess(`"${album.name}" deleted.`)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+    removeNotification(toastId)
     showError(`Error deleting album: ${message}`)
+  } finally {
+    deletingAlbumId.value = null
   }
 }
 </script>

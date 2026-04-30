@@ -30,17 +30,10 @@ public class ObjectStorageConfig {
 
   private final ObjectStorageProperties properties;
 
-  /**
-   * Phase 4d timeouts. {@code apiCallAttemptTimeout=2s} caps a single HTTP attempt; {@code
-   * apiCallTimeout=5s} caps the full operation including any SDK-internal retries. The default
-   * (no cap) means a stalled MinIO holds a Tomcat thread for ~90s while the SDK retries — which
-   * exhausts Tomcat's thread pool inside one second of an outage. The Resilience4j breaker on top
-   * of these timeouts trips OPEN once a few attempts are slow.
-   */
-  private static ClientOverrideConfiguration apiCallTimeouts() {
+  private ClientOverrideConfiguration apiCallTimeouts() {
     return ClientOverrideConfiguration.builder()
-        .apiCallAttemptTimeout(Duration.ofSeconds(2))
-        .apiCallTimeout(Duration.ofSeconds(5))
+        .apiCallAttemptTimeout(Duration.ofSeconds(properties.getApiCallAttemptTimeoutSeconds()))
+        .apiCallTimeout(Duration.ofSeconds(properties.getApiCallTimeoutSeconds()))
         .build();
   }
 

@@ -82,6 +82,26 @@ public class AdminController {
   }
 
   /**
+   * Finds S3 objects with no corresponding DB row and deletes them. Always run with
+   * {@code dryRun=true} first to review what would be removed before committing.
+   */
+  @PostMapping("/purge-orphaned-s3")
+  public ResponseEntity<AdminOperationResponse> purgeOrphanedS3(
+      @RequestParam(value = "dryRun", required = false, defaultValue = "true") boolean dryRun) {
+    log.info("Starting S3 orphan purge (dryRun={})", dryRun);
+    var result = fileStorageService.purgeOrphanedS3Objects(dryRun);
+
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message(dryRun ? "Dry run complete — no objects deleted" : "Orphaned S3 objects purged")
+            .stats(result)
+            .build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  /**
    * Lists processing jobs that have exhausted their retry budget. Surfaces the original asset id
    * and last error so an operator can decide whether to delete the asset, fix the underlying issue,
    * or re-enqueue the job (re-enqueue UI is a future follow-up).

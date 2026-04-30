@@ -74,15 +74,24 @@ public class JobLeaseService {
       return;
     }
     boolean exhausted = job.getAttempts() != null && job.getAttempts() >= job.getMaxAttempts();
-    job.setStatus(exhausted ? JobStatus.DEAD_LETTER : JobStatus.FAILED);
-    job.setFinishedAt(Instant.now());
+    if (exhausted) {
+      job.setStatus(JobStatus.DEAD_LETTER);
+      job.setFinishedAt(Instant.now());
+      log.error("Job {} (asset {}) → DEAD_LETTER after {} attempts", jobId, job.getAssetId(), job.getAttempts());
+    } else {
+      // Return to QUEUED so the dispatcher picks it up on the next poll for retry.
+      // FAILED was previously used here but findNextLeaseableId only selects QUEUED rows,
+      // so failed jobs were silently orphaned and never retried.
+      job.setStatus(JobStatus.QUEUED);
+      job.setFinishedAt(null);
+      log.warn(
+          "Job {} (asset {}) failed on attempt {}/{} → re-queued for retry",
+          jobId, job.getAssetId(), job.getAttempts(), job.getMaxAttempts());
+    }
     job.setLeasedUntil(null);
     job.setLeasedBy(null);
     job.setLastError(truncate(errorMessage));
     jobRepository.save(job);
-    if (exhausted) {
-      log.error("Job {} (asset {}) → DEAD_LETTER after {} attempts", jobId, job.getAssetId(), job.getAttempts());
-    }
   }
 
   private String truncate(String s) {

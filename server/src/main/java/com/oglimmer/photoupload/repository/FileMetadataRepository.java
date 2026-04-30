@@ -92,4 +92,15 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
 
   // Find files in an album uploaded after a specific time (for subscription notifications)
   List<FileMetadata> findByAlbumAndUploadedAtAfter(Album album, Instant uploadedAt);
+
+  /** Returns every non-null stored path across all five path columns in a single query. */
+  @Query(
+      value =
+          "SELECT file_path FROM file_metadata WHERE file_path IS NOT NULL"
+              + " UNION SELECT thumbnail_path FROM file_metadata WHERE thumbnail_path IS NOT NULL"
+              + " UNION SELECT medium_path FROM file_metadata WHERE medium_path IS NOT NULL"
+              + " UNION SELECT large_path FROM file_metadata WHERE large_path IS NOT NULL"
+              + " UNION SELECT transcoded_video_path FROM file_metadata WHERE transcoded_video_path IS NOT NULL",
+      nativeQuery = true)
+  List<String> findAllStoredPaths();
 }

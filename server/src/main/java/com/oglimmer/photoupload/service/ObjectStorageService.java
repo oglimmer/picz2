@@ -9,6 +9,8 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +22,8 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
@@ -126,6 +130,24 @@ public class ObjectStorageService {
       req.range(rangeHeader);
     }
     return withBreaker(() -> s3.getObject(req.build()));
+  }
+
+  /** List every object key in the bucket, handling S3 pagination transparently. */
+  public List<String> listKeys() {
+    List<String> keys = new ArrayList<>();
+    String continuationToken = null;
+    do {
+      final String token = continuationToken;
+      ListObjectsV2Request.Builder req =
+          ListObjectsV2Request.builder().bucket(properties.getBucket());
+      if (token != null) {
+        req.continuationToken(token);
+      }
+      ListObjectsV2Response page = withBreaker(() -> s3.listObjectsV2(req.build()));
+      page.contents().forEach(obj -> keys.add(obj.key()));
+      continuationToken = page.isTruncated() ? page.nextContinuationToken() : null;
+    } while (continuationToken != null);
+    return keys;
   }
 
   public void delete(String key) {

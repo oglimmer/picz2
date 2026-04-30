@@ -3,6 +3,23 @@
     class="album-gallery"
     :class="{ 'presentation-mode': presentationMode }"
   >
+    <!-- Full-page overlay while album deletion is in progress -->
+    <div
+      v-if="isDeletingAlbum"
+      class="album-deleting-overlay"
+    >
+      <svg
+        class="album-deleting-spinner"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+      </svg>
+      <p class="album-deleting-message">Deleting album and all photos…</p>
+      <p class="album-deleting-sub">This may take a moment.</p>
+    </div>
     <!-- Minimal Header -->
     <div
       v-if="!presentationMode"
@@ -33,9 +50,10 @@
           </button>
           <button
             class="action-link action-delete"
+            :disabled="isDeletingAlbum"
             @click="handleDeleteAlbum"
           >
-            Delete
+            {{ isDeletingAlbum ? 'Deleting…' : 'Delete' }}
           </button>
           <span class="divider">|</span>
           <button
@@ -785,10 +803,11 @@ export default {
       resumePlayback,
       deleteRecording
     } = useSlideshowPlayback()
-    const { success, error, warning, info } = useNotifications()
+    const { success, error, warning, info, removeNotification } = useNotifications()
     const { confirm: confirmDialog } = useConfirm()
     const { getAlbumStatistics, resetAlbumAnalytics, setAnalyticsPaused } = useAnalytics()
 
+    const isDeletingAlbum = ref(false)
     const album = computed(() => currentAlbum.value)
     const albumSize = ref(localStorage.getItem('galleryGridSize') || 'small')
     watch(albumSize, v => localStorage.setItem('galleryGridSize', v))
@@ -1723,11 +1742,15 @@ export default {
         return
       }
 
+      isDeletingAlbum.value = true
+      const toastId = info(`Deleting "${album.value.name}"…`, 0)
       try {
         await deleteAlbum(album.value.id)
-        // Redirect to albums after successful deletion
+        removeNotification(toastId)
         router.push({ name: 'Albums' })
       } catch (err) {
+        removeNotification(toastId)
+        isDeletingAlbum.value = false
         error(`Error deleting album: ${err.message}`)
       }
     }
@@ -1966,6 +1989,7 @@ export default {
       navigateNext,
       navigatePrevious,
       goToProfile,
+      isDeletingAlbum,
       handleDeleteAlbum,
       triggerFileUpload,
       handleFileUpload,
@@ -1974,3 +1998,40 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.album-deleting-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.album-deleting-spinner {
+  width: 48px;
+  height: 48px;
+  color: #fff;
+  animation: spin 1s linear infinite;
+}
+
+.album-deleting-message {
+  font-size: 1.1rem;
+  color: #fff;
+  margin: 0;
+}
+
+.album-deleting-sub {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>

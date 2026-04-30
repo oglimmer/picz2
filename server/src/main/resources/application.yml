@@ -85,6 +85,8 @@ storage:
     path-style-access: "${STORAGE_S3_PATH_STYLE_ACCESS:true}"
     auto-create-bucket: "${STORAGE_S3_AUTO_CREATE_BUCKET:true}"
     presign-seconds: "${STORAGE_S3_PRESIGN_SECONDS:3600}"
+    api-call-attempt-timeout-seconds: "${STORAGE_S3_API_CALL_ATTEMPT_TIMEOUT_SECONDS:30}"
+    api-call-timeout-seconds: "${STORAGE_S3_API_CALL_TIMEOUT_SECONDS:60}"
 jobs:
   dispatcher:
     enabled: "${JOBS_DISPATCHER_ENABLED:true}"

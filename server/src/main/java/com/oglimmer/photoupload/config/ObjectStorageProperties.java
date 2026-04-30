@@ -47,4 +47,17 @@ public class ObjectStorageProperties {
 
   /** Default lifetime for presigned GET URLs handed back to clients. */
   private long presignSeconds = 3600;
+
+  /**
+   * Per-attempt HTTP timeout in seconds. 2s was too tight for large JPEG PUT-backs from the worker
+   * (HEIC→JPEG conversion can produce 10-20 MB files). 30s gives headroom without holding threads
+   * for an unreasonable time during a real MinIO outage.
+   */
+  private int apiCallAttemptTimeoutSeconds = 30;
+
+  /**
+   * Total wall-clock budget for a single S3 API call including SDK-internal retries. Kept at 2×
+   * the attempt timeout so one retry is possible before giving up.
+   */
+  private int apiCallTimeoutSeconds = 60;
 }

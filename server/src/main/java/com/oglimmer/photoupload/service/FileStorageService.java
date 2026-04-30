@@ -43,9 +43,11 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -283,10 +285,18 @@ public class FileStorageService {
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
     boolean useObjectStorage = objectStorage.isPresent();
 
-    // Pre-compute the checksum so duplicate detection can fail fast before we touch S3 / disk.
-    // Reads MultipartFile.getInputStream() once — Spring serves it from the multipart staging
-    // file, which is on the PVC but auto-cleaned per request.
-    final String checksum = computeSha256(file);
+    // Write the multipart body to a stable temp file exactly once.
+    // Calling file.getInputStream() twice is unreliable: some Part implementations back the
+    // stream with a non-resettable file descriptor, so a second open can deliver fewer bytes
+    // than file.getSize() declares — the AWS SDK then throws IllegalStateException.
+    Path tempFile =
+        this.fileStorageLocation
+            .resolve(".multipart-tmp")
+            .resolve("." + newFilename + ".tmp");
+    try (InputStream in = file.getInputStream()) {
+      Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
+    }
+    final String checksum = computeSha256(tempFile);
 
     // Check for duplicate by checksum (same album and other albums) in a single transaction.
     FileInfo duplicateByChecksum =
@@ -327,6 +337,7 @@ public class FileStorageService {
                   return null;
                 });
     if (duplicateByChecksum != null) {
+      Files.deleteIfExists(tempFile);
       return duplicateByChecksum;
     }
 
@@ -337,18 +348,16 @@ public class FileStorageService {
     final String storedPath;
     if (useObjectStorage) {
       String storageKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
-      try (InputStream in = file.getInputStream()) {
-        objectStorage.get().putStream(storageKey, in, file.getSize(), contentType);
+      try {
+        objectStorage.get().putFile(storageKey, tempFile, contentType);
+      } finally {
+        Files.deleteIfExists(tempFile);
       }
       storedPath = storageKey;
       log.info("✅ File uploaded to S3: {} ({})", originalFilename, formatBytes(file.getSize()));
     } else {
       Path targetLocation = this.fileStorageLocation.resolve(newFilename);
-      Path tempLocation = this.fileStorageLocation.resolve("." + newFilename + ".tmp");
-      try (InputStream in = file.getInputStream()) {
-        Files.copy(in, tempLocation, StandardCopyOption.REPLACE_EXISTING);
-      }
-      Files.move(tempLocation, targetLocation, StandardCopyOption.ATOMIC_MOVE);
+      Files.move(tempFile, targetLocation, StandardCopyOption.ATOMIC_MOVE);
       storedPath = toRelativePath(targetLocation);
       log.info("✅ File uploaded to disk: {} ({})", originalFilename, formatBytes(file.getSize()));
     }
@@ -553,12 +562,7 @@ public class FileStorageService {
     return byteCountToDisplaySize(bytes);
   }
 
-  /**
-   * Compute SHA-256 of an uploaded part by reading {@link MultipartFile#getInputStream()} once.
-   * Spring serves the body from its multipart staging file, so this is a streaming read with a
-   * 64 KiB buffer — memory use is independent of file size.
-   */
-  private String computeSha256(MultipartFile file) throws IOException {
+  private String computeSha256(Path file) throws IOException {
     MessageDigest digest;
     try {
       digest = MessageDigest.getInstance("SHA-256");
@@ -566,11 +570,9 @@ public class FileStorageService {
       throw new IllegalStateException("SHA-256 unavailable", e);
     }
     byte[] buf = new byte[64 * 1024];
-    try (InputStream in = file.getInputStream();
+    try (InputStream in = Files.newInputStream(file);
         DigestInputStream dis = new DigestInputStream(in, digest)) {
-      while (dis.read(buf) > 0) {
-        // DigestInputStream feeds the digest as a side effect of read.
-      }
+      while (dis.read(buf) != -1) {}
     }
     byte[] hash = digest.digest();
     StringBuilder hex = new StringBuilder(hash.length * 2);
@@ -581,6 +583,87 @@ public class FileStorageService {
   }
 
   @Transactional
+  /**
+   * Compares every key in the S3 bucket against the paths recorded in the DB and deletes any key
+   * that has no corresponding row. Pass {@code dryRun=true} to log what would be deleted without
+   * touching MinIO — always run a dry-run first to sanity-check the numbers.
+   */
+  public Map<String, Object> purgeOrphanedS3Objects(boolean dryRun) {
+    if (objectStorage.isEmpty()) {
+      throw new IllegalStateException("S3 storage is not enabled");
+    }
+    ObjectStorageService s3 = objectStorage.get();
+
+    Set<String> knownPaths = new HashSet<>(metadataRepository.findAllStoredPaths());
+    List<String> bucketKeys = s3.listKeys();
+
+    int orphaned = 0;
+    int deleted = 0;
+    int failed = 0;
+    for (String key : bucketKeys) {
+      if (!knownPaths.contains(key)) {
+        orphaned++;
+        if (dryRun) {
+          log.info("Dry run — orphaned S3 object: {}", key);
+        } else {
+          try {
+            s3.delete(key);
+            deleted++;
+            log.info("Deleted orphaned S3 object: {}", key);
+          } catch (Exception e) {
+            failed++;
+            log.warn("Failed to delete orphaned S3 object {}: {}", key, e.getMessage());
+          }
+        }
+      }
+    }
+
+    log.info(
+        "S3 orphan purge complete (dryRun={}): {} bucket keys, {} known DB paths, {} orphaned, {} deleted, {} failed",
+        dryRun,
+        bucketKeys.size(),
+        knownPaths.size(),
+        orphaned,
+        deleted,
+        failed);
+
+    Map<String, Object> result = new HashMap<>();
+    result.put("dryRun", dryRun);
+    result.put("totalBucketKeys", bucketKeys.size());
+    result.put("knownDbPaths", knownPaths.size());
+    result.put("orphaned", orphaned);
+    result.put("deleted", deleted);
+    result.put("failed", failed);
+    return result;
+  }
+
+  private void deleteS3Objects(FileMetadata metadata) {
+    if (objectStorage.isEmpty()) {
+      log.warn(
+          "S3 key {} found in DB but ObjectStorageService is not available — skipping object deletion",
+          metadata.getFilePath());
+      return;
+    }
+    ObjectStorageService s3 = objectStorage.get();
+    deleteS3Key(s3, metadata.getFilePath(), "original");
+    deleteS3Key(s3, metadata.getThumbnailPath(), "thumbnail");
+    deleteS3Key(s3, metadata.getMediumPath(), "medium");
+    deleteS3Key(s3, metadata.getLargePath(), "large");
+    deleteS3Key(s3, metadata.getTranscodedVideoPath(), "transcoded");
+  }
+
+  private void deleteS3Key(ObjectStorageService s3, String key, String label) {
+    if (key == null) {
+      return;
+    }
+    try {
+      s3.delete(key);
+      log.debug("Deleted S3 {} object: {}", label, key);
+    } catch (Exception e) {
+      log.warn("Failed to delete S3 {} object {}: {}", label, key, e.getMessage());
+    }
+  }
+
   public void deleteFile(Long fileId) {
     FileMetadata metadata =
         metadataRepository
@@ -594,6 +677,8 @@ public class FileStorageService {
       log.info(
           "Skipping physical file deletion for {} — shared with other records",
           metadata.getStoredFilename());
+    } else if (StoragePaths.isS3Key(metadata.getFilePath())) {
+      deleteS3Objects(metadata);
     } else {
       try {
         // Delete physical file
