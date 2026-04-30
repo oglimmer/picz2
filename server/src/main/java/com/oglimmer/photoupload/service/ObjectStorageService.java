@@ -10,6 +10,7 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
@@ -19,11 +20,15 @@ import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
@@ -156,6 +161,53 @@ public class ObjectStorageService {
             s3.deleteObject(
                 DeleteObjectRequest.builder().bucket(properties.getBucket()).key(key).build()));
     log.debug("S3 DELETE s3://{}/{}", properties.getBucket(), key);
+  }
+
+  /**
+   * Bulk delete using the {@code DeleteObjects} API. Splits the input into batches of up to 1000
+   * keys (the S3 per-call limit). Per-key errors reported by S3 are logged but do not throw — the
+   * caller has already orphaned the metadata rows, so a half-deleted set of S3 objects is purged
+   * out-of-band by the orphan sweeper rather than aborting the request.
+   */
+  public void deleteKeys(Collection<String> keys) {
+    if (keys == null || keys.isEmpty()) {
+      return;
+    }
+    final int batchSize = 1000;
+    List<ObjectIdentifier> batch = new ArrayList<>(batchSize);
+    for (String key : keys) {
+      if (key == null || key.isBlank()) {
+        continue;
+      }
+      batch.add(ObjectIdentifier.builder().key(key).build());
+      if (batch.size() == batchSize) {
+        deleteObjectsBatch(batch);
+        batch = new ArrayList<>(batchSize);
+      }
+    }
+    if (!batch.isEmpty()) {
+      deleteObjectsBatch(batch);
+    }
+  }
+
+  private void deleteObjectsBatch(List<ObjectIdentifier> batch) {
+    DeleteObjectsRequest req =
+        DeleteObjectsRequest.builder()
+            .bucket(properties.getBucket())
+            .delete(Delete.builder().objects(batch).quiet(true).build())
+            .build();
+    DeleteObjectsResponse resp = withBreaker(() -> s3.deleteObjects(req));
+    if (resp.hasErrors() && !resp.errors().isEmpty()) {
+      resp.errors()
+          .forEach(
+              e ->
+                  log.warn(
+                      "S3 batch DELETE error key={} code={} message={}",
+                      e.key(),
+                      e.code(),
+                      e.message()));
+    }
+    log.debug("S3 batch DELETE {} keys from s3://{}", batch.size(), properties.getBucket());
   }
 
   /**

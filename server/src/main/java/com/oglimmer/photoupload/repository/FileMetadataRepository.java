@@ -4,9 +4,11 @@ package com.oglimmer.photoupload.repository;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -103,4 +105,24 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
               + " UNION SELECT transcoded_video_path FROM file_metadata WHERE transcoded_video_path IS NOT NULL",
       nativeQuery = true)
   List<String> findAllStoredPaths();
+
+  /**
+   * Of the given file paths, return those still referenced by rows outside the named album.
+   * Used during album deletion to skip physical-storage cleanup for files cross-album-shared via
+   * {@code duplicateAlbum} (which copies metadata rows but reuses the same storage paths).
+   */
+  @Query(
+      "SELECT DISTINCT f.filePath FROM FileMetadata f "
+          + "WHERE f.album.id <> :albumId AND f.filePath IN :paths")
+  List<String> findFilePathsSharedOutsideAlbum(
+      @Param("albumId") Long albumId, @Param("paths") Collection<String> paths);
+
+  /**
+   * Bulk-delete every file_metadata row in the album in a single statement. SQL FK cascades take
+   * care of {@code image_tags}, {@code processing_jobs}, and {@code slideshow_recording_images}.
+   * Storage-layer cleanup must run before this — once the rows are gone, the keys cannot be found.
+   */
+  @Modifying(clearAutomatically = true)
+  @Query("DELETE FROM FileMetadata f WHERE f.album.id = :albumId")
+  int bulkDeleteByAlbumId(@Param("albumId") Long albumId);
 }

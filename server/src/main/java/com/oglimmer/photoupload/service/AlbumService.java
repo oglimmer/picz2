@@ -136,23 +136,21 @@ public class AlbumService {
             .findByUserAndId(currentUser, albumId)
             .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
 
-    // Get all files in this album
     List<FileMetadata> files =
         fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(
             albumId, currentUser.getId());
 
-    // Delete all files (both physical files and database records)
-    for (FileMetadata file : files) {
-      try {
-        fileStorageService.deleteFile(file.getId());
-      } catch (Exception e) {
-        log.error("Error deleting file {} during album deletion: {}", file.getId(), e.getMessage());
-        // Continue with other files even if one fails
-      }
-    }
+    // Storage cleanup first — batched S3 DeleteObjects (≤1000 keys/call) plus best-effort local
+    // file deletes. Anything left behind is reaped by purgeOrphanedS3Objects.
+    fileStorageService.bulkDeleteAlbumStorage(albumId, files);
 
-    // Delete the album (cascade will handle any remaining database relationships)
-    albumRepository.delete(album);
+    // Then a single bulk SQL delete for file_metadata (cascades image_tags, processing_jobs,
+    // slideshow_recording_images via FK), followed by the album row (cascades the remaining
+    // album-scoped tables). Replaces N+1 per-row JPA deletes that were the source of the
+    // long-running request / proxy timeout.
+    fileMetadataRepository.bulkDeleteByAlbumId(albumId);
+    albumRepository.bulkDeleteById(albumId);
+
     log.info(
         "Deleted album '{}' with {} photos for user: {}",
         album.getName(),

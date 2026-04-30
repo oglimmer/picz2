@@ -41,6 +41,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -661,6 +662,104 @@ public class FileStorageService {
       log.debug("Deleted S3 {} object: {}", label, key);
     } catch (Exception e) {
       log.warn("Failed to delete S3 {} object {}: {}", label, key, e.getMessage());
+    }
+  }
+
+  /**
+   * Best-effort storage cleanup for every file in an album. Used by
+   * {@link AlbumService#deleteAlbum(Long)} so a 5000-photo album doesn't fan out into 25 000
+   * synchronous S3 calls per request. Behaviour matches the per-file path:
+   *
+   * <ul>
+   *   <li>Files whose {@code file_path} is also referenced by rows in another album are skipped
+   *       entirely (cross-album dedupe via {@code duplicateAlbum} shares all five storage paths
+   *       as a unit).
+   *   <li>S3-backed paths are batched via {@link ObjectStorageService#deleteKeys(Collection)}
+   *       (1000 keys per call).
+   *   <li>Local paths are deleted via {@link Files#deleteIfExists(java.nio.file.Path)} +
+   *       {@link LocalFileCleanupService}, swallowing IO errors so a missing file does not
+   *       abort the whole album.
+   * </ul>
+   *
+   * <p>Does NOT touch the database — caller is responsible for removing the metadata rows after
+   * this returns. Any S3 keys we fail to delete here will be picked up by
+   * {@link #purgeOrphanedS3Objects(boolean)} on its next run.
+   */
+  public void bulkDeleteAlbumStorage(Long albumId, List<FileMetadata> files) {
+    if (files == null || files.isEmpty()) {
+      return;
+    }
+
+    // Cross-album shared paths: skip physical deletion for those rows.
+    Set<String> originalPaths =
+        files.stream()
+            .map(FileMetadata::getFilePath)
+            .filter(p -> p != null && !p.isBlank())
+            .collect(Collectors.toSet());
+    Set<String> sharedPaths =
+        originalPaths.isEmpty()
+            ? Set.of()
+            : new HashSet<>(
+                metadataRepository.findFilePathsSharedOutsideAlbum(albumId, originalPaths));
+
+    List<String> s3KeysToDelete = new ArrayList<>(files.size() * 5);
+    int sharedSkipped = 0;
+    for (FileMetadata f : files) {
+      if (f.getFilePath() != null && sharedPaths.contains(f.getFilePath())) {
+        sharedSkipped++;
+        log.debug(
+            "Skipping physical deletion for {} — file_path shared with another album",
+            f.getStoredFilename());
+        continue;
+      }
+      if (StoragePaths.isS3Key(f.getFilePath())) {
+        addIfNotBlank(s3KeysToDelete, f.getFilePath());
+        addIfNotBlank(s3KeysToDelete, f.getThumbnailPath());
+        addIfNotBlank(s3KeysToDelete, f.getMediumPath());
+        addIfNotBlank(s3KeysToDelete, f.getLargePath());
+        addIfNotBlank(s3KeysToDelete, f.getTranscodedVideoPath());
+      } else {
+        deleteLocalQuietly(f.getFilePath());
+        localFileCleanupService.deleteThumbnails(
+            toAbsolutePath(f.getThumbnailPath()),
+            toAbsolutePath(f.getMediumPath()),
+            toAbsolutePath(f.getLargePath()));
+        localFileCleanupService.deleteTranscodedVideo(toAbsolutePath(f.getTranscodedVideoPath()));
+      }
+    }
+
+    if (!s3KeysToDelete.isEmpty()) {
+      if (objectStorage.isEmpty()) {
+        log.warn(
+            "Album {} has {} S3-backed files but ObjectStorageService is not available — leaving objects in place",
+            albumId,
+            s3KeysToDelete.size());
+      } else {
+        objectStorage.get().deleteKeys(s3KeysToDelete);
+      }
+    }
+    log.info(
+        "Album {} storage purge: {} files processed, {} S3 keys batched, {} cross-album shared skipped",
+        albumId,
+        files.size(),
+        s3KeysToDelete.size(),
+        sharedSkipped);
+  }
+
+  private static void addIfNotBlank(List<String> sink, String value) {
+    if (value != null && !value.isBlank()) {
+      sink.add(value);
+    }
+  }
+
+  private void deleteLocalQuietly(String relativePath) {
+    if (relativePath == null) {
+      return;
+    }
+    try {
+      Files.deleteIfExists(toAbsolutePath(relativePath));
+    } catch (IOException e) {
+      log.warn("Failed to delete local file {}: {}", relativePath, e.getMessage());
     }
   }
 

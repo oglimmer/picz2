@@ -7,7 +7,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -28,4 +30,13 @@ public interface AlbumRepository extends JpaRepository<Album, Long> {
 
   // Find albums created by user after a specific time (for subscription notifications)
   List<Album> findByUserAndCreatedAtAfter(User user, Instant createdAt);
+
+  /**
+   * Bulk-delete the album row, bypassing JPA cascade so we don't pull the entire {@code files}
+   * collection into the persistence context. Caller must already have removed dependent
+   * file_metadata rows (FK is ON DELETE RESTRICT). Other album-scoped tables cascade in SQL.
+   */
+  @Modifying(clearAutomatically = true)
+  @Query("DELETE FROM Album a WHERE a.id = :id")
+  int bulkDeleteById(@Param("id") Long id);
 }
