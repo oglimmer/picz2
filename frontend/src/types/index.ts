@@ -31,6 +31,9 @@ export interface AlbumFile {
   order?: number;
   publicToken?: string;
   processingStatus?: ProcessingStatus;
+  // False once the original has been purged by the retention CronJob (Phase 6 / Gap 4-finish).
+  // Derivatives (thumb/medium/large/transcoded) keep serving; rotation/download-original do not.
+  originalAvailable?: boolean;
 }
 
 export interface Tag {

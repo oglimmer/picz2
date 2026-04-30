@@ -1,0 +1,131 @@
+{{- if .Values.retention.enabled }}
+# Phase 6 / Gap 4-finish — nightly retention sweep. Runs the same backend image with
+# SPRING_PROFILES_ACTIVE=retention; the application-retention.yml override skips Tomcat and the
+# RetentionRunner CommandLineRunner exits the JVM after one pass. concurrencyPolicy: Forbid so a
+# slow run can never overlap itself (each row is in its own TX, but two parallel runs racing the
+# same eligibility query waste S3 calls).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "photo-upload.fullname" . }}-retention
+  labels:
+    {{- include "photo-upload.labels" . | nindent 4 }}
+    app.kubernetes.io/component: retention
+spec:
+  schedule: {{ .Values.retention.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.retention.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.retention.failedJobsHistoryLimit | default 3 }}
+  startingDeadlineSeconds: {{ .Values.retention.startingDeadlineSeconds | default 600 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: {{ .Values.retention.ttlSecondsAfterFinished | default 86400 }}
+      template:
+        metadata:
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+            checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+            {{- with .Values.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          labels:
+            {{- include "photo-upload.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: retention
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "photo-upload.serviceAccountName" . }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+          - name: retention
+            securityContext:
+              {{- toYaml .Values.securityContext | nindent 14 }}
+            # Same image as backend; tag falls through to backend.image.tag (or AppVersion) so a
+            # single release ships api/worker/retention pinned to the same code.
+            image: "{{ .Values.retention.image.repository | default .Values.backend.image.repository }}:{{ .Values.retention.image.tag | default .Values.backend.image.tag | default .Chart.AppVersion }}"
+            imagePullPolicy: {{ .Values.retention.image.pullPolicy | default .Values.backend.image.pullPolicy }}
+            env:
+            - name: MARIADB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: database.host
+            - name: MARIADB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: database.port
+            - name: MARIADB_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: database.name
+            - name: MARIADB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-secret
+                  key: database.user
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-secret
+                  key: database.password
+            - name: JAVA_OPTS
+              value: {{ .Values.retention.javaOpts | quote }}
+            - name: SPRING_PROFILES_ACTIVE
+              value: "retention"
+            - name: RETENTION_ORIGINAL_DAYS
+              value: {{ .Values.retention.originalDays | quote }}
+            - name: RETENTION_MAX_ROWS_PER_RUN
+              value: {{ .Values.retention.maxRowsPerRun | quote }}
+            - name: RETENTION_DRY_RUN
+              value: {{ .Values.retention.dryRun | quote }}
+            {{- if .Values.objectStorage.enabled }}
+            - name: STORAGE_S3_ENABLED
+              value: "true"
+            - name: STORAGE_S3_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: objectStorage.endpoint
+            - name: STORAGE_S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: objectStorage.bucket
+            - name: STORAGE_S3_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-config
+                  key: objectStorage.region
+            - name: STORAGE_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-secret
+                  key: objectStorage.accessKey
+            - name: STORAGE_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-secret
+                  key: objectStorage.secretKey
+            {{- end }}
+            resources:
+              {{- toYaml .Values.retention.resources | nindent 14 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

@@ -87,6 +87,13 @@ storage:
     presign-seconds: "${STORAGE_S3_PRESIGN_SECONDS:3600}"
     api-call-attempt-timeout-seconds: "${STORAGE_S3_API_CALL_ATTEMPT_TIMEOUT_SECONDS:30}"
     api-call-timeout-seconds: "${STORAGE_S3_API_CALL_TIMEOUT_SECONDS:60}"
+retention:
+  # Phase 6 / Gap 4-finish — nightly CronJob purges originals from MinIO once derivatives are
+  # durable and the row is older than this many days. Conservative default per the plan; the
+  # alert-first phase used 7 days as the canonical threshold.
+  original-days: "${RETENTION_ORIGINAL_DAYS:7}"
+  max-rows-per-run: "${RETENTION_MAX_ROWS_PER_RUN:5000}"
+  dry-run: "${RETENTION_DRY_RUN:false}"
 jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"

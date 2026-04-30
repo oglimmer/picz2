@@ -28,6 +28,18 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
   }
 
+  @ExceptionHandler(ResourceGoneException.class)
+  public ResponseEntity<ErrorResponse> handleResourceGoneException(
+      ResourceGoneException ex, HttpServletRequest request) {
+    log.info("Resource gone: {}", ex.getMessage());
+
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.GONE.value(), "Gone", ex.getMessage(), request.getRequestURI());
+
+    return ResponseEntity.status(HttpStatus.GONE).body(error);
+  }
+
   @ExceptionHandler(ValidationException.class)
   public ResponseEntity<ErrorResponse> handleValidationException(
       ValidationException ex, HttpServletRequest request) {

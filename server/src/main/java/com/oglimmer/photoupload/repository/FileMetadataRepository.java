@@ -125,4 +125,33 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   @Modifying(clearAutomatically = true)
   @Query("DELETE FROM FileMetadata f WHERE f.album.id = :albumId")
   int bulkDeleteByAlbumId(@Param("albumId") Long albumId);
+
+  /**
+   * Phase 6 / Gap 4-finish — rows eligible for original-purge by the nightly retention CronJob.
+   * Conditions:
+   *   - processing finished cleanly ({@code processing_status='DONE'}), so the worker did produce
+   *     the derivatives we intend to keep serving from;
+   *   - row is older than the cutoff (operator-configured retention window);
+   *   - {@code file_path} is non-null (i.e. not already purged) AND points at an S3 originals key
+   *     (legacy local-disk paths are out of scope — Gap 8 unmounted the PVC for the api/worker
+   *     pods, but the retention runner deliberately does not delete bytes off any local disk);
+   *   - {@code thumbnail_path IS NOT NULL} as a defensive sanity check that *some* derivative
+   *     exists. {@code DONE} rows always have this in practice, but this protects against an
+   *     anomalous row that was force-marked DONE without derivatives.
+   *
+   * <p>{@code LIMIT :maxRows} keeps a single CronJob firing bounded if the cutoff is misconfigured.
+   */
+  @Query(
+      value =
+          "SELECT * FROM file_metadata "
+              + "WHERE processing_status = 'DONE' "
+              + "AND uploaded_at < :cutoff "
+              + "AND file_path IS NOT NULL "
+              + "AND file_path LIKE 'originals/%' "
+              + "AND thumbnail_path IS NOT NULL "
+              + "ORDER BY uploaded_at ASC "
+              + "LIMIT :maxRows",
+      nativeQuery = true)
+  List<FileMetadata> findRetentionPurgeCandidates(
+      @Param("cutoff") Instant cutoff, @Param("maxRows") int maxRows);
 }

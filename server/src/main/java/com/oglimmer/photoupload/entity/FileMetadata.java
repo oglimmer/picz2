@@ -47,7 +47,10 @@ public class FileMetadata {
   @Column(name = "mime_type")
   private String mimeType;
 
-  @Column(name = "file_path", nullable = false)
+  // Nullable since Phase 6 / Gap 4-finish: the retention CronJob purges originals once derivatives
+  // exist and the row is older than `retention.original-days`, then sets file_path = NULL. Rows
+  // with file_path = NULL are still served via their thumb/medium/large derivatives.
+  @Column(name = "file_path")
   private String filePath;
 
   @Column(name = "uploaded_at", nullable = false)

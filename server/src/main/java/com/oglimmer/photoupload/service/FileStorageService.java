@@ -13,6 +13,7 @@ import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
+import com.oglimmer.photoupload.exception.ResourceGoneException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.StorageException;
 import com.oglimmer.photoupload.exception.ValidationException;
@@ -940,6 +941,32 @@ public class FileStorageService {
       isServingTranscodedVideo = true;
     }
 
+    // Phase 6 / Gap 4-finish: handle a purged original. After the retention CronJob runs, the
+    // original may be NULL while derivatives stay. Two cases:
+    //   - Caller explicitly asked for ?size=original on an image (or no transcoded version exists
+    //     for a video) → 410 Gone, since the bytes are intentionally and permanently absent.
+    //   - Caller didn't ask for a specific size → fall back to the largest derivative we have.
+    //     This keeps the gallery and Lightbox working without per-component awareness of purge.
+    if (filePath == null) {
+      if (isOriginalRequested) {
+        throw new ResourceGoneException(
+            "Original was purged by retention policy. Request a derivative size instead.");
+      }
+      String fallback = pickLargestDerivative(metadata);
+      if (fallback == null) {
+        throw new ResourceGoneException(
+            "Original was purged and no derivative is available to fall back to.");
+      }
+      filePath = fallback;
+      // Derivatives are always JPEG/MP4; mime adjustment below mirrors that.
+      if (fallback.equals(metadata.getTranscodedVideoPath())) {
+        isServingTranscodedVideo = true;
+      } else {
+        // thumb/medium/large are all JPEG.
+        mimeType = "image/jpeg";
+      }
+    }
+
     // Adjust MIME type based on what we're actually serving
     if (isServingThumbnail && isVideo) {
       // Video thumbnails are JPEG images
@@ -964,6 +991,29 @@ public class FileStorageService {
         metadata.getProcessingStatus(),
         derivativeReady,
         s3Backed ? filePath : null);
+  }
+
+  /**
+   * Pick the best available derivative when the original is gone. Preference order:
+   * large → medium → thumbnail (for images, plus same fallback for video stills); transcoded video
+   * is preferred over the image still for videos. Returns null if the row truly has no usable
+   * derivative — caller should 410.
+   */
+  private String pickLargestDerivative(FileMetadata metadata) {
+    boolean isVideo = metadata.getMimeType() != null && metadata.getMimeType().startsWith("video/");
+    if (isVideo && metadata.getTranscodedVideoPath() != null) {
+      return metadata.getTranscodedVideoPath();
+    }
+    if (metadata.getLargePath() != null) {
+      return metadata.getLargePath();
+    }
+    if (metadata.getMediumPath() != null) {
+      return metadata.getMediumPath();
+    }
+    if (metadata.getThumbnailPath() != null) {
+      return metadata.getThumbnailPath();
+    }
+    return null;
   }
 
   private FileInfo convertToFileInfo(FileMetadata metadata) {
@@ -1056,6 +1106,13 @@ public class FileStorageService {
 
     if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
       throw new ValidationException("Only image files can be rotated");
+    }
+    // Phase 6 / Gap 4-finish: rotation needs the original bytes. Once retention has nulled
+    // file_path, the original is gone from MinIO permanently — 410 lets the UI distinguish
+    // "purged, will never work again" from a transient "validation" error.
+    if (metadata.getFilePath() == null) {
+      throw new ResourceGoneException(
+          "Original was purged by retention policy and can no longer be rotated.");
     }
     // Rotation needs the worker to download the original from S3, rotate it, and PUT it back.
     // Pre-S3 rows (Gap 2a migration was completed) never reach this branch in practice, but

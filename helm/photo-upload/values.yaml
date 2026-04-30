@@ -125,6 +125,49 @@ frontend:
       cpu: 100m
       memory: 128Mi
 
+# Phase 6 / Gap 4-finish — nightly retention CronJob. Purges originals from MinIO once their
+# derivatives are durable and the row is older than `originalDays`. Same image as backend, runs
+# under SPRING_PROFILES_ACTIVE=retention so application-retention.yml strips Tomcat / actuator
+# / scheduled tasks; the RetentionRunner CommandLineRunner exits the JVM after one pass.
+#
+# Default `dryRun: true` so the first cron firing in any new environment logs eligible rows
+# without actually deleting bytes. Flip to false once an operator has reviewed the dry-run log.
+retention:
+  enabled: true
+  # 03:17 — quiet local hour, off the top of the hour to stay clear of other cron-storm timing.
+  schedule: "17 3 * * *"
+  # Originals older than this are eligible for purge. Conservative 7 days per the plan; bump
+  # higher per environment if storage isn't tight.
+  originalDays: 7
+  # Soft cap so a misconfigured cutoff (e.g. 0) can't sweep the whole table in one firing.
+  maxRowsPerRun: 5000
+  # First run after deploy: keep this true and verify the log. Switch to false to actually purge.
+  dryRun: true
+  # K8s job housekeeping.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Pods that miss their start window by more than this don't fire — prevents catch-up storms
+  # after a node was offline for a multi-hour outage.
+  startingDeadlineSeconds: 600
+  # Pod artefacts vanish 1 day after the Job finishes; logs survive long enough to investigate
+  # without the namespace filling up with completed Jobs.
+  ttlSecondsAfterFinished: 86400
+  # Tiny pod — no Tomcat, no thumbnailer subprocesses. Heap-only, mostly idle while it walks
+  # the eligibility query and issues S3 DELETEs.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 256Mi
+  javaOpts: "-Xmx256m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError"
+  # Image is shared with backend; tag falls through to backend.image.tag if left blank.
+  image:
+    repository: ""
+    pullPolicy: ""
+    tag: ""
+
 # Object storage (MinIO / S3-compatible). When enabled, uploads, derivatives, and reads go
 # through this bucket. The bucket lives in-cluster; only the credentials should be overridden
 # per-environment via --set or an external secrets manager.

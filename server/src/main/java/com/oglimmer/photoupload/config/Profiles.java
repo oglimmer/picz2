@@ -10,6 +10,9 @@ public final class Profiles {
 
   public static final String API = "api";
   public static final String WORKER = "worker";
+  // Phase 6 / Gap 4-finish: one-shot CronJob profile. Loads RetentionRunner only — no Tomcat,
+  // no controllers, no JobDispatcher. Pod runs the runner and exits.
+  public static final String RETENTION = "retention";
 
   private Profiles() {}
 }

@@ -8,7 +8,7 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
-Last reviewed: 2026-04-30 (Phase 4e R3 cleanup landed: legacy `@Async` path, `INGESTED` enum, `jobs.dispatcher.enabled` flag, and the four deferred admin/sync methods removed. Persistent jobs queue is now the only processing path; `FileStorageService` always inserts as `QUEUED` + enqueues. **Pre-existing**: Phase 4.5 partial rotate-via-worker-job lives on; the three other admin paths (`generateMissingThumbnails`, `updateTranscodedVideoPaths`, `updateVideoThumbnailPaths`, `AlbumService` video-date backfill) were physically removed in R3 — re-enqueue them as worker-side jobs when needed.)
+Last reviewed: 2026-05-01 (Phase 6 / Gap 4-finish landed in code: V33 makes `file_path` nullable, `RetentionService` + `RetentionRunner` (one-shot CommandLineRunner under the new `Profiles.RETENTION` profile) sweep DONE rows older than `retention.original-days` and DELETE the S3 original. Helm `cronjob-retention.yaml` runs nightly at 03:17 with `concurrencyPolicy: Forbid`. File-serve falls back to the largest derivative when the original is purged; explicit `?size=original` returns 410 via the new `ResourceGoneException`. Rotate is blocked at the API (also 410) and the rotate button is hidden in `GalleryItem.vue` via the new `originalAvailable` flag on `FileInfo`. Default `retention.dryRun=true` in `values.yaml` so the first cron firing only logs eligible rows. Earlier 2026-04-30: Phase 4e R3 cleanup landed; legacy `@Async`/`INGESTED`/`jobs.dispatcher.enabled` and the deferred admin methods were removed.)
 
 ---
 
@@ -349,16 +349,20 @@ Stale TUS uploads leave dangling MinIO objects. Set `tusd -expire-after=168h`; r
 
 ## Gap 4-finish — Retention CronJob (Phase 6)
 
-- [ ] `cronjob-retention.yaml`: nightly at `03:17`, `concurrencyPolicy: Forbid`. Runs the same backend image with `SPRING_PROFILES_ACTIVE=retention`.
-- [ ] New `RetentionRunner` `CommandLineRunner` finds rows where `status='DONE'` AND `uploaded_at < NOW() - 7d` AND all derivatives exist → deletes original from MinIO, sets `filePath = NULL`. Configurable `retention.original-days`.
-- [ ] File-serve adjustment: serve the largest available derivative when `filePath` is NULL; return 410 Gone for explicit `?size=original` requests on purged assets.
-- [ ] Block rotation in the UI for assets with `filePath=NULL` (rotation needs the original).
+- [x] `cronjob-retention.yaml`: nightly at `03:17`, `concurrencyPolicy: Forbid`, `restartPolicy: Never`, `backoffLimit: 0`. Runs the same backend image with `SPRING_PROFILES_ACTIVE=retention`. `application-retention.yml` strips Tomcat (`spring.main.web-application-type=none`) and the management port; `RetentionRunner.run()` calls `SpringApplication.exit(...)` so K8s reports Job/Completed.
+- [x] V33 migration drops the `NOT NULL` on `file_metadata.file_path`; `FileMetadata.filePath` entity field updated to match.
+- [x] `RetentionService` (under `@Profile(Profiles.RETENTION)`) finds rows where `processing_status='DONE'` AND `uploaded_at < NOW() - retention.original-days` AND `file_path LIKE 'originals/%'` AND `thumbnail_path IS NOT NULL` (defensive sanity check that *some* derivative exists) → S3 DELETE original → null `file_path` in its own per-row TX. `RetentionProperties` exposes `retention.original-days` (default 7), `retention.max-rows-per-run` (default 5000, prevents runaway sweep on misconfig), `retention.dry-run` (default `true` in chart values for first-run safety).
+- [x] `RetentionRunner` (one-shot `CommandLineRunner`) wraps `RetentionService.run()` and exits with `min(failed, 125)` so a partial-failure run shows on the CronJob's last-failed status without masking it as success.
+- [x] File-serve adjustment: `FileStorageService.getFileServeInfoByPublicToken` falls back to the largest available derivative (`transcoded` for video > `large` > `medium` > `thumbnail`) when `filePath` is NULL and no specific size was asked for. Explicit `?size=original` on a purged asset throws the new `ResourceGoneException`, mapped to 410 by `GlobalExceptionHandler`.
+- [x] Rotation blocked at the API: `FileStorageService.rotateImageLeft` throws `ResourceGoneException` (→ 410) when `filePath` is NULL, distinct from the existing 400 `ValidationException` for non-image / non-S3 assets. Frontend hides the rotate button via the new `originalAvailable: boolean` field on `FileInfo` (set in `FileInfoMapper` from `filePath != null`); `GalleryItem.vue` checks `canRotate` before rendering the button. Older list responses without the field treat it as available so pre-Phase-6 backends keep working.
 
 ### Testing
-- [ ] Shorten retention to 0 in staging, run the CronJob manually, verify originals are gone but gallery still serves derivatives.
+- [ ] Shorten retention to 0 in staging, run the CronJob manually (`kubectl create job --from=cronjob/...`), verify originals are gone but gallery still serves derivatives.
+- [ ] Idempotency: re-run the runner immediately after a successful sweep — eligibility query returns 0 rows because every purged row now has `file_path IS NULL`.
+- [ ] Crash recovery: kill the runner between the S3 DELETE and the DB UPDATE for a row → next run sees the row again, S3 DELETE is a no-op, DB null-out completes.
 
 ### Risk
-Irreversible deletion. Hence the conservative 7-day default and the alert-first phase.
+Irreversible deletion. Hence the conservative 7-day default, `dryRun: true` in chart values for first-run validation, the `originals/` prefix filter (legacy local-disk paths are deliberately out of scope), and the per-row TX that limits blast radius if the eligibility query ever returns something it shouldn't.
 
 ---
 

@@ -124,7 +124,7 @@
           </option>
         </select>
         <button
-          v-if="!isVideoFile"
+          v-if="!isVideoFile && canRotate"
           class="rotate-btn"
           title="Rotate left 90°"
           @click.stop="$emit('rotate', file.id)"
@@ -224,6 +224,10 @@ const processingTitle = computed(() => {
   }
 })
 const isVideoFile = computed(() => isVideo(props.file))
+// Rotation needs the original bytes; once retention has purged the original
+// (originalAvailable === false) the rotate button is hidden. Treat undefined as available so
+// older list responses (pre-Phase-6 backend) keep showing the button.
+const canRotate = computed(() => props.file.originalAvailable !== false)
 const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))
 const exifDate = computed(() => props.file.exifDateTimeOriginal ? formatDate(props.file.exifDateTimeOriginal) : null)

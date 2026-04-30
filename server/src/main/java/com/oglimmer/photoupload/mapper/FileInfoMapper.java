@@ -19,6 +19,7 @@ public interface FileInfoMapper {
   @org.mapstruct.Mapping(target = "tags", ignore = true) // Set in @AfterMapping
   @org.mapstruct.Mapping(target = "albumId", ignore = true) // Set in @AfterMapping
   @org.mapstruct.Mapping(target = "albumName", ignore = true) // Set in @AfterMapping
+  @org.mapstruct.Mapping(target = "originalAvailable", ignore = true) // Set in @AfterMapping
   FileInfo fileMetadataToFileInfo(FileMetadata metadata);
 
   List<FileInfo> fileMetadatasToFileInfos(List<FileMetadata> metadatas);
@@ -39,5 +40,9 @@ public interface FileInfoMapper {
       fileInfo.setAlbumId(metadata.getAlbum().getId());
       fileInfo.setAlbumName(metadata.getAlbum().getName());
     }
+
+    // True iff the original bytes are still in object storage. Set to false by the Phase 6
+    // retention CronJob, which nulls file_path after deleting the S3 object.
+    fileInfo.setOriginalAvailable(metadata.getFilePath() != null);
   }
 }

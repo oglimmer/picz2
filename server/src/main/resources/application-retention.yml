@@ -1,0 +1,13 @@
+---
+# Phase 6 / Gap 4-finish — overrides applied only when SPRING_PROFILES_ACTIVE=retention.
+# The retention pod is a one-shot CronJob: no Tomcat, no actuator, no scheduled tasks.
+spring:
+  main:
+    # Skip ServletWebServerApplicationContext entirely — no Tomcat, no port binding. The pod runs
+    # RetentionRunner.run() then calls SpringApplication.exit() so K8s sees Job/Completed.
+    web-application-type: "none"
+  # Worker/api defaults open management:8081 for actuator scrapes; the retention pod doesn't need
+  # it (CronJob lifecycle is tracked by K8s) and binding the port would just slow startup.
+management:
+  server:
+    port: -1
