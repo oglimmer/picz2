@@ -10,6 +10,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
@@ -54,6 +56,12 @@ public class ObjectStorageConfig {
             S3Configuration.builder().pathStyleAccessEnabled(properties.isPathStyleAccess()).build())
         .httpClientBuilder(ApacheHttpClient.builder())
         .overrideConfiguration(apiCallTimeouts())
+        // SDK v2.30+ defaults to Flexible Checksums (CRC32) and stops sending Content-MD5 on
+        // DeleteObjects. MinIO still requires Content-MD5 for the multi-object delete and 400s
+        // without it. WHEN_REQUIRED restores the pre-2.30 behaviour: only attach checksums for
+        // operations that historically demanded one, using Content-MD5 for DeleteObjects.
+        .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+        .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
         .build();
   }
 

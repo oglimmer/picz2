@@ -98,7 +98,7 @@ public class FileMetadata {
 
   @Enumerated(EnumType.STRING)
   @Column(name = "processing_status", nullable = false, length = 32)
-  private ProcessingStatus processingStatus = ProcessingStatus.INGESTED;
+  private ProcessingStatus processingStatus = ProcessingStatus.QUEUED;
 
   @Column(name = "processing_attempts", nullable = false)
   private Integer processingAttempts = 0;

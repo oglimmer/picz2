@@ -4,7 +4,6 @@ package com.oglimmer.photoupload.service;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
-import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -12,6 +11,7 @@ import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.exception.StorageException;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.storage.StoragePaths;
+import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +25,6 @@ import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -46,15 +45,6 @@ public class FileProcessingService {
   // into a per-job temp dir, derivatives are produced locally and PUT back to S3, and the temp
   // dir is wiped before the method returns.
   private final Optional<ObjectStorageService> objectStorage;
-
-  /**
-   * Legacy async entry point used when {@code jobs.dispatcher.enabled=false}. Delegates to the
-   * synchronous {@link #processFile(Long)} on the file-processing executor.
-   */
-  @Async(AsyncConfig.FILE_PROCESSING_EXECUTOR)
-  public void processFileAsync(Long fileMetadataId) {
-    processFile(fileMetadataId);
-  }
 
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
@@ -99,7 +89,7 @@ public class FileProcessingService {
       }
 
       boolean isHeic =
-          thumbnailService.isHeicFile(mimeType)
+          MimeTypePredicates.isHeicFile(mimeType)
               || extension.equalsIgnoreCase("heic")
               || extension.equalsIgnoreCase("heif");
 
@@ -153,7 +143,7 @@ public class FileProcessingService {
       }
 
       // 2) Thumbnails (images)
-      if (thumbnailService.isImageFile(mimeType)) {
+      if (MimeTypePredicates.isImageFile(mimeType)) {
         Path[] thumbnails = thumbnailService.generateAllThumbnails(currentFile, currentFile);
         if (thumbnails[0] == null && thumbnails[1] == null && thumbnails[2] == null) {
           // All sizes failed — bail out so we don't mark the asset DONE with no derivatives.
@@ -191,7 +181,7 @@ public class FileProcessingService {
       }
 
       // 3) Video transcode + video thumbnail
-      if (thumbnailService.isVideoFile(mimeType)) {
+      if (MimeTypePredicates.isVideoFile(mimeType)) {
         String baseNameWithoutExt = storedFilename.substring(0, storedFilename.lastIndexOf('.'));
         String transcodedFilename = "web_" + baseNameWithoutExt + ".mp4";
         Path transcodedLocation =
@@ -226,9 +216,9 @@ public class FileProcessingService {
 
       // 4) EXIF / video creation date
       Instant exifInstant = null;
-      if (thumbnailService.isImageFile(mimeType)) {
+      if (MimeTypePredicates.isImageFile(mimeType)) {
         exifInstant = extractExifDateTimeOriginal(currentFile);
-      } else if (thumbnailService.isVideoFile(mimeType)) {
+      } else if (MimeTypePredicates.isVideoFile(mimeType)) {
         exifInstant = thumbnailService.extractVideoCreationDate(currentFile);
       }
       if (exifInstant != null) {
@@ -291,7 +281,7 @@ public class FileProcessingService {
     String mimeType = metadata.getMimeType();
     Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
 
-    if (!thumbnailService.isImageFile(mimeType)) {
+    if (!MimeTypePredicates.isImageFile(mimeType)) {
       // Should never happen — api side validates. Treat as a permanent failure.
       markFailed(
           tx,

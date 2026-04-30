@@ -51,9 +51,6 @@ public class JobDispatcher {
 
   @Scheduled(fixedDelayString = "${jobs.poll.interval-ms:2000}")
   public void poll() {
-    if (!jobsProperties.getDispatcher().isEnabled()) {
-      return;
-    }
     if (!semaphore.tryAcquire()) {
       // Previous tick is still running. Spring's @Scheduled with fixedDelay already serialises
       // invocations on a single scheduler thread, but the explicit guard makes the intent clear

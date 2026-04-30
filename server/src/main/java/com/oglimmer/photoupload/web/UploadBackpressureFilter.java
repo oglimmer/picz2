@@ -1,11 +1,8 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.web;
 
-import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
-import com.oglimmer.photoupload.config.AsyncConfig;
 import com.oglimmer.photoupload.config.JobsProperties;
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.service.JobQueueDepthService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import jakarta.servlet.FilterChain;
@@ -14,10 +11,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Optional;
-import java.util.concurrent.ThreadPoolExecutor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -25,11 +20,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * Rejects uploads with HTTP 503 + Retry-After when the processing queue is full, before Tomcat
  * parses the multipart body. Rejecting at the filter layer — rather than after the controller has
  * read the upload into memory — is what turns backpressure from a semantic signal into an actual
- * memory safeguard.
- *
- * <p>When the persistent jobs dispatcher is enabled, depth is read from the cached {@link
- * JobQueueDepthService} gauge. When disabled (legacy {@code @Async} path), the filter falls back
- * to the in-memory executor queue.
+ * memory safeguard. Depth is read from the cached {@link JobQueueDepthService} gauge so the upload
+ * hot path never hits the DB.
  */
 @Profile(Profiles.API)
 @Component
@@ -38,7 +30,6 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
 
   private static final int RETRY_AFTER_SECONDS = 30;
 
-  private final ThreadPoolTaskExecutor fileProcessingExecutor;
   private final JobQueueDepthService jobQueueDepthService;
   private final JobsProperties jobsProperties;
   // Optional: present when Resilience4j is on the classpath AND a "minio" breaker is configured
@@ -47,12 +38,9 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
   private final Optional<CircuitBreaker> minioCircuitBreaker;
 
   public UploadBackpressureFilter(
-      @Qualifier(AsyncConfig.FILE_PROCESSING_EXECUTOR)
-          ThreadPoolTaskExecutor fileProcessingExecutor,
       JobQueueDepthService jobQueueDepthService,
       JobsProperties jobsProperties,
       Optional<CircuitBreaker> minioCircuitBreaker) {
-    this.fileProcessingExecutor = fileProcessingExecutor;
     this.jobQueueDepthService = jobQueueDepthService;
     this.jobsProperties = jobsProperties;
     this.minioCircuitBreaker = minioCircuitBreaker;
@@ -92,22 +80,10 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
       return true;
     }
 
-    if (jobsProperties.getDispatcher().isEnabled()) {
-      long depth = jobQueueDepthService.getDepth();
-      int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();
-      if (depth >= threshold) {
-        log.warn("Rejecting upload — jobs queue depth {} ≥ threshold {}", depth, threshold);
-        return true;
-      }
-      return false;
-    }
-
-    ThreadPoolExecutor raw = fileProcessingExecutor.getThreadPoolExecutor();
-    if (raw.getQueue().remainingCapacity() == 0) {
-      log.warn(
-          "Rejecting upload at filter — processing queue full (active={}, queued={})",
-          raw.getActiveCount(),
-          raw.getQueue().size());
+    long depth = jobQueueDepthService.getDepth();
+    int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();
+    if (depth >= threshold) {
+      log.warn("Rejecting upload — jobs queue depth {} ≥ threshold {}", depth, threshold);
       return true;
     }
     return false;

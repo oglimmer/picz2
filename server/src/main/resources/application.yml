@@ -88,8 +88,6 @@ storage:
     api-call-attempt-timeout-seconds: "${STORAGE_S3_API_CALL_ATTEMPT_TIMEOUT_SECONDS:30}"
     api-call-timeout-seconds: "${STORAGE_S3_API_CALL_TIMEOUT_SECONDS:60}"
 jobs:
-  dispatcher:
-    enabled: "${JOBS_DISPATCHER_ENABLED:true}"
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"
   lease:

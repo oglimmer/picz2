@@ -22,9 +22,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
     properties = {
-      // Dispatcher must be enabled on api-only deploys; the legacy @Async branch in
-      // FileStorageService would otherwise demand the worker-only FileProcessingService.
-      "jobs.dispatcher.enabled=true",
       "app.apns.enabled=false",
       "app.mail.enabled=false",
       "spring.mail.host=localhost"

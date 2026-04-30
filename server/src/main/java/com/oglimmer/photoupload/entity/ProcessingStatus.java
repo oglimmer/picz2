@@ -2,7 +2,6 @@
 package com.oglimmer.photoupload.entity;
 
 public enum ProcessingStatus {
-  INGESTED,
   QUEUED,
   PROCESSING,
   DONE,

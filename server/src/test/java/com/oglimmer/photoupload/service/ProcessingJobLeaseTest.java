@@ -38,7 +38,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
     properties = {
-      "jobs.dispatcher.enabled=false",
       "app.apns.enabled=false",
       "app.mail.enabled=false",
       "spring.mail.host=localhost"
@@ -226,7 +225,7 @@ class ProcessingJobLeaseTest {
         "INSERT INTO file_metadata "
             + "(original_name, stored_filename, file_size, mime_type, file_path, uploaded_at, "
             + "rotation, display_order, album_id, processing_status, processing_attempts) "
-            + "VALUES (?, ?, ?, ?, ?, NOW(6), 0, 0, ?, 'INGESTED', 0)",
+            + "VALUES (?, ?, ?, ?, ?, NOW(6), 0, 0, ?, 'QUEUED', 0)",
         "it-" + suffix + ".jpg",
         "stored-" + suffix + ".jpg",
         1024L,

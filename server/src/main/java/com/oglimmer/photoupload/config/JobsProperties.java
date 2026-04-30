@@ -10,22 +10,12 @@ import org.springframework.context.annotation.Configuration;
 @Data
 public class JobsProperties {
 
-  private final Dispatcher dispatcher = new Dispatcher();
   private final Poll poll = new Poll();
   private final Lease lease = new Lease();
   private final Backpressure backpressure = new Backpressure();
 
   /** N=3 per D15: a transient failure gets two retries before going to DEAD_LETTER. */
   private int maxAttempts = 3;
-
-  @Data
-  public static class Dispatcher {
-    /**
-     * When true, uploads enqueue a job and the {@code JobDispatcher} runs them. When false, falls
-     * back to the legacy in-memory {@code @Async} executor path. Used for one-release rollback.
-     */
-    private boolean enabled = true;
-  }
 
   @Data
   public static class Poll {

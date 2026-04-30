@@ -33,7 +33,7 @@ class UploadControllerTest {
     fi.setId(id);
     fi.setOriginalName("test.jpg");
     fi.setSize(123L);
-    fi.setProcessingStatus(ProcessingStatus.INGESTED);
+    fi.setProcessingStatus(ProcessingStatus.QUEUED);
     return fi;
   }
 
@@ -51,7 +51,7 @@ class UploadControllerTest {
     UploadFileResponse body = resp.getBody();
     assertNotNull(body);
     assertTrue(body.isSuccess());
-    assertEquals(ProcessingStatus.INGESTED, body.getFile().getProcessingStatus());
+    assertEquals(ProcessingStatus.QUEUED, body.getFile().getProcessingStatus());
   }
 
   @Test

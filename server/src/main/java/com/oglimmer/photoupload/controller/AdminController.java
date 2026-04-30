@@ -30,57 +30,6 @@ public class AdminController {
   private final FileStorageService fileStorageService;
   private final ProcessingJobRepository processingJobRepository;
 
-  @PostMapping("/generate-thumbnails")
-  public ResponseEntity<AdminOperationResponse> generateThumbnails(
-      @RequestParam(value = "overwrite", required = false, defaultValue = "false")
-          boolean overwrite) {
-    if (overwrite) {
-      log.info("Starting batch thumbnail generation for all existing images (overwrite mode)...");
-    } else {
-      log.info("Starting batch thumbnail generation for all existing images...");
-    }
-    var result = fileStorageService.generateMissingThumbnails(overwrite);
-
-    AdminOperationResponse response =
-        AdminOperationResponse.builder()
-            .success(true)
-            .message("Thumbnail generation complete")
-            .stats(result)
-            .build();
-
-    return ResponseEntity.ok(response);
-  }
-
-  @PostMapping("/update-transcoded-videos")
-  public ResponseEntity<AdminOperationResponse> updateTranscodedVideos() {
-    log.info("Starting scan for transcoded videos...");
-    var result = fileStorageService.updateTranscodedVideoPaths();
-
-    AdminOperationResponse response =
-        AdminOperationResponse.builder()
-            .success(true)
-            .message("Transcoded video paths updated successfully")
-            .stats(result)
-            .build();
-
-    return ResponseEntity.ok(response);
-  }
-
-  @PostMapping("/update-video-thumbnails")
-  public ResponseEntity<AdminOperationResponse> updateVideoThumbnails() {
-    log.info("Starting scan for video thumbnails...");
-    var result = fileStorageService.updateVideoThumbnailPaths();
-
-    AdminOperationResponse response =
-        AdminOperationResponse.builder()
-            .success(true)
-            .message("Video thumbnail paths updated successfully")
-            .stats(result)
-            .build();
-
-    return ResponseEntity.ok(response);
-  }
-
   /**
    * Finds S3 objects with no corresponding DB row and deletes them. Always run with
    * {@code dryRun=true} first to review what would be removed before committing.

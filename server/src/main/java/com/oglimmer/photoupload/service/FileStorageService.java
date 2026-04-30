@@ -5,7 +5,6 @@ import com.oglimmer.photoupload.config.Profiles;
 import org.springframework.context.annotation.Profile;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
-import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
@@ -52,7 +51,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.task.TaskRejectedException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -106,22 +104,13 @@ public class FileStorageService {
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
-  // Worker-only after the deployment split (Phase 4a). The api pod boots with this empty; the
-  // remaining heavy admin methods (rotate, generateMissingThumbnails, etc.) throw when invoked
-  // until they are rewritten as worker-side jobs (Phase 4.5, D17).
-  private final Optional<ThumbnailService> thumbnailService;
   private final LocalFileCleanupService localFileCleanupService;
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
-  // Worker-only after Phase 4a. The legacy @Async fallback (used when
-  // {@code jobs.dispatcher.enabled=false}) is the only call site; on api-only deploys with the
-  // dispatcher enabled, the empty Optional is never read. Misconfigurations fail fast.
-  private final Optional<FileProcessingService> fileProcessingService;
   private final JobEnqueueService jobEnqueueService;
-  private final JobsProperties jobsProperties;
   // Optional: present iff storage.s3.enabled=true. When present, the upload path PUTs the body
   // directly to MinIO and stores an S3 key in file_path; the local PVC is used only for Spring's
   // transient .multipart-tmp staging (auto-cleaned per request) and per-job processing scratch.
@@ -133,23 +122,19 @@ public class FileStorageService {
       TagRepository tagRepository,
       ImageTagRepository imageTagRepository,
       AlbumEnabledTagRepository albumEnabledTagRepository,
-      Optional<ThumbnailService> thumbnailService,
       LocalFileCleanupService localFileCleanupService,
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
-      Optional<FileProcessingService> fileProcessingService,
       JobEnqueueService jobEnqueueService,
-      JobsProperties jobsProperties,
       Optional<ObjectStorageService> objectStorage) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
     this.imageTagRepository = imageTagRepository;
     this.albumEnabledTagRepository = albumEnabledTagRepository;
-    this.thumbnailService = thumbnailService;
     this.localFileCleanupService = localFileCleanupService;
     this.jdbcTemplate = jdbcTemplate;
     this.fileInfoMapper = fileInfoMapper;
@@ -157,9 +142,7 @@ public class FileStorageService {
     this.userContext = userContext;
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
-    this.fileProcessingService = fileProcessingService;
     this.jobEnqueueService = jobEnqueueService;
-    this.jobsProperties = jobsProperties;
     this.objectStorage = objectStorage;
   }
 
@@ -201,19 +184,6 @@ public class FileStorageService {
    */
   public Path resolveFilePath(String relativePath) {
     return toAbsolutePath(relativePath);
-  }
-
-  /**
-   * Resolve the thumbnailer for admin/rotate paths. Empty on api-only deployments after the worker
-   * split (Phase 4a, D17) — those endpoints are documented broken until the Phase 4.5 worker-job
-   * rewrite. Throws so the controller maps to a clear 5xx instead of NPE'ing later.
-   */
-  private ThumbnailService requireThumbnailer() {
-    return thumbnailService.orElseThrow(
-        () ->
-            new IllegalStateException(
-                "Image processing is not available on this pod (worker profile required). "
-                    + "Admin/rotate endpoints are deferred to a worker-side job; see plan D17."));
   }
 
   public FileInfo storeFile(MultipartFile file, Long albumId, String contentId) throws IOException {
@@ -380,12 +350,7 @@ public class FileStorageService {
               metadata.setUploadedAt(Instant.now());
               metadata.setChecksum(checksum);
               metadata.setContentId(contentId);
-              // When the dispatcher owns processing, the row is QUEUED at insert time and the
-              // jobs table is the source of truth. The legacy @Async path keeps INGESTED so
-              // FileProcessingService transitions it to PROCESSING the same way it always has.
-              boolean dispatcherEnabled = jobsProperties.getDispatcher().isEnabled();
-              metadata.setProcessingStatus(
-                  dispatcherEnabled ? ProcessingStatus.QUEUED : ProcessingStatus.INGESTED);
+              metadata.setProcessingStatus(ProcessingStatus.QUEUED);
 
               Album album =
                   albumRepository
@@ -402,32 +367,10 @@ public class FileStorageService {
               FileMetadata saved = metadataRepository.save(metadata);
               ensureNoTagExists(currentUser);
               addNoTagToFile(saved, currentUser);
-              if (dispatcherEnabled) {
-                // Same TX as the metadata insert → either both visible or neither.
-                jobEnqueueService.enqueue(saved.getId());
-              }
+              // Same TX as the metadata insert → either both visible or neither.
+              jobEnqueueService.enqueue(saved.getId());
               return convertToFileInfoWithId(saved);
             });
-
-    if (!jobsProperties.getDispatcher().isEnabled()) {
-      // Legacy path: hand the new asset id to the @Async executor directly. If the executor
-      // queue is full and AbortPolicy rejects us, the row already exists and can be
-      // reprocessed later; we log and return success so the client doesn't double-upload.
-      FileProcessingService legacy =
-          fileProcessingService.orElseThrow(
-              () ->
-                  new IllegalStateException(
-                      "jobs.dispatcher.enabled=false but FileProcessingService is not loaded "
-                          + "(worker profile required). Enable the dispatcher on api-only deploys."));
-      try {
-        legacy.processFileAsync(result.getId());
-      } catch (TaskRejectedException e) {
-        log.warn(
-            "Processing task rejected after insert for {} (id={}); row retained for later reprocess",
-            originalFilename,
-            result.getId());
-      }
-    }
 
     return result;
   }
@@ -917,267 +860,6 @@ public class FileStorageService {
         });
 
     log.info("Reordered {} files", fileIds.size());
-  }
-
-  /**
-   * Generate thumbnails for all existing images that don't have them. This is useful for batch
-   * processing existing files that were uploaded before thumbnail feature was added.
-   *
-   * @param overwrite If true, regenerate all thumbnails even if they already exist
-   */
-  public Map<String, Object> generateMissingThumbnails(boolean overwrite) {
-    ThumbnailService thumb = requireThumbnailer();
-    int processed = 0;
-    int succeeded = 0;
-    int failed = 0;
-    int skipped = 0;
-
-    List<FileMetadata> allFiles = metadataRepository.findAll();
-
-    for (FileMetadata metadata : allFiles) {
-      processed++;
-
-      // Skip if thumbnails already exist and we're not overwriting
-      if (!overwrite
-          && metadata.getThumbnailPath() != null
-          && metadata.getMediumPath() != null
-          && metadata.getLargePath() != null) {
-        skipped++;
-        continue;
-      }
-
-      // Skip if not an image
-      if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
-        skipped++;
-        continue;
-      }
-
-      try {
-        // Get the original file path
-        Path originalFile = toAbsolutePath(metadata.getFilePath());
-
-        if (!originalFile.toFile().exists()) {
-          log.warn("File not found, skipping: {}", metadata.getStoredFilename());
-          failed++;
-          continue;
-        }
-
-        // If overwriting, delete existing thumbnails first (disk I/O, no transaction needed)
-        if (overwrite) {
-          localFileCleanupService.deleteThumbnails(
-              toAbsolutePath(metadata.getThumbnailPath()),
-              toAbsolutePath(metadata.getMediumPath()),
-              toAbsolutePath(metadata.getLargePath()));
-        }
-
-        // Generate thumbnails (CPU/disk intensive, no transaction needed)
-        Path[] thumbnails = thumb.generateAllThumbnails(originalFile, originalFile);
-
-        boolean anyGenerated = false;
-        if (thumbnails[0] != null) {
-          metadata.setThumbnailPath(toRelativePath(thumbnails[0]));
-          anyGenerated = true;
-        }
-        if (thumbnails[1] != null) {
-          metadata.setMediumPath(toRelativePath(thumbnails[1]));
-          anyGenerated = true;
-        }
-        if (thumbnails[2] != null) {
-          metadata.setLargePath(toRelativePath(thumbnails[2]));
-          anyGenerated = true;
-        }
-
-        if (anyGenerated) {
-          // Short transaction for DB save only
-          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
-          succeeded++;
-          log.info(
-              "Generated thumbnails for: {} ({}/{})",
-              metadata.getOriginalName(),
-              succeeded,
-              allFiles.size());
-        } else {
-          failed++;
-          log.warn("Failed to generate thumbnails for: {}", metadata.getOriginalName());
-        }
-
-      } catch (Exception e) {
-        failed++;
-        log.error(
-            "Error generating thumbnails for {}: {}", metadata.getOriginalName(), e.getMessage());
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("processed", processed);
-    result.put("succeeded", succeeded);
-    result.put("failed", failed);
-    result.put("skipped", skipped);
-
-    log.info(
-        "Thumbnail generation complete: {} processed, {} succeeded, {} failed, {} skipped",
-        processed,
-        succeeded,
-        failed,
-        skipped);
-
-    return result;
-  }
-
-  /**
-   * Scan for transcoded videos on disk and update database paths This is useful for batch
-   * processing existing videos that were transcoded manually
-   *
-   * @return Statistics about the update process
-   */
-  public Map<String, Object> updateTranscodedVideoPaths() {
-    int processed = 0;
-    int found = 0;
-    int updated = 0;
-    int skipped = 0;
-
-    List<FileMetadata> allFiles = metadataRepository.findAll();
-
-    for (FileMetadata metadata : allFiles) {
-      // Skip if not a video
-      if (metadata.getMimeType() == null || !metadata.getMimeType().startsWith("video/")) {
-        continue;
-      }
-
-      processed++;
-
-      // Skip if transcoded path already set
-      if (metadata.getTranscodedVideoPath() != null) {
-        skipped++;
-        log.debug("Skipping {} - transcoded path already set", metadata.getStoredFilename());
-        continue;
-      }
-
-      try {
-        // Generate expected transcoded filename
-        String storedFilename = metadata.getStoredFilename();
-        String baseNameWithoutExt = storedFilename.substring(0, storedFilename.lastIndexOf('.'));
-        String transcodedFilename = "web_" + baseNameWithoutExt + ".mp4";
-        Path transcodedLocation = this.fileStorageLocation.resolve(transcodedFilename);
-
-        // Check if transcoded file exists on disk (no transaction needed)
-        if (transcodedLocation.toFile().exists()) {
-          // Short transaction for DB update only
-          metadata.setTranscodedVideoPath(toRelativePath(transcodedLocation));
-          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
-          found++;
-          updated++;
-          log.info(
-              "Found and linked transcoded video: {} -> {}",
-              metadata.getOriginalName(),
-              transcodedFilename);
-        } else {
-          log.debug(
-              "No transcoded video found for: {} (expected: {})",
-              metadata.getStoredFilename(),
-              transcodedFilename);
-        }
-
-      } catch (Exception e) {
-        log.error(
-            "Error updating transcoded path for {}: {}",
-            metadata.getOriginalName(),
-            e.getMessage());
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("processedVideos", processed);
-    result.put("foundTranscoded", found);
-    result.put("updatedDatabase", updated);
-    result.put("skippedExisting", skipped);
-
-    log.info(
-        "Transcoded video scan complete: {} videos processed, {} transcoded found, {} database records updated, {} skipped",
-        processed,
-        found,
-        updated,
-        skipped);
-
-    return result;
-  }
-
-  /**
-   * Scan for video thumbnails on disk and update database paths This is useful for batch processing
-   * existing videos that had thumbnails generated manually
-   *
-   * @return Statistics about the update process
-   */
-  public Map<String, Object> updateVideoThumbnailPaths() {
-    int processed = 0;
-    int found = 0;
-    int updated = 0;
-    int skipped = 0;
-
-    List<FileMetadata> allFiles = metadataRepository.findAll();
-
-    for (FileMetadata metadata : allFiles) {
-      // Skip if not a video
-      if (metadata.getMimeType() == null || !metadata.getMimeType().startsWith("video/")) {
-        continue;
-      }
-
-      processed++;
-
-      // Skip if thumbnail path already set
-      if (metadata.getThumbnailPath() != null) {
-        skipped++;
-        log.debug("Skipping {} - thumbnail path already set", metadata.getStoredFilename());
-        continue;
-      }
-
-      try {
-        // Generate expected thumbnail filename
-        String storedFilename = metadata.getStoredFilename();
-        String baseNameWithoutExt = storedFilename.substring(0, storedFilename.lastIndexOf('.'));
-        String thumbnailFilename = "thumb_" + baseNameWithoutExt + ".jpg";
-        Path thumbnailLocation = this.fileStorageLocation.resolve(thumbnailFilename);
-
-        // Check if thumbnail file exists on disk (no transaction needed)
-        if (thumbnailLocation.toFile().exists()) {
-          // Short transaction for DB update only
-          metadata.setThumbnailPath(toRelativePath(thumbnailLocation));
-          transactionTemplate.executeWithoutResult(status -> metadataRepository.save(metadata));
-          found++;
-          updated++;
-          log.info(
-              "Found and linked video thumbnail: {} -> {}",
-              metadata.getOriginalName(),
-              thumbnailFilename);
-        } else {
-          log.debug(
-              "No video thumbnail found for: {} (expected: {})",
-              metadata.getStoredFilename(),
-              thumbnailFilename);
-        }
-
-      } catch (Exception e) {
-        log.error(
-            "Error updating video thumbnail path for {}: {}",
-            metadata.getOriginalName(),
-            e.getMessage());
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("processedVideos", processed);
-    result.put("foundThumbnails", found);
-    result.put("updatedDatabase", updated);
-    result.put("skippedExisting", skipped);
-
-    log.info(
-        "Video thumbnail scan complete: {} videos processed, {} thumbnails found, {} database records updated, {} skipped",
-        processed,
-        found,
-        updated,
-        skipped);
-
-    return result;
   }
 
   /**

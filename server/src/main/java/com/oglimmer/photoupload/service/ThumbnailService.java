@@ -4,7 +4,6 @@ package com.oglimmer.photoupload.service;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
 import com.oglimmer.photoupload.config.Profiles;
-import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -31,7 +30,6 @@ public class ThumbnailService {
   private final VipsThumbnailService vipsThumbnailService;
   private final HeicConversionService heicConversionService;
   private final FfmpegService ffmpegService;
-  private final LocalFileCleanupService localFileCleanupService;
 
   /**
    * Generate all thumbnail sizes for an image. Routes to vipsthumbnail by default; falls back to
@@ -145,28 +143,12 @@ public class ThumbnailService {
     return thumbnailPaths;
   }
 
-  public boolean isImageFile(String mimeType) {
-    return MimeTypePredicates.isImageFile(mimeType);
-  }
-
-  public boolean isHeicFile(String mimeType) {
-    return MimeTypePredicates.isHeicFile(mimeType);
-  }
-
-  public boolean isVideoFile(String mimeType) {
-    return MimeTypePredicates.isVideoFile(mimeType);
-  }
-
   public boolean transcodeVideo(Path originalFile, Path outputPath) {
     return ffmpegService.transcodeVideo(originalFile, outputPath);
   }
 
   public boolean convertHeicToJpeg(Path originalFile, Path outputPath) {
     return heicConversionService.convertHeicToJpeg(originalFile, outputPath);
-  }
-
-  public void deleteTranscodedVideo(Path transcodedVideoPath) {
-    localFileCleanupService.deleteTranscodedVideo(transcodedVideoPath);
   }
 
   public boolean generateVideoThumbnail(Path videoFile, Path outputPath) {
@@ -213,10 +195,6 @@ public class ThumbnailService {
       }
       return false;
     }
-  }
-
-  public void deleteThumbnails(Path thumbnailPath, Path mediumPath, Path largePath) {
-    localFileCleanupService.deleteThumbnails(thumbnailPath, mediumPath, largePath);
   }
 
   @Getter

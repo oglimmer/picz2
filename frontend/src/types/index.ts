@@ -9,7 +9,6 @@ export interface Album {
 }
 
 export type ProcessingStatus =
-  | "INGESTED"
   | "QUEUED"
   | "PROCESSING"
   | "DONE"

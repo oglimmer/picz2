@@ -22,7 +22,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
     properties = {
-      "jobs.dispatcher.enabled=false",
       "app.apns.enabled=false",
       "app.mail.enabled=false",
       "spring.mail.host=localhost"

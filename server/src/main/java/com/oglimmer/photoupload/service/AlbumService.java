@@ -18,12 +18,10 @@ import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
-import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -46,9 +44,6 @@ public class AlbumService {
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
   private final JdbcTemplate jdbcTemplate;
   private final FileStorageService fileStorageService;
-  // Worker-only after the deployment split (Phase 4a). On the api profile this is empty, and the
-  // exif-backfill below becomes a no-op until the rewrite as a worker-side job (Phase 4.5, D17).
-  private final Optional<ThumbnailService> thumbnailService;
   private final UserContext userContext;
   private final AlbumMapper albumMapper;
 
@@ -250,31 +245,6 @@ public class AlbumService {
 
     if (files.isEmpty()) {
       return 0;
-    }
-
-    // Backfill creation_time for videos that were uploaded before video date extraction existed.
-    // ffprobe runs once per video; result is persisted so subsequent sorts are instant. Only the
-    // worker pod has ffmpeg/ffprobe — on api-only deployments this loop is skipped (per D17).
-    int backfilled = 0;
-    if (thumbnailService.isPresent()) {
-      ThumbnailService thumb = thumbnailService.get();
-      for (FileMetadata file : files) {
-        if (file.getExifDateTimeOriginal() != null) {
-          continue;
-        }
-        if (!MimeTypePredicates.isVideoFile(file.getMimeType())) {
-          continue;
-        }
-        Instant videoDate =
-            thumb.extractVideoCreationDate(fileStorageService.resolveFilePath(file.getFilePath()));
-        if (videoDate != null) {
-          file.setExifDateTimeOriginal(videoDate);
-          backfilled++;
-        }
-      }
-    }
-    if (backfilled > 0) {
-      log.info("Backfilled creation_time for {} video(s) in album {}", backfilled, album.getName());
     }
 
     // Sort files by EXIF DateTimeOriginal

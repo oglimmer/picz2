@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
+import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -25,8 +26,7 @@ class ThumbnailServiceDispatchTest {
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
 
-    ThumbnailService svc =
-        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
+    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
 
     Path src = Paths.get("/tmp/x.jpg");
     Path base = Paths.get("/tmp/x.jpg");
@@ -47,8 +47,7 @@ class ThumbnailServiceDispatchTest {
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
 
-    ThumbnailService svc =
-        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
+    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
 
     // Magick path shells out to `convert`, which won't exist in CI; we only need to confirm the
     // vips service is not consulted. The shell-out itself is exercised by integration tests.
@@ -63,8 +62,7 @@ class ThumbnailServiceDispatchTest {
     VipsThumbnailService vips = mock(VipsThumbnailService.class);
     HeicConversionService heic = mock(HeicConversionService.class);
     FfmpegService ffmpeg = mock(FfmpegService.class);
-    ThumbnailService svc =
-        new ThumbnailService(props, vips, heic, ffmpeg, mock(LocalFileCleanupService.class));
+    ThumbnailService svc = new ThumbnailService(props, vips, heic, ffmpeg);
 
     Path a = Paths.get("/tmp/a");
     Path b = Paths.get("/tmp/b");
@@ -88,21 +86,13 @@ class ThumbnailServiceDispatchTest {
 
   @Test
   void mimeTypeHelpersClassifyCorrectly() {
-    ThumbnailService svc =
-        new ThumbnailService(
-            new FileStorageProperties(),
-            mock(VipsThumbnailService.class),
-            mock(HeicConversionService.class),
-            mock(FfmpegService.class),
-            mock(LocalFileCleanupService.class));
-
-    assertThat(svc.isImageFile("image/jpeg")).isTrue();
-    assertThat(svc.isImageFile("image/heic")).isFalse();
-    assertThat(svc.isImageFile(null)).isFalse();
-    assertThat(svc.isHeicFile("image/heic")).isTrue();
-    assertThat(svc.isHeicFile("image/heif")).isTrue();
-    assertThat(svc.isHeicFile("image/jpeg")).isFalse();
-    assertThat(svc.isVideoFile("video/mp4")).isTrue();
-    assertThat(svc.isVideoFile("image/jpeg")).isFalse();
+    assertThat(MimeTypePredicates.isImageFile("image/jpeg")).isTrue();
+    assertThat(MimeTypePredicates.isImageFile("image/heic")).isFalse();
+    assertThat(MimeTypePredicates.isImageFile(null)).isFalse();
+    assertThat(MimeTypePredicates.isHeicFile("image/heic")).isTrue();
+    assertThat(MimeTypePredicates.isHeicFile("image/heif")).isTrue();
+    assertThat(MimeTypePredicates.isHeicFile("image/jpeg")).isFalse();
+    assertThat(MimeTypePredicates.isVideoFile("video/mp4")).isTrue();
+    assertThat(MimeTypePredicates.isVideoFile("image/jpeg")).isFalse();
   }
 }

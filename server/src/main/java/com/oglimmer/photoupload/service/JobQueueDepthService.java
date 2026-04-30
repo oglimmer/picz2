@@ -1,7 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.JobStatus;
 import com.oglimmer.photoupload.repository.ProcessingJobRepository;
 import jakarta.annotation.PostConstruct;
@@ -29,7 +28,6 @@ import org.springframework.stereotype.Service;
 public class JobQueueDepthService {
 
   private final ProcessingJobRepository jobRepository;
-  private final JobsProperties jobsProperties;
 
   /**
    * Snapshot map. Replaced atomically (not mutated in place) so readers either see the previous
@@ -39,17 +37,11 @@ public class JobQueueDepthService {
 
   @PostConstruct
   void primeOnStartup() {
-    if (jobsProperties.getDispatcher().isEnabled()) {
-      refresh();
-    }
+    refresh();
   }
 
   @Scheduled(fixedDelayString = "${jobs.backpressure.refresh-ms:1000}")
   public void refresh() {
-    if (!jobsProperties.getDispatcher().isEnabled()) {
-      snapshot = emptySnapshot();
-      return;
-    }
     try {
       Map<JobStatus, Long> next = emptySnapshot();
       for (Object[] row : jobRepository.countAllByStatusGrouped()) {

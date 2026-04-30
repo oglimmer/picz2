@@ -71,7 +71,7 @@ class FileProcessingServiceStatusTest {
     md.setStoredFilename("photo-stored.jpg");
     md.setMimeType("image/jpeg");
     md.setFilePath("photo-stored.jpg");
-    md.setProcessingStatus(ProcessingStatus.INGESTED);
+    md.setProcessingStatus(ProcessingStatus.QUEUED);
     md.setProcessingAttempts(0);
     return md;
   }
@@ -80,7 +80,6 @@ class FileProcessingServiceStatusTest {
   void successfulProcessingTransitionsToDoneAndIncrementsAttempts() {
     FileMetadata md = seedMetadata();
     when(repository.findById(11L)).thenReturn(Optional.of(md));
-    when(thumbnailService.isImageFile("image/jpeg")).thenReturn(true);
     when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(new Path[3]);
 
     service.processFile(11L);
@@ -101,7 +100,6 @@ class FileProcessingServiceStatusTest {
   void failureTransitionsToFailedWithErrorMessage() {
     FileMetadata md = seedMetadata();
     when(repository.findById(11L)).thenReturn(Optional.of(md));
-    when(thumbnailService.isImageFile("image/jpeg")).thenReturn(true);
     when(thumbnailService.generateAllThumbnails(any(), any()))
         .thenThrow(new RuntimeException("boom"));
 
@@ -119,7 +117,6 @@ class FileProcessingServiceStatusTest {
   void ioErrorIsRecordedAsFailed() {
     FileMetadata md = seedMetadata();
     when(repository.findById(11L)).thenReturn(Optional.of(md));
-    when(thumbnailService.isImageFile("image/jpeg")).thenReturn(true);
     when(thumbnailService.generateAllThumbnails(any(), any()))
         .thenThrow(new RuntimeException(new IOException("disk full")));
 
