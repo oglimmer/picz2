@@ -111,6 +111,25 @@ spec:
               name: {{ include "photo-upload.fullname" . }}-secret
               key: objectStorage.secretKey
         {{- end }}
+        {{- if .Values.tus.enabled }}
+        # TUS resumable uploads (Phase 5). The hook controller validates the path-secret
+        # against TUS_HOOK_SECRET; advertised gates whether /api/capabilities reports
+        # tus.enabled=true to clients (R1 false → R2 true). Both flags ride together so the
+        # api pod and tusd Deployment stay in lockstep.
+        - name: TUS_ENABLED
+          value: "true"
+        - name: TUS_ADVERTISED
+          value: {{ .Values.tus.advertised | quote }}
+        - name: TUS_ENDPOINT
+          value: {{ .Values.tus.endpoint | default "/files/" | quote }}
+        - name: TUS_MAX_SIZE
+          value: {{ .Values.tus.maxSize | default 524288000 | int64 | quote }}
+        - name: TUS_HOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: tus.hookSecret
+        {{- end }}
         # Liveness/readiness use the cheap probe groups (LivenessState/ReadinessState only,
         # no DB or disk indicators) so a slow database or Longhorn hiccup can't starve them.
         # Startup still hits the full /actuator/health so the pod isn't marked ready until

@@ -56,6 +56,13 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/version")
                     .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/capabilities")
+                    .permitAll()
+                    // tusd→api hook callbacks. The path-secret in the URL is the auth boundary
+                    // (validated constant-time inside TusHookController); Spring Security just
+                    // needs to let the request through. Cluster-internal only — never on Ingress.
+                    .requestMatchers(HttpMethod.POST, "/api/tus/hooks/**")
+                    .permitAll()
                     .requestMatchers(HttpMethod.GET, "/public/album/**")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/public/subscription/**")

@@ -380,6 +380,138 @@ public class FileStorageService {
     return convertToFileInfo(saved);
   }
 
+  /**
+   * Phase 5 — TUS resumable upload landing path. Bytes are already in MinIO at {@code tusS3Key}
+   * (where tusd put them as a multipart upload). We rename them server-side to the canonical
+   * {@code originals/{stored_filename}} convention via S3 COPY+DELETE — see D24/D25 — then
+   * insert the {@code file_metadata} row and enqueue a PROCESS job in the same TX, exactly like
+   * {@link #storeFile}.
+   *
+   * <p>The hook controller is the only caller. The user has already been authenticated upstream
+   * from {@code Upload-Metadata.auth}; we accept it as a plain {@link User} argument rather than
+   * pulling it from {@link com.oglimmer.photoupload.security.UserContext} (no Spring Security
+   * context exists for tusd→api hook calls).
+   *
+   * <p>Idempotency: a duplicate {@code contentId} for the same user causes pre-create to reject
+   * 409 before tusd ever begins the upload, so this method ordinarily runs at most once per
+   * upload. If post-finish fires twice (network retry), the caller short-circuits on the
+   * existing row before invoking us — see {@code TusHookService.handlePostFinish}.
+   *
+   * <p>The COPY is server-side in MinIO (no JVM bytes); the cleanup of {@code tusS3Key} and its
+   * companion {@code .info} object is best-effort — a stale tus-uploads/{uuid} object is mopped
+   * up by tusd's own {@code -expire-after} sweep.
+   */
+  public FileInfo registerTusUpload(
+      User currentUser,
+      Long albumId,
+      String tusS3Key,
+      String originalName,
+      long fileSize,
+      String contentType,
+      String contentId) {
+    if (objectStorage.isEmpty()) {
+      throw new StorageException("registerTusUpload requires storage.s3.enabled=true");
+    }
+
+    final Long effectiveAlbumId;
+    if (albumId == null) {
+      effectiveAlbumId = currentUser.getDefaultAlbumId();
+      if (effectiveAlbumId == null) {
+        throw new ValidationException(
+            "Sync is paused. Please select a target album in your settings to resume uploads.");
+      }
+    } else {
+      effectiveAlbumId = albumId;
+    }
+
+    validateTusUpload(originalName, contentType, fileSize);
+
+    String extension = getFileExtension(originalName);
+    String nameWithoutExtension = getFilenameWithoutExtension(originalName);
+    String uniqueSuffix =
+        System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
+    String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
+    String originalKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
+
+    ObjectStorageService storage = objectStorage.get();
+    storage.copy(tusS3Key, originalKey, contentType);
+
+    final String finalContentType = contentType;
+    final String finalNewFilename = newFilename;
+    final String finalOriginalKey = originalKey;
+    FileInfo result =
+        transactionTemplate.execute(
+            status -> {
+              FileMetadata metadata = new FileMetadata();
+              metadata.setOriginalName(originalName);
+              metadata.setStoredFilename(finalNewFilename);
+              metadata.setFileSize(fileSize);
+              metadata.setMimeType(finalContentType);
+              metadata.setFilePath(finalOriginalKey);
+              metadata.setUploadedAt(Instant.now());
+              metadata.setContentId(contentId);
+              metadata.setProcessingStatus(ProcessingStatus.QUEUED);
+
+              Album album =
+                  albumRepository
+                      .findByUserAndId(currentUser, effectiveAlbumId)
+                      .orElseThrow(
+                          () -> new ResourceNotFoundException("Album", "id", effectiveAlbumId));
+              metadata.setAlbum(album);
+
+              Integer maxOrder =
+                  metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
+                      effectiveAlbumId, currentUser.getId());
+              metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
+
+              FileMetadata saved = metadataRepository.save(metadata);
+              ensureNoTagExists(currentUser);
+              addNoTagToFile(saved, currentUser);
+              jobEnqueueService.enqueue(saved.getId(), JobType.PROCESS);
+              return convertToFileInfo(saved);
+            });
+
+    try {
+      storage.deleteKeys(java.util.List.of(tusS3Key, tusS3Key + ".info"));
+    } catch (Exception e) {
+      log.warn(
+          "TUS cleanup failed for {} ({}); orphan job will mop up", tusS3Key, e.toString());
+    }
+
+    log.info(
+        "✅ TUS upload registered: {} ({}) → asset {}",
+        originalName,
+        formatBytes(fileSize),
+        result.getId());
+    return result;
+  }
+
+  /**
+   * Mirrors {@link #validateFile(MultipartFile)} for the TUS path where we don't have a
+   * MultipartFile — only the metadata fields tusd surfaced from {@code Upload-Metadata}.
+   */
+  private void validateTusUpload(String originalName, String contentType, long fileSize) {
+    if (originalName == null || originalName.isBlank()) {
+      throw new ValidationException("Filename is required");
+    }
+    if (fileSize <= 0) {
+      throw new ValidationException("Cannot register empty TUS upload");
+    }
+    if (fileSize > properties.getMaxFileSize()) {
+      throw new ValidationException(
+          "File size exceeds maximum limit of " + formatBytes(properties.getMaxFileSize()));
+    }
+    String extension = getFileExtension(originalName).toLowerCase();
+    boolean isValidType =
+        contentType != null
+            && (ALLOWED_IMAGE_TYPES.contains(contentType)
+                || ALLOWED_VIDEO_TYPES.contains(contentType));
+    boolean isValidExtension = ALLOWED_EXTENSIONS.contains(extension);
+    if (!isValidType && !isValidExtension) {
+      throw new ValidationException("Only image and video files are allowed!");
+    }
+  }
+
   @Transactional(readOnly = true)
   public List<FileInfo> listFiles() {
     return metadataRepository.findAllByOrderByDisplayOrderAsc().stream()

@@ -1,5 +1,34 @@
 import Foundation
 
+// MARK: - Server Capabilities (Phase 5)
+
+extension APIClient {
+    /// Fetch ingest-path capabilities. Unauthenticated; safe to call before login. The result
+    /// is cached briefly by the caller (SyncCoordinator) — there's no point re-asking on every
+    /// upload, the server flips this only at deploy boundaries.
+    func fetchCapabilities(completion: @escaping (Result<Capabilities, Error>) -> Void) {
+        let request = URLRequest(url: baseURL.appendingPathComponent("api/capabilities"))
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode), let data else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                completion(.failure(NSError(domain: "APIClient.fetchCapabilities", code: code,
+                                            userInfo: [NSLocalizedDescriptionKey: "HTTP \(code)"])))
+                return
+            }
+            do {
+                let caps = try JSONDecoder().decode(Capabilities.self, from: data)
+                completion(.success(caps))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+}
+
 // MARK: - Album Management Extensions
 
 extension APIClient {

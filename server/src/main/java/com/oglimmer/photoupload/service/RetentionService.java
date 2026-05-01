@@ -125,4 +125,68 @@ public class RetentionService {
         row.getOriginalName(),
         key);
   }
+
+  /**
+   * Phase 5 follow-up — second pass that deletes abandoned TUS uploads under the
+   * {@code tus-uploads/} prefix. tusd 2.x has no in-process expiry and our MinIO is single-drive
+   * (no bucket lifecycle), so this is the only GC mechanism for stale incomplete uploads.
+   *
+   * <p>Self-healing: a successful TUS upload's tus-uploads/{uuid} is deleted by the post-finish
+   * hook in {@link FileStorageService#registerTusUpload}, so the prefix is normally near-empty.
+   * Anything still here older than {@link RetentionProperties#getTusUploadDays()} is something
+   * the client never finished — safe to delete.
+   *
+   * <p>No DB side: this is purely an S3 operation. Delete failures are counted but don't abort
+   * the sweep — the next nightly run will retry.
+   */
+  public Result runTusCleanup() {
+    int days = properties.getTusUploadDays();
+    if (days <= 0) {
+      log.warn(
+          "retention.tus-upload-days={} — refusing to run a same-day TUS sweep. Set a positive value.",
+          days);
+      return new Result(0, 0, 0, properties.isDryRun());
+    }
+
+    Instant cutoff = Instant.now().minus(Duration.ofDays(days));
+    int maxRows = properties.getMaxRowsPerRun();
+    log.info(
+        "TUS cleanup sweep starting — prefix=tus-uploads/, cutoff={}, maxRows={}, dryRun={}",
+        cutoff,
+        maxRows,
+        properties.isDryRun());
+
+    List<String> candidates = objectStorage.listKeysOlderThan("tus-uploads/", cutoff);
+    if (candidates.size() > maxRows) {
+      log.warn(
+          "TUS cleanup eligibility ({}) exceeds maxRowsPerRun ({}) — truncating to cap",
+          candidates.size(),
+          maxRows);
+      candidates = candidates.subList(0, maxRows);
+    }
+
+    int purged = 0;
+    int failed = 0;
+    for (String key : candidates) {
+      try {
+        if (properties.isDryRun()) {
+          log.info("Dry run — would delete tus-uploads object {}", key);
+        } else {
+          objectStorage.delete(key);
+          purged++;
+        }
+      } catch (Exception e) {
+        failed++;
+        log.warn("Failed to delete tus-uploads object {}: {}", key, e.getMessage(), e);
+      }
+    }
+
+    log.info(
+        "TUS cleanup sweep complete — eligible={}, purged={}, failed={}, dryRun={}",
+        candidates.size(),
+        purged,
+        failed,
+        properties.isDryRun());
+    return new Result(candidates.size(), purged, failed, properties.isDryRun());
+  }
 }

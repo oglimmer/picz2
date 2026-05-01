@@ -1,0 +1,131 @@
+{{- if and .Values.objectStorage.enabled .Values.tus.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "photo-upload.tusd.fullname" . }}
+  labels:
+    {{- include "photo-upload.tusd.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.tus.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "photo-upload.tusd.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "photo-upload.tusd.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "photo-upload.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Values.tus.name | default "tusd" }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        image: "{{ .Values.tus.image.repository }}:{{ .Values.tus.image.tag }}"
+        imagePullPolicy: {{ .Values.tus.image.pullPolicy }}
+        ports:
+        - name: tusd
+          containerPort: 1080
+          protocol: TCP
+        # tusd reads S3 creds from AWS_* env vars and other config from CLI flags. The args
+        # below reference $(VAR) which Kubernetes substitutes from the env list at container
+        # startup — so the hook-secret never appears in any rendered manifest, only in the
+        # Secret resource it came from. K8s only expands a $(VAR) if VAR is defined earlier
+        # in the env list (or via envFrom), so order matters here.
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.accessKey
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.secretKey
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.region
+        - name: STORAGE_S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.bucket
+        - name: STORAGE_S3_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-config
+              key: objectStorage.endpoint
+        - name: TUS_HOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: tus.hookSecret
+        args:
+        - -port=1080
+        - -base-path={{ .Values.tus.endpoint | default "/files/" }}
+        - -s3-bucket=$(STORAGE_S3_BUCKET)
+        - -s3-endpoint=$(STORAGE_S3_ENDPOINT)
+        - -s3-object-prefix=tus-uploads/
+        # MinIO doesn't support content-MD5 trailers cleanly; turning this off avoids a
+        # known-bad codepath without weakening integrity (TUS already checks Upload-Checksum
+        # client-side and tusd validates Upload-Offset on every PATCH).
+        - -s3-disable-content-hashes
+        - -hooks-http=http://{{ include "photo-upload.backend.fullname" . }}:{{ .Values.backend.service.port }}/api/tus/hooks/$(TUS_HOOK_SECRET)
+        # Forward the iOS bearer token through to the api pod's pre-create handler. Only the
+        # Authorization header is forwarded; metadata travels in the body that tusd POSTs.
+        - -hooks-http-forward-headers=Authorization
+        - -hooks-enabled-events=pre-create,post-finish,post-terminate
+        - -hooks-http-retry=3
+        # We sit behind the cluster Ingress; honour X-Forwarded-* so client IPs in tusd logs
+        # are accurate.
+        - -behind-proxy
+        # Note: tusd 2.x removed the -expire-after flag — stale-upload GC is now exclusively
+        # the storage layer's job. The MinIO bucket lifecycle rule (`mc ilm rule add --prefix
+        # tus-uploads/ --expiry-days 7`) is the only mechanism that cleans up abandoned
+        # tus-uploads/{uuid} objects. See NOTES.txt for the operator-side command.
+        - -max-size={{ .Values.tus.maxSize | default 524288000 | int64 }}
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: tusd
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: tusd
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.tus.resources | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -32,10 +32,12 @@ public class RetentionRunner implements CommandLineRunner {
   public void run(String... args) {
     int exitCode;
     try {
-      RetentionService.Result result = retentionService.run();
-      // Failed rows still leave the JVM with a non-zero exit; K8s surfaces this on the CronJob's
-      // last-failed status. Successful dry-runs and clean wet-runs both exit 0.
-      exitCode = Math.min(result.failed(), 125);
+      RetentionService.Result originals = retentionService.run();
+      // Phase 5 follow-up — TUS upload prefix sweep runs as a second pass after the originals
+      // sweep. Independent failures: a stuck S3 delete on the originals side mustn't block the
+      // TUS cleanup, and vice versa. Both failure counts contribute to the exit code.
+      RetentionService.Result tusCleanup = retentionService.runTusCleanup();
+      exitCode = Math.min(originals.failed() + tusCleanup.failed(), 125);
     } catch (Exception e) {
       log.error("Retention sweep aborted with an unhandled exception", e);
       exitCode = 1;

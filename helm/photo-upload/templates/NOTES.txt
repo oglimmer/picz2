@@ -146,3 +146,36 @@ Prometheus monitoring (standalone prometheus chart, no operator):
                 has been above 80% for 10m. Free space, expand the volume, or run
                 the retention sweep.
 {{- end }}
+
+{{- if .Values.tus.enabled }}
+
+TUS resumable uploads (Phase 5):
+
+  tusd is running at {{ include "photo-upload.tusd.fullname" . }}:{{ .Values.tus.service.port | default 1080 }}
+  exposed via Ingress at {{ .Values.tus.endpoint | default "/files/" }} on each ingress host.
+
+  The hooks URL embeds a path-secret (Secret key `tus.hookSecret`); rotate it with:
+
+    HOOK_SECRET=$(openssl rand -hex 32)
+    helm upgrade {{ .Release.Name }} . --reuse-values --set tus.hookSecret=$HOOK_SECRET
+
+  Then restart both Deployments so the new value lands on each side of the hook channel:
+
+    kubectl rollout restart deployment/{{ include "photo-upload.tusd.fullname" . }}
+    kubectl rollout restart deployment/{{ include "photo-upload.backend.fullname" . }}
+
+  Stale TUS uploads (incomplete uploads abandoned by the client) are GC'd by the existing
+  retention CronJob's second pass — see `RetentionService.runTusCleanup` and the
+  `RETENTION_TUS_UPLOAD_DAYS` env on the cron pod (default 7). tusd 2.x has no in-process
+  expiry and single-drive MinIO doesn't support the lifecycle API, so this server-side sweep
+  is the only GC path. Tunable via `retention.tusUploadDays` in values.yaml.
+
+  Successful uploads clean themselves up — the post-finish hook deletes the tus-uploads/
+  object as part of the same TX as the file_metadata row insert. The cleanup pass only matches
+  uploads the client never finished.
+
+  Capabilities advertisement is gated separately via `tus.advertised` (default false in R1):
+
+    helm upgrade {{ .Release.Name }} . --reuse-values --set tus.advertised=true
+
+{{- end }}

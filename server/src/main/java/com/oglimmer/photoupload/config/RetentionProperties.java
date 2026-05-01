@@ -33,4 +33,13 @@ public class RetentionProperties {
    * this on the first cron firing in production to validate eligibility before bytes go.
    */
   private boolean dryRun = false;
+
+  /**
+   * Phase 5 follow-up — incomplete TUS uploads under the {@code tus-uploads/} prefix that have been
+   * sitting longer than this are eligible for deletion. tusd 2.x removed its in-process
+   * {@code -expire-after} flag and the platform-side MinIO is single-drive (lifecycle API
+   * unsupported), so this server-side sweep is the only GC mechanism for abandoned TUS uploads.
+   * Same nightly CronJob as the originals sweep; runs as a second pass after originals.
+   */
+  private int tusUploadDays = 7;
 }

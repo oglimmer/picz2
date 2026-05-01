@@ -29,6 +29,9 @@ spec:
       http:
         paths:
           {{- range .paths }}
+          {{- /* Skip tusd-routed paths when TUS is disabled, otherwise the Ingress would */}}
+          {{- /* point at a Service that hasn't been rendered. */}}
+          {{- if or (ne .backend "tusd") $.Values.tus.enabled }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:
@@ -41,7 +44,12 @@ spec:
                 name: {{ include "photo-upload.frontend.fullname" $ }}
                 port:
                   number: {{ $.Values.frontend.service.port }}
+                {{- else if eq .backend "tusd" }}
+                name: {{ include "photo-upload.tusd.fullname" $ }}
+                port:
+                  number: {{ $.Values.tus.service.port | default 1080 }}
                 {{- end }}
+          {{- end }}
           {{- end }}
     {{- end }}
 {{- end }}

@@ -743,6 +743,7 @@ import { useSlideshowPlayback } from '../composables/useSlideshowPlayback'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
 import { useAnalytics } from '../composables/useAnalytics'
+import { useUpload } from '../composables/useUpload'
 import { formatBytes } from '../utils/format'
 import GalleryItem from '../components/GalleryItem.vue'
 import Lightbox from '../components/Lightbox.vue'
@@ -771,6 +772,7 @@ export default {
     const router = useRouter()
     const { isLoggedIn, logout } = useAuth()
     const { apiUrl, fetchWithAuth } = useApi()
+    const { uploadFile } = useUpload()
     const { currentAlbum, loadAlbumById, updateAlbum, deleteAlbum } = useAlbums()
     const {
       files,
@@ -1799,38 +1801,37 @@ export default {
       let successCount = 0
       let errorCount = 0
       const errors = []
+      // TUS post-finish race: tusd 2.x sends the PATCH 204 to the client *before* invoking
+      // the post-finish hook (despite the docs claiming it's synchronous). So uploadFile()
+      // resolves ~200-500ms before the file_metadata row exists. Snapshot the count before
+      // the upload loop and poll loadAlbumFiles after, until the row(s) show up or we hit
+      // the timeout. Multipart doesn't have this race (the row is committed by the time
+      // /api/upload returns 202), but the same poll-until-visible logic is harmless.
+      const initialCount = files.value.length
 
       try {
-        // Upload files one at a time (sequentially)
         for (let i = 0; i < selectedFiles.length; i++) {
           const file = selectedFiles[i]
           uploadProgress.value.current = i
           uploadProgress.value.currentFileName = file.name
           uploadProgress.value.status = `Uploading ${file.name}...`
 
-          const formData = new FormData()
-          formData.append('file', file)
-          formData.append('albumId', album.value.id)
-
           try {
-            const response = await fetchWithAuth(`${apiUrl}/api/upload`, {
-              method: 'POST',
-              body: formData
+            await uploadFile(file, album.value.id, {
+              onProgress: (fraction) => {
+                // Sub-file progress (TUS surfaces real bytes; multipart surfaces 0/1
+                // bookends). Surface as a percentage on the status line so big files
+                // don't look stuck.
+                const pct = Math.round(fraction * 100)
+                uploadProgress.value.status = `Uploading ${file.name}... ${pct}%`
+              },
             })
-
-            const data = await response.json()
-
-            if (response.ok && data.success) {
-              successCount++
-              uploadProgress.value.current = i + 1
-            } else {
-              errorCount++
-              errors.push(`${file.name}: ${data.message || 'Upload failed'}`)
-              console.error(`Upload failed for ${file.name}:`, data.message)
-            }
+            successCount++
+            uploadProgress.value.current = i + 1
           } catch (err) {
             errorCount++
-            errors.push(`${file.name}: ${err.message}`)
+            const message = err instanceof Error ? err.message : String(err)
+            errors.push(`${file.name}: ${message}`)
             console.error(`Upload error for ${file.name}:`, err)
           }
         }
@@ -1838,8 +1839,17 @@ export default {
         // Show results
         uploadProgress.value.status = 'Upload complete!'
 
-        // Reload the album files to show the new uploads
+        // Reload the album files to show the new uploads. Poll for up to ~3 s since the
+        // TUS post-finish hook can take 200-500ms to commit the row after PATCH 204 returns.
+        const expectedCount = initialCount + successCount
+        const deadline = Date.now() + 3000
+        // First load happens immediately; if the row's already there (multipart, fast hook)
+        // we exit on the first iteration.
         await loadAlbumFiles(album.value.id, props.presentationMode)
+        while (files.value.length < expectedCount && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 300))
+          await loadAlbumFiles(album.value.id, props.presentationMode)
+        }
 
         if (successCount > 0 && errorCount === 0) {
           success(`Successfully uploaded ${successCount} file(s)!`)

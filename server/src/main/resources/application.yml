@@ -94,6 +94,10 @@ retention:
   original-days: "${RETENTION_ORIGINAL_DAYS:7}"
   max-rows-per-run: "${RETENTION_MAX_ROWS_PER_RUN:5000}"
   dry-run: "${RETENTION_DRY_RUN:false}"
+  # Phase 5 follow-up — second pass deletes abandoned tus-uploads/ objects older than this many
+  # days. tusd 2.x has no in-process expiry and our MinIO is single-drive (no lifecycle API),
+  # so this server-side sweep is the only GC mechanism for stale TUS uploads.
+  tus-upload-days: "${RETENTION_TUS_UPLOAD_DAYS:7}"
 jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"
@@ -103,6 +107,16 @@ jobs:
   backpressure:
     queue-depth-threshold: "${JOBS_BACKPRESSURE_QUEUE_DEPTH_THRESHOLD:200}"
     refresh-ms: "${JOBS_BACKPRESSURE_REFRESH_MS:1000}"
+tus:
+  # Phase 5 — TUS resumable uploads. Manifests render based on Helm `tus.enabled`; the api pod
+  # reads its own `tus.enabled` env var to decide whether to wire TusHookController. The pair
+  # of flags lets R1 ship the Deployment without yet advertising TUS to clients.
+  enabled: "${TUS_ENABLED:false}"
+  advertised: "${TUS_ADVERTISED:false}"
+  endpoint: "${TUS_ENDPOINT:/files/}"
+  max-size: "${TUS_MAX_SIZE:524288000}"
+  hook-secret: "${TUS_HOOK_SECRET:}"
+  version: "1.0.0"
 logging:
   level:
     ROOT: "info"

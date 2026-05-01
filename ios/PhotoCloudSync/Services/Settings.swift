@@ -24,6 +24,13 @@ final class Settings: ObservableObject {
         didSet { defaults.set(syncLastDays, forKey: Keys.syncLastDays) }
     }
 
+    // Phase 5 — TUS resumable uploads. Hidden TestFlight toggle. SyncCoordinator picks the
+    // upload path by combining this flag with /api/capabilities.tus.enabled returned from the
+    // server. R2 lights up server-side capabilities; flipping this flag opts a build into TUS.
+    @Published var useTus: Bool {
+        didSet { defaults.set(useTus, forKey: Keys.useTus) }
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -32,6 +39,7 @@ final class Settings: ObservableObject {
         static let albumId = "settings.albumId"
         static let selectedAlbumName = "settings.selectedAlbumName"
         static let syncLastDays = "settings.syncLastDays"
+        static let useTus = "settings.useTus"
     }
 
     private init() {
@@ -40,6 +48,7 @@ final class Settings: ObservableObject {
         albumId = defaults.object(forKey: Keys.albumId) as? Int ?? 1
         selectedAlbumName = defaults.object(forKey: Keys.selectedAlbumName) as? String
         syncLastDays = defaults.object(forKey: Keys.syncLastDays) as? Int ?? 3
+        useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? false
     }
 
     func clear() {
@@ -48,6 +57,7 @@ final class Settings: ObservableObject {
         defaults.removeObject(forKey: Keys.albumId)
         defaults.removeObject(forKey: Keys.selectedAlbumName)
         defaults.removeObject(forKey: Keys.syncLastDays)
+        defaults.removeObject(forKey: Keys.useTus)
 
         // Reset to default values
         wifiOnly = true
@@ -55,6 +65,7 @@ final class Settings: ObservableObject {
         albumId = 1
         selectedAlbumName = nil
         syncLastDays = 3
+        useTus = false
     }
 }
 

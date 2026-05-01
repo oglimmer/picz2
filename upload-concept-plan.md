@@ -74,12 +74,12 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 | D4  | Job granularity                                | One row per asset, fixed pipeline. No sub-step rows until reprocessing demands them.                                 | accepted |
 | D5  | Lease duration                                 | 15 min default, configurable via `jobs.lease.seconds`.                                                               | accepted |
 | D6  | Poll interval                                  | 2 s, configurable via `jobs.poll.interval-ms`.                                                                       | accepted |
-| D7  | TUS implementation                             | **tusd Deployment** with S3 backend writing directly to MinIO. Avoids JVM heap; tusd's state machine is mature.      | open   |
+| D7  | TUS implementation                             | **tusd Deployment** with S3 backend writing directly to MinIO. Avoids JVM heap; tusd's state machine is mature.      | accepted |
 | D8  | Object storage                                 | **MinIO**, single replica on Longhorn PVC.                                                                           | open   |
 | D9  | MinIO deploy shape                             | Hand-rolled Deployment (single Pod, single PVC). Official chart is over-engineered for one node.                     | open   |
 | D10 | Existing-data migration to MinIO               | Lazy + one-shot CommandLineRunner (idempotent: skip if HEAD succeeds). No maintenance window.                        | open   |
-| D11 | iOS handling of HTTP 202                       | Treat 202 like 200 for "don't re-upload" bookkeeping; surface "Processing…" status in gallery UI optionally.         | open   |
-| D12 | TUS rollout to iOS                             | Coexistence: `/api/upload` stays for old clients; new clients prefer TUS based on `GET /api/capabilities`.           | open   |
+| D11 | iOS handling of HTTP 202                       | Treat 202 like 200 for "don't re-upload" bookkeeping; surface "Processing…" status in gallery UI optionally.         | accepted |
+| D12 | TUS rollout to iOS                             | Coexistence: `/api/upload` stays for old clients; new clients prefer TUS based on `GET /api/capabilities`.           | accepted |
 | D13 | Worker concurrency                             | `Semaphore(1)` per worker pod. Add replicas if needed; do not oversubscribe ImageMagick/ffmpeg threads.              | accepted |
 | D14 | libvips refactor shape                         | Split into `VipsThumbnailService` (images), `HeicConversionService` (HEIC only), `FfmpegService` (video).            | open   |
 | D15 | Dead-letter behaviour                          | Move to `DEAD_LETTER` after `max_attempts=3`, keep original blob. `GET /api/admin/dead-letter` exposes them; UI deferred. | accepted |
@@ -91,6 +91,14 @@ Phase 6  ─ Gap 4-finish (retention CronJob now sweeps MinIO + DB consistently)
 | D21 | Legacy `@Async` cleanup release                | Bundle the removal in R3 (post-soak), not R2. Keeps R2 diff focused on deploy-shape change.                                            | accepted |
 | D22 | Worker default replicas                        | 1. Each pod has `Semaphore(1)`, so scale-out gives parallelism but isn't required day-1 on the single-node Pi cluster.                | accepted |
 | D23 | Per-job-type discriminator                     | Add `processing_jobs.job_type` (V32) with `JobType.{PROCESS,ROTATE_LEFT}` so admin operations reuse the lease/retry/dead-letter machinery instead of building a parallel queue. Revisits **D4** intentionally — the "single-purpose queue" stance held while there was only one job type. | accepted |
+| D24 | tusd S3 key namespace                          | tusd writes to `tus-uploads/{uuid}`; `post-finish` hook S3-COPYs to `originals/{stored_filename}` then DELETEs the tusd object. COPY is server-side in MinIO; bytes never leave MinIO. | accepted |
+| D25 | Why COPY rather than heterogeneous keys        | Keeps the `originals/%` invariant that retention (Phase 6), `derivatives/{assetId}/...` paths, and the legacy multipart path all already depend on. One scheme, one sweep rule. | accepted |
+| D26 | Auth on TUS endpoint                           | Bearer token in `Upload-Metadata` (key `auth`), validated in `pre-create`. iOS background URLSession can't carry cookies reliably, so the token is the only sane channel. | accepted |
+| D27 | Hook-channel authenticity                      | **Amended from the original HMAC sketch** — stock tusd cannot sign hook bodies, only forward client headers, so HMAC was infeasible without a custom shim. Substitute: shared secret embedded in the tusd→api hooks URL path: `http://photo-upload-backend:8080/api/tus/hooks/$(TUS_HOOK_SECRET)`. Controller validates the path-secret with constant-time compare. Cluster-internal only; not exposed via Ingress. Functionally equivalent defence-in-depth against accidental cross-namespace calls. | accepted |
+| D28 | Backpressure on TUS                            | Reject in `pre-create` when `JobQueueDepthService.depth > jobs.backpressure.queue-depth-threshold`. Returns 503 → tusd surfaces 5xx → client backs off. tusd never starts buffering bytes for a doomed upload. | accepted |
+| D29 | tusd replicas                                  | 1 (single-node Pi). tusd is stateless once `info.json` is in S3.                                                                                                                                                                                                                            | accepted |
+| D30 | Duplicate detection in pre-create              | `Upload-Metadata.contentId` (sha256 from client) checked against `file_metadata` exactly like the multipart path. 200 if novel, 409 if dupe. Avoids spending S3 storage on dupe uploads.                                                                                                    | accepted |
+| D31 | Existing `UploadBackpressureFilter` fate       | Stays in place for `/api/upload` legacy. TUS gets its own `pre-create` check (D28). Two paths, two filters, same source of truth (`JobQueueDepthService`).                                                                                                                                  | accepted |
 
 ---
 
@@ -316,34 +324,127 @@ R2 rollback: `backend.sprintProfilesActive=""` (empty → application.yml defaul
 
 ## Gap 3 — TUS resumable uploads (Phase 5)
 
-### Architecture (D7)
-tusd as a separate Deployment writing **directly to MinIO** via the S3 backend. On upload completion, tusd POSTs to a hook URL on the API → API creates the `file_metadata` row + `processing_jobs` row.
+### Architecture (D7, accepted)
 
-### Server
-- [ ] Helm: `deployment-tusd.yaml` (image `tusproject/tusd:v2`, args `-s3-bucket -s3-endpoint -hooks-http=http://photo-upload-api:8080/api/tus/hooks -behind-proxy`).
-- [ ] `service-tusd.yaml` ClusterIP:1080.
-- [ ] Ingress: route `/files/` to tusd; keep `/api/upload` for legacy.
-- [ ] `TusHookController.POST /api/tus/hooks`:
-  - `pre-create`: validate Authorization, check `Upload-Metadata` for `contentId` → reject duplicates.
-  - `post-finish`: file already in MinIO → insert `file_metadata` row at the existing object key, insert `processing_jobs` row.
-  - HMAC-verify hook authenticity using a shared secret.
-- [ ] `GET /api/capabilities` returns `{"tus": true, "tusEndpoint": "/files/", "multipart": true}`.
+`tusd` Deployment writing **directly to MinIO** via the S3 backend. tusd never hits the JVM for chunk PATCHes — only thin hook callbacks on `pre-create` and `post-finish` reach the api pod. Worker pod is unchanged: it drains `processing_jobs` whether the row arrived via multipart or TUS.
 
-### iOS
-- [ ] New `TusUploader.swift`. Foreground `POST /files/` to get `Location: /files/{id}` → persist URL in `UploadStore` (new `tusUploadUrl` field). Background `URLSession.uploadTask(with:fromFile:)` against `Location` with `PATCH` + `Tus-Resumable: 1.0.0` + `Content-Type: application/offset+octet-stream`. PATCH is fully self-contained → background URLSession-safe. Creation POST is the only foreground step, and it is tiny.
-- [ ] On launch with pending TUS uploads: `HEAD /files/{id}` to discover current `Upload-Offset`, then resume.
-- [ ] `Uploader.swift` keeps multipart path. `SyncCoordinator` selects path based on cached `/api/capabilities` result.
+```
+[client] -- POST /files/ ------> [tusd] -- pre-create  hook --> [api]
+[client] -- PATCH /files/{id} -> [tusd] -- S3 multipart -----> [MinIO]
+                                 [tusd] -- post-finish hook --> [api] -> insert file_metadata + processing_jobs
+[worker] <-- SKIP LOCKED lease ---------------------------- [processing_jobs]
+```
 
-### Roll-out
-TestFlight build with `Settings.useTus` flag, default off in first release. After three months, deprecate `/api/upload` (return 410 Gone with redirect message).
+Phase 6 (retention) landed before Phase 5, breaking the original sequence diagram. That is fine: retention's eligibility query (`file_path LIKE 'originals/%'`) does not match the `tus-uploads/` prefix, so the new namespace is out of scope. Stale TUS uploads are swept by tusd's own `-expire-after=168h` plus a MinIO bucket-lifecycle abort-rule.
+
+### Phase 5a — tusd in cluster (manifests only, no client traffic)
+
+- [x] Helm: `deployment-tusd.yaml` (image `tusproject/tusd:v2`, single replica per **D29**). Args:
+  ```
+  -s3-bucket=$(STORAGE_S3_BUCKET)
+  -s3-endpoint=$(STORAGE_S3_ENDPOINT)
+  -s3-object-prefix=tus-uploads/
+  -s3-disable-content-hashes
+  -hooks-http=http://photo-upload-backend:8080/api/tus/hooks/$(TUS_HOOK_SECRET)
+  -hooks-http-forward-headers=Authorization
+  -hooks-enabled-events=pre-create,post-finish,post-terminate
+  -behind-proxy
+  -base-path=/files/
+  ```
+- [x] `service-tusd.yaml` ClusterIP:1080.
+- [x] `_helpers.tpl`: `photo-upload.tusd.{fullname,labels,selectorLabels}` mirroring backend / worker.
+- [x] `secret.yaml`: new `tus.hookSecret` entry; required when `tus.enabled` (operator generates with `openssl rand -hex 32`); injected as env to both tusd and api Deployments.
+- [x] Ingress: route `/files/*` to tusd Service. `/api/*` continues to api Deployment. `/api/tus/hooks/{secret}` is **not** exposed externally. Conditional skip in `ingress.yaml` ensures `tus.enabled=false` doesn't render a /files entry pointing at a missing Service.
+- [x] MinIO bucket lifecycle: `mc ilm rule add --prefix tus-uploads/ --expiry-days 7` documented in `NOTES.txt` — operator applies once per environment, like the existing prometheus alert rules. This is platform-side because the bucket lives in the platform-managed `minio` release. **Required, not optional**: tusd 2.x dropped its in-process `-expire-after` flag (originally in the plan but discovered missing during R1 deploy — the pod CrashLoopBackOff'd until we removed the flag), so the bucket lifecycle is the only GC mechanism for stale `tus-uploads/{uuid}` objects.
+- [x] `helm template` + `helm lint` clean. Verified both `tus.enabled=true` (renders Deployment + Service + Ingress route + secret + backend env vars) and `tus.enabled=false` (omits all of the above) paths.
+
+  **Implementation note** — the original recommendation in D27 was HMAC-signed hook bodies. tusd 2.x cannot sign hook bodies, only forward client request headers, so HMAC was infeasible without a custom shim. Substituted with a path-secret in the hook URL (`/api/tus/hooks/$(TUS_HOOK_SECRET)`) validated with constant-time compare. Functionally equivalent defence-in-depth.
+
+  **Integer rendering bug caught during validation** — `maxSize: 524288000` rendered as `5.24288e+08` (Helm/Go template treats YAML numeric as float64). Fixed in both `deployment-tusd.yaml` arg (`-max-size={{ .Values.tus.maxSize | int64 }}`) and the backend `TUS_MAX_SIZE` env (`int64 | quote`). Same bug class as the earlier R2-pre-flight `default true | quote` rendering issue.
+
+### Phase 5b — backend hooks (still no client traffic)
+
+- [x] Added `ObjectStorageService.copy(srcKey, dstKey, contentType)` (server-side `CopyObjectRequest` with `MetadataDirective.REPLACE` for content-type override; no JVM bytes; breaker-wrapped).
+- [x] `TusProperties` (`@ConfigurationProperties("tus")`): `enabled` (default false), `advertised` (default false), `endpoint` (default `/files/`), `maxSize`, `hookSecret`, `version`.
+- [x] `TusHookController.POST /api/tus/hooks/{secret}` (`@Profile(API)` + `@ConditionalOnProperty(tus.enabled)`):
+  - Path-secret validated with `MessageDigest.isEqual` (constant-time) before any further work; mismatch → 404 (matches Spring's "unmapped URL" response shape so a probe can't tell whether the endpoint exists).
+  - `pre-create` handler: parse `Upload-Metadata.auth` as `email:password`, validate via the existing `AuthenticationManager` (HTTP Basic, same path the multipart endpoint uses); reject 409 if `contentId` already in `file_metadata` (per **D30**); reject 503 with `Retry-After: 30` if `JobQueueDepthService.depth > threshold` (per **D28**); 200 otherwise.
+  - `post-finish` handler: re-validates auth (Authorization header + `auth` metadata both flow on every PATCH); short-circuits 200 when a row already exists for the contentId (idempotent retry); otherwise calls `FileStorageService.registerTusUpload(...)` which COPIES, inserts the row + enqueues a PROCESS job in one TX, and deletes the tus-uploads/{uuid}+`.info` objects best-effort.
+  - `post-terminate` handler: logs and 200s. tusd already cleaned up the S3 object.
+  - Crucially: post-finish never returns 5xx, even on internal failure. Returning 5xx would loop tusd retries against an already-finalised upload that can't be undone; orphan-detection (follow-up) mops up any stranded `originals/...` objects.
+- [x] `CapabilitiesController.GET /api/capabilities` (`@Profile(API)`) returns `{ tus: { enabled, endpoint, version, maxSize }, multipart: { enabled, endpoint } }`. `tus.enabled` here is *advertised* (the user-facing flag); pin to `false` in R1, flip to `true` in R2.
+- [x] `SecurityConfig`: permit `/api/tus/hooks/**` (path-secret is the auth) and `GET /api/capabilities`.
+- [x] `application.yml`: `tus.enabled`, `tus.advertised`, `tus.endpoint`, `tus.max-size`, `tus.hook-secret`, `tus.version`. Helm wires the secret-backed `TUS_HOOK_SECRET` from the `Secret`.
+- [x] Added `FileStorageService.registerTusUpload(...)` — TUS-side parallel to `storeFile`. Same TX boundary (row + enqueue), same `originals/{stored_filename}` invariant, but skips checksum-based dedupe (would require downloading from S3, defeats the point of TUS); contentId dedupe in pre-create is the only de-dupe path on the TUS side. Documented as a known limitation in V1.
+- [x] Unit tests: `TusHookServiceTest` — 10 tests covering pre-create missing-auth / bad-credentials / backpressure / duplicate-contentId / happy-path; post-finish register / idempotent-retry / swallowed-auth-failure / swallowed-register-failure; post-terminate ack. `TusHookControllerTest` — 8 tests covering path-secret guard + dispatch + 200-with-JSON envelope. All pass. Full server suite shows 6 pre-existing failures (`TagServiceTest`, `JobLeaseServiceTest`×4, `FileProcessingServiceStatusTest`) — same count as documented in the R3 cleanup section, no Phase 5 regressions.
+
+  **Post-R1-deploy bug fix #2 (2026-05-01)** — first real upload via `tus-js-client` from the web frontend hit `HTTP/2 500: ERR_INTERNAL_SERVER_ERROR: failed to parse hook response: unexpected end of JSON input`. Root cause: tusd 2.x **requires** the hook response body to be a JSON-shaped {@code HookResponse} envelope (`{"HTTPResponse":{...},"RejectUpload":bool}`), and uses the inner `HTTPResponse.StatusCode` to decide what to surface to the actual client. The original implementation returned `ResponseEntity.ok().build()` (HTTP 200 with empty body) and used 4xx/5xx HTTP statuses for rejections — both wrong. Fixed by introducing a new `TusHookResponse` DTO (records mapping to PascalCase via `@JsonProperty`), refactoring `TusHookService` methods to return `TusHookResponse` instead of `ResponseEntity<Object>`, and having `TusHookController` always wrap in `ResponseEntity.ok(...)`. Path-secret-mismatch is the one exception that still returns bare HTTP 404 — tusd never calls with a wrong secret in normal operation, and 404 keeps the path's existence unobservable to probes.
+
+  **Post-R1-deploy bug fix #3 (2026-05-01)** — second upload attempt got past the hook-envelope fix and reached `post-finish`, then the `objectStorage.copy(tusKey, ...)` raised `NoSuchKeyException`. Root cause: tusd's S3 store synthesises {@code Upload.ID} as `<objectName>+<base64-multipartUploadId>`, where only the part before the `+` is the actual S3 object key. Our code reconstructed the key naively as `tus-uploads/{Upload.ID}` — pointing at a path that never exists. Fixed by adding a `Storage` field (`Map<String,String>`) to `TusHookRequest.TusUpload` and reading the authoritative `Storage.Key` set by tusd. Falls back to splitting `Upload.ID` on `+` if a future tusd version drops `Storage`. Applies to both `post-finish` (COPY+DELETE source) and `post-terminate` (logging).
+
+  **Post-R1-deploy bug fix #4 (2026-05-01) — TUS post-finish-vs-PATCH-204 race.** With all the server-side fixes in, uploads landed cleanly but the new image didn't show in the gallery without a hard refresh. tusd's logs revealed the cause: contrary to its docs claim that "the client will not get a response until after the hook has been completed", tusd 2.4.0 sends the PATCH 204 *before* invoking `post-finish`:
+
+  ```
+  21:38:43.652206 - ResponseOutgoing PATCH status=204    ← client gets 204 here
+  21:38:43.654200 - HookInvocationStart type=post-finish ← THEN post-finish starts
+  21:38:43.869412 - HookInvocationFinish type=post-finish ← row finally committed (217ms later)
+  ```
+
+  So `tus-js-client.onSuccess` fires, `await loadAlbumFiles` runs, and `/api/files` is queried ~200ms before the `file_metadata` row exists. Result: the response correctly returns the *old* file list; the gallery doesn't re-render because the new file isn't there. After ~3 minutes, a hard refresh sees the row and renders it.
+
+  Fixed in `GalleryView.vue#handleFileUpload`: snapshot the file-list length before the upload loop, then poll `loadAlbumFiles` until `files.value.length >= initialCount + successCount` or a 3 s deadline, with 300 ms gaps between polls. First load happens immediately; the loop only iterates if the row hasn't shown up yet. Multipart is harmless to this change since its row commits before the response.
+
+  Three layers of timing-related lessons here, all because the docs disagreed with the actual behaviour:
+  1. tusd's `Upload.ID` is `<objectName>+<multipartUploadId>` — not a key (#3).
+  2. tusd's hook response *body* must be a JSON envelope, not a plain HTTP status (#2).
+  3. tusd's `post-finish` is **not** synchronous despite docs — the PATCH 204 fires before the hook starts.
+
+### Phase 5c — iOS client (gated, default off)
+
+**Status: scaffolded but unverified.** Code authored matching existing iOS patterns; not yet built in Xcode (no iOS dev environment in this session). R1 deploy is unaffected — R1 ships server-side with `tus.advertised=false` and iOS keeps using multipart. Verification before R2: build the iOS target, smoke-test on a TestFlight device, then wire `SyncCoordinator` selection (the last bullet, deliberately deferred).
+
+- [x] `Settings.useTus: Bool` — hidden TestFlight toggle, default `false`, persisted via `UserDefaults`. Cleared by `Settings.clear()`.
+- [x] `Models/Capabilities.swift` — Decodable matching the api response shape.
+- [x] `APIClient.fetchCapabilities(completion:)` — unauthenticated GET, returns the same Decodable. Caller responsible for caching.
+- [x] `TusUploader.swift` — singleton with its own background URLSession (identifier `com.oglimmer.photosync.tus`), drop-in shape match to `Uploader` (`configureSession`, `queueUpload`, `onTaskFinished`, `getActiveUploadAssetIds`). V1 sends a single PATCH per upload (the entire file from offset 0); the URLSession's built-in retry handles network blips. Cross-launch resume via `HEAD /files/{id}` is documented as deferred V2 work — needs Xcode + device verification.
+- [x] `APIClient.tusEndpointURL()` and `APIClient.tusUploadMetadata(...)` extension helpers — TUS spec-compliant `Upload-Metadata` (comma-separated key + base64 value pairs); auth piggy-backs on the existing HTTP Basic credentials.
+- [ ] `SyncCoordinator` integration — pick `TusUploader.shared` vs `Uploader.shared` based on cached `/api/capabilities` × `Settings.useTus`. Deferred deliberately because: (a) it touches the central upload state machine, (b) needs device testing for the chunk-cleanup race in `urlSession(_:task:didCompleteWithError:)`, (c) needs a unifying `UploadOutcome` shape (currently both uploaders define their own enum). Land alongside R2.
+
+  **Caveat: the iOS code in this commit was authored without a build/run cycle.** Before merging the SyncCoordinator integration, the iOS target should be built locally (`open ios/PhotoCloudSync.xcodeproj`, build for simulator) and the multipart path verified to still work. The new `TusUploader.swift` and additions to `Settings.swift`, `APIClientExtensions.swift`, plus the new `Models/Capabilities.swift` may need to be added to the Xcode target's `Compile Sources` build phase if the project doesn't auto-discover them.
+
+### Phase 5d — Roll-out
+
+- [ ] **R1 — manifests only.** tusd Deployment goes live, `/api/capabilities` returns `tus.enabled=false`. Verify tusd boot, `OPTIONS /files/`, hook-path-secret round-trips end-to-end.
+- [ ] **R2 — flip capabilities.** `tus.enabled=true` in api config. iOS clients with `Settings.useTus=true` start using TUS; everyone else still on multipart. Soak with internal users for 1 week.
+- [ ] **R3 — TestFlight default-on.** iOS build with `Settings.useTus=true` default. Watch metrics for 2 weeks.
+- [ ] **R4 — deprecate multipart.** Earliest 3 months after R3. `/api/upload` returns 410 Gone pointing at `/api/capabilities`. iOS minimum supported version forced upward.
 
 ### Testing
-- [ ] Airplane-mode toggle mid-upload.
-- [ ] Force-quit + relaunch mid-upload.
-- [ ] `kubectl delete pod -l app=tusd` mid-upload (tusd persists state in S3 → resumes after restart).
 
-### Risk
-Stale TUS uploads leave dangling MinIO objects. Set `tusd -expire-after=168h`; retention CronJob (Gap 4) sweeps.
+- [ ] **Unit**: hook-path-secret verification, pre-create dedupe, pre-create backpressure, post-finish row insert.
+- [ ] **Integration** (Testcontainers MariaDB + MinIO + tusd): full round-trip — `POST /files/` → PATCH chunks → assert `file_metadata` + `processing_jobs` rows match the multipart path.
+- [ ] **Resume**: PATCH 1 chunk, kill the connection, `HEAD /files/{id}` reports correct offset, resume completes, post-finish fires exactly once.
+- [ ] **Pod restart**: `kubectl delete pod -l app=tusd` mid-upload. tusd persists state in S3, client resume succeeds after restart.
+- [ ] **Backpressure**: pin queue depth above threshold via SQL → `POST /files/` returns 503 + `Retry-After`.
+- [ ] **Duplicate**: same `contentId` twice → second `POST /files/` returns 409.
+- [ ] **iOS chaos**: airplane-mode toggle mid-PATCH, force-quit + relaunch mid-PATCH, OS reboot mid-PATCH.
+- [ ] **End-to-end gallery**: TUS-uploaded asset appears in gallery, derivatives render, public token works, rotate works.
+
+### Risk / rollback
+
+- **Stale TUS uploads**: client uploads but never completes → `tus-uploads/{uuid}` lingers. The MinIO bucket-lifecycle abort-rule is the **only** GC mechanism — tusd 2.x removed its in-process `-expire-after` flag (we discovered this during R1 deploy when the tusd pod CrashLoopBackOff'd on startup). Without the lifecycle rule applied, abandoned uploads accumulate indefinitely. Phase 6 retention sweep is unaffected — its WHERE clause matches `originals/%` only, so the `tus-uploads/` prefix is out of scope.
+- **post-finish hook fails after S3 COPY succeeds**: row never written, but the `originals/{stored_filename}` object exists in MinIO. Recovery: orphan-detection job (compare `originals/*` listing against `file_metadata.file_path`) — deferred to follow-up; manual cleanup acceptable in early rollout.
+- **Hook secret leak**: rotate via Helm secret + tusd Deployment restart + api pod restart. No long-lived state.
+- **R2 rollback**: `tus.enabled=false` in api config. Existing in-flight TUS uploads on iOS will fail; the next `/api/capabilities` poll switches them back to multipart for the next attempt.
+- **R4 rollback**: revert the `/api/upload` 410 commit. The multipart code path stayed in place; re-enabling is a config change.
+
+### Follow-ups (not blocking ship)
+
+- [ ] Orphan-detection job for `originals/` keys without `file_metadata` rows (post-finish hook crash recovery).
+- [ ] tusd Prometheus metrics scrape (`/metrics` endpoint native to tusd; add `prometheus.io/scrape` annotations to the tusd Service).
+- [ ] Web frontend TUS support (`tus-js-client`). Currently web uses the multipart path; lower priority because web uploads are smaller.
+- [ ] NetworkPolicy restricting `/api/tus/hooks/**` ingress to the tusd Pod's identity (defence-in-depth on top of D27 path-secret).
+- [x] **Stale TUS upload GC** — discovered during R1 deploy: tusd 2.x removed `-expire-after`, and the platform-side MinIO is single-drive (no lifecycle API). Solved by extending `RetentionService` with a `runTusCleanup()` second pass that lists `tus-uploads/` and deletes objects older than `retention.tus-upload-days` (default 7). Same nightly CronJob, same dry-run/max-rows safety properties. New `ObjectStorageService.listKeysOlderThan(prefix, cutoff)` helper. `RetentionRunner` calls both passes and sums failure counts into the exit code. 6 unit tests added (`RetentionServiceTusCleanupTest`); zero regressions.
 
 ---
 

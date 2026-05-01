@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
@@ -28,8 +29,10 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.MetadataDirective;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
@@ -137,6 +140,34 @@ public class ObjectStorageService {
     return withBreaker(() -> s3.getObject(req.build()));
   }
 
+  /**
+   * List object keys under {@code prefix} whose {@code LastModified} is strictly before
+   * {@code cutoff}. Used by the retention CronJob's TUS-cleanup pass — the S3 ListObjectsV2 API
+   * doesn't support a date filter, so we page through and filter client-side. Cheap regardless:
+   * pages are 1000 keys each, and the {@code tus-uploads/} prefix is short-lived in normal
+   * operation (post-finish hook deletes the object) so the prefix is usually nearly empty.
+   */
+  public List<String> listKeysOlderThan(String prefix, java.time.Instant cutoff) {
+    List<String> keys = new ArrayList<>();
+    String continuationToken = null;
+    do {
+      final String token = continuationToken;
+      ListObjectsV2Request.Builder req =
+          ListObjectsV2Request.builder().bucket(properties.getBucket()).prefix(prefix);
+      if (token != null) {
+        req.continuationToken(token);
+      }
+      ListObjectsV2Response page = withBreaker(() -> s3.listObjectsV2(req.build()));
+      for (S3Object obj : page.contents()) {
+        if (obj.lastModified() != null && obj.lastModified().isBefore(cutoff)) {
+          keys.add(obj.key());
+        }
+      }
+      continuationToken = page.isTruncated() ? page.nextContinuationToken() : null;
+    } while (continuationToken != null);
+    return keys;
+  }
+
   /** List every object key in the bucket, handling S3 pagination transparently. */
   public List<String> listKeys() {
     List<String> keys = new ArrayList<>();
@@ -161,6 +192,34 @@ public class ObjectStorageService {
             s3.deleteObject(
                 DeleteObjectRequest.builder().bucket(properties.getBucket()).key(key).build()));
     log.debug("S3 DELETE s3://{}/{}", properties.getBucket(), key);
+  }
+
+  /**
+   * Server-side copy within the same bucket. MinIO performs the copy without bytes leaving the
+   * storage layer, so this is the cheap rename we use after a TUS upload finalises (move from
+   * {@code tus-uploads/{uuid}} to {@code originals/{stored_filename}} per D24/D25).
+   *
+   * <p>{@code contentType} is set on the destination object only when non-blank — passing null
+   * keeps the source's content-type via {@link MetadataDirective#COPY} (the default), so
+   * existing-bucket COPYs (e.g. from another module) don't accidentally clobber metadata.
+   */
+  public void copy(String srcKey, String dstKey, String contentType) {
+    CopyObjectRequest.Builder req =
+        CopyObjectRequest.builder()
+            .sourceBucket(properties.getBucket())
+            .sourceKey(srcKey)
+            .destinationBucket(properties.getBucket())
+            .destinationKey(dstKey);
+    if (contentType != null && !contentType.isBlank()) {
+      req.metadataDirective(MetadataDirective.REPLACE).contentType(contentType);
+    }
+    runWithBreaker(() -> s3.copyObject(req.build()));
+    log.debug(
+        "S3 COPY s3://{}/{} → s3://{}/{}",
+        properties.getBucket(),
+        srcKey,
+        properties.getBucket(),
+        dstKey);
   }
 
   /**

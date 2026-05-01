@@ -109,3 +109,23 @@ export interface RecordingInfo {
 export interface PlaybackTimelineEntry extends ImageTimingEntry {
   file?: AlbumFile;
 }
+
+// Phase 5 — server-advertised ingest paths. Mirrors the Spring CapabilitiesController record.
+// `tus.enabled` here is the *advertised* flag (server-side R1 ships false, R2 flips true);
+// the actual TUS endpoint at /files/ is always live when tusd is deployed.
+export interface Capabilities {
+  tus: TusCapability;
+  multipart: MultipartCapability;
+}
+
+export interface TusCapability {
+  enabled: boolean;
+  endpoint: string;
+  version: string;
+  maxSize: number;
+}
+
+export interface MultipartCapability {
+  enabled: boolean;
+  endpoint: string;
+}

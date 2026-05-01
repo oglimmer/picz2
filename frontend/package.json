@@ -15,6 +15,7 @@
   "dependencies": {
     "@fontsource/dm-sans": "^5.2.8",
     "@fontsource/playfair-display": "^5.2.8",
+    "tus-js-client": "^4.3.1",
     "vue": "^3.5.31",
     "vue-router": "^4.6.4"
   },

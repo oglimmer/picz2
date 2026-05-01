@@ -172,3 +172,32 @@ app.kubernetes.io/name: {{ include "photo-upload.name" . }}-worker
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: worker
 {{- end }}
+
+{{/*
+Tusd fullname
+*/}}
+{{- define "photo-upload.tusd.fullname" -}}
+{{- printf "%s-tusd" (include "photo-upload.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Tusd specific labels
+*/}}
+{{- define "photo-upload.tusd.labels" -}}
+helm.sh/chart: {{ include "photo-upload.chart" . }}
+{{ include "photo-upload.tusd.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/component: tusd
+{{- end }}
+
+{{/*
+Tusd selector labels
+*/}}
+{{- define "photo-upload.tusd.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "photo-upload.name" . }}-tusd
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: tusd
+{{- end }}

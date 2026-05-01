@@ -1,0 +1,17 @@
+{{- if and .Values.objectStorage.enabled .Values.tus.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "photo-upload.tusd.fullname" . }}
+  labels:
+    {{- include "photo-upload.tusd.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.tus.service.type | default "ClusterIP" }}
+  ports:
+  - port: {{ .Values.tus.service.port | default 1080 }}
+    targetPort: tusd
+    protocol: TCP
+    name: tusd
+  selector:
+    {{- include "photo-upload.tusd.selectorLabels" . | nindent 4 }}
+{{- end }}

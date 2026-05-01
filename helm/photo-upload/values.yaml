@@ -139,6 +139,10 @@ retention:
   # Originals older than this are eligible for purge. Conservative 7 days per the plan; bump
   # higher per environment if storage isn't tight.
   originalDays: 7
+  # Phase 5 follow-up — abandoned tus-uploads/ objects older than this many days are deleted
+  # by the same nightly CronJob's second pass. Sole GC mechanism for stale TUS uploads (tusd
+  # 2.x has no in-process expiry and our MinIO is single-drive, no lifecycle API).
+  tusUploadDays: 7
   # Soft cap so a misconfigured cutoff (e.g. 0) can't sweep the whole table in one firing.
   maxRowsPerRun: 5000
   # First run after deploy: keep this true and verify the log. Switch to false to actually purge.
@@ -182,6 +186,47 @@ objectStorage:
   accessKey: ""
   secretKey: ""
 
+# Phase 5 — TUS resumable uploads. tusd Deployment serves /files/* directly to MinIO via the
+# S3 backend; a thin hook callback to /api/tus/hooks/{secret} on the api pod creates the
+# file_metadata + processing_jobs rows on completion. The full sequence diagram lives in
+# upload-concept-plan.md §Gap 3.
+#
+# Two-flag rollout (D7 / Phase 5d):
+#   * tus.enabled       — manifests rendered + api-side hook controller wired.
+#   * tus.advertised    — what /api/capabilities reports to clients. R1 ships enabled=true,
+#                         advertised=false; R2 flips advertised=true.
+tus:
+  enabled: true
+  advertised: false
+  name: tusd
+  image:
+    # Public image; no oglimmerregistrykey lookup needed (the cluster's imagePullSecrets list
+    # is harmless on this pod — K8s ignores irrelevant secrets when pulling from public registries).
+    repository: tusproject/tusd
+    pullPolicy: IfNotPresent
+    # Pin a specific tag rather than `:v2` for reproducible deploys. Bump deliberately.
+    tag: "v2.4.0"
+  service:
+    type: ClusterIP
+    port: 1080
+  # Path prefix on the public Ingress. tusd's -base-path is set to this value.
+  endpoint: "/files/"
+  # Per-upload size cap (bytes). Aligned with Spring's spring.servlet.multipart.max-file-size 500MB.
+  maxSize: 524288000
+  # Hook URL secret. tusd POSTs hook callbacks to /api/tus/hooks/$(TUS_HOOK_SECRET); the api pod
+  # validates the path-secret with constant-time compare. MUST be overridden via --set or sealed
+  # secrets — never commit a real value here. Generate with `openssl rand -hex 32`.
+  hookSecret: ""
+  # tusd is a small Go binary; the heavy work is S3 multipart, not in-pod buffering.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  replicas: 1
+
 # Database configuration (external MariaDB)
 database:
   # External database configuration
@@ -219,6 +264,12 @@ ingress:
         - path: /public/album
           pathType: Prefix
           backend: api
+        # TUS resumable upload endpoint (Phase 5). Conditionally rendered: ingress.yaml omits
+        # this entry when tus.enabled=false (so the path 404s rather than routing to a missing
+        # Service). Must come before the frontend catch-all.
+        - path: /files
+          pathType: Prefix
+          backend: tusd
         # Frontend must be last as it's the catch-all
         - path: /
           pathType: Prefix
