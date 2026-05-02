@@ -48,7 +48,10 @@ final class Settings: ObservableObject {
         albumId = defaults.object(forKey: Keys.albumId) as? Int ?? 1
         selectedAlbumName = defaults.object(forKey: Keys.selectedAlbumName) as? String
         syncLastDays = defaults.object(forKey: Keys.syncLastDays) as? Int ?? 3
-        useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? false
+        // R3 — TUS resumable uploads are the default for new installs (and any existing user
+        // who never touched the toggle). UserDefaults.object returns nil iff the key was never
+        // written, so a user who explicitly toggled OFF still gets `false` and is respected.
+        useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? true
     }
 
     func clear() {
@@ -65,7 +68,7 @@ final class Settings: ObservableObject {
         albumId = 1
         selectedAlbumName = nil
         syncLastDays = 3
-        useTus = false
+        useTus = true  // R3 default
     }
 }
 

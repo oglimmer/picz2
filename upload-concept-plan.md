@@ -420,8 +420,8 @@ Also surfaced (not fixed in this commit): the user's `User.defaultAlbumId` was n
 
 - [x] **R1 — manifests only** (2026-05-01). tusd Deployment, hook secret, Ingress route. Four post-deploy tusd-protocol bugs found and fixed (see fix #1–#4 in Phase 5b notes). Verified `OPTIONS /files/` and hook round-trips end-to-end.
 - [x] **R2 — flip capabilities** (2026-05-01). `tus.advertised=true`, web frontend uses TUS automatically; multipart kept as fallback. Verified with real photo upload through `tus-js-client`.
-- [ ] **R3 — TestFlight default-on.** iOS build with `Settings.useTus=true` default. Watch metrics for 2 weeks. Pending operator decision on TestFlight cut.
-- [ ] **R4 — deprecate multipart.** Earliest 3 months after R3. `/api/upload` returns 410 Gone pointing at `/api/capabilities`. iOS minimum supported version forced upward.
+- [x] **R3 — all clients TUS by default** (2026-05-02). iOS `Settings.useTus` default flipped from `false` to `true` (init + `clear()`). Web has been on TUS since R2 (capability-driven, no per-user flag). Existing iOS users who explicitly toggled the switch off keep their preference (`UserDefaults.object` returns nil iff never written, so the `?? true` default only applies to never-touched values). 2-week soak before considering R4.
+- [ ] **R4 — deprecate multipart.** Earliest 3 months after R3 (2026-08-02). `/api/upload` returns 410 Gone pointing at `/api/capabilities`. iOS minimum supported version forced upward.
 
 ### Testing
 
