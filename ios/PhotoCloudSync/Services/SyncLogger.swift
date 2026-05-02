@@ -64,8 +64,10 @@ class SyncLogger: ObservableObject {
     }
 
     func clearLogs() {
-        logs.removeAll()
-        saveLogs()
+        runOnMain { [weak self] in
+            self?.logs.removeAll()
+            self?.saveLogs()
+        }
     }
 
     // MARK: - Private Methods
@@ -73,27 +75,36 @@ class SyncLogger: ObservableObject {
     private func addLog(isManual: Bool, success: Bool, message: String) {
         let logEntry = SyncLogEntry(isManual: isManual, success: success, message: message)
 
-        // Insert at beginning for newest-first display
-        logs.insert(logEntry, at: 0)
-
-        // Trim to max logs
-        if logs.count > maxLogs {
-            logs = Array(logs.prefix(maxLogs))
-        }
-
-        saveLogs()
-
-        // Also print to console for debugging
+        // Print to console immediately so background-thread call sites still log
+        // synchronously even if the published mutation is hopped to main.
         let prefix = isManual ? "Manual" : "Background"
         let status = success ? "✓" : "✗"
         print("[\(prefix)] \(status) \(message)")
+
+        runOnMain { [weak self] in
+            guard let self else { return }
+            self.logs.insert(logEntry, at: 0)
+            if self.logs.count > self.maxLogs {
+                self.logs = Array(self.logs.prefix(self.maxLogs))
+            }
+            self.saveLogs()
+        }
     }
 
     private func loadLogs() {
-        if let data = UserDefaults.standard.data(forKey: logsKey),
-           let decodedLogs = try? JSONDecoder().decode([SyncLogEntry].self, from: data)
-        {
-            logs = decodedLogs
+        guard let data = UserDefaults.standard.data(forKey: logsKey),
+              let decodedLogs = try? JSONDecoder().decode([SyncLogEntry].self, from: data)
+        else { return }
+        runOnMain { [weak self] in
+            self?.logs = decodedLogs
+        }
+    }
+
+    private func runOnMain(_ block: @escaping () -> Void) {
+        if Thread.isMainThread {
+            block()
+        } else {
+            DispatchQueue.main.async(execute: block)
         }
     }
 

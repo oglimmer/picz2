@@ -21,7 +21,7 @@ struct PhotoCloudSyncApp: App {
             if newPhase == .active {
                 // Clear badge when app becomes active
                 Task { @MainActor in
-                    UIApplication.shared.applicationIconBadgeNumber = 0
+                    try? await UNUserNotificationCenter.current().setBadgeCount(0)
                     UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                     print("PhotoCloudSyncApp: Cleared badge and delivered notifications (scenePhase)")
                 }

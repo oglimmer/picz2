@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationDidBecomeActive(_: UIApplication) {
         // Clear badge when app becomes active
         Task { @MainActor in
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            try? await UNUserNotificationCenter.current().setBadgeCount(0)
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
             print("AppDelegate: Cleared badge and all notifications")
@@ -190,7 +190,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 
         // Clear badge when user taps notification
         Task { @MainActor in
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            try? await UNUserNotificationCenter.current().setBadgeCount(0)
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
             print("AppDelegate: Cleared badge and all notifications after tap")

@@ -2,6 +2,7 @@ import Foundation
 
 // MARK: - ViewModel Protocol
 
+@MainActor
 protocol ViewModelProtocol: ObservableObject {
     var isLoading: Bool { get set }
     var alertState: AlertState? { get set }

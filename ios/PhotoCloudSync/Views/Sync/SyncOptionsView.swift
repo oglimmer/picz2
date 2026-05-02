@@ -67,7 +67,7 @@ struct SyncOptionsView: View {
                                 Text(album.name).tag(album as Album?)
                             }
                         }
-                        .onChange(of: viewModel.selectedAlbum) { newAlbum in
+                        .onChange(of: viewModel.selectedAlbum) { _, newAlbum in
                             if let album = newAlbum {
                                 viewModel.selectAlbum(album)
                             }

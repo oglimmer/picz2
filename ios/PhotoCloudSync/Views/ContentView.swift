@@ -63,7 +63,7 @@ struct ContentView: View {
                                 Text(album.name).tag(album as Album?)
                             }
                         }
-                        .onChange(of: selectedAlbum) { newAlbum in
+                        .onChange(of: selectedAlbum) { _, newAlbum in
                             if let album = newAlbum {
                                 sync.settings.albumId = album.id
                                 sync.settings.selectedAlbumName = album.name

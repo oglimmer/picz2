@@ -18,7 +18,7 @@ struct RootView: View {
             checkLoginStatus()
             clearBadge()
         }
-        .onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 clearBadge()
                 if isLoggedIn {
@@ -37,7 +37,7 @@ struct RootView: View {
     private func clearBadge() {
         Task { @MainActor in
             // Clear the badge number
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            try? await UNUserNotificationCenter.current().setBadgeCount(0)
 
             // Remove all delivered notifications from notification center
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
