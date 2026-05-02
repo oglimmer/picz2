@@ -9,6 +9,14 @@ final class SyncCoordinator: ObservableObject {
 
     private let photo = PhotoLibraryManager.shared
     private let uploader = Uploader.shared
+    // Phase 5 — TUS resumable uploads. Lives behind the Settings.useTus toggle AND a server-
+    // advertised capability (cachedCapabilities.tus.enabled). When either is false, drainQueue
+    // falls back to the multipart `uploader`. Both uploaders share the same onTaskFinished
+    // callback shape (adapted in init() below) so handleUploadFinished is path-agnostic.
+    private let tusUploader = TusUploader.shared
+    private var cachedCapabilities: Capabilities?
+    private var capabilitiesFetchedAt: Date?
+    private let capabilitiesTTL: TimeInterval = 3600  // 1 hour
     private var api: APIClient {
         let credentials = KeychainHelper.shared.load()
         return APIClient(
@@ -37,17 +45,37 @@ final class SyncCoordinator: ObservableObject {
         uploader.onTaskFinished = { [weak self] assetId, outcome in
             self?.handleUploadFinished(assetId: assetId, outcome: outcome)
         }
+        // Phase 5 — TUS path uses a parallel UploadOutcome enum on TusUploader (structurally
+        // identical to Uploader.UploadOutcome). Adapt to the shared shape so handleUploadFinished
+        // doesn't need to know which path produced it.
+        tusUploader.onTaskFinished = { [weak self] assetId, tusOutcome in
+            let outcome: Uploader.UploadOutcome
+            switch tusOutcome {
+            case let .success(serverAssetId): outcome = .success(serverAssetId: serverAssetId)
+            case .clientError: outcome = .clientError
+            case .transport: outcome = .transport
+            case let .backpressure(delay): outcome = .backpressure(delay)
+            }
+            self?.handleUploadFinished(assetId: assetId, outcome: outcome)
+        }
     }
 
     // MARK: - Public controls
 
     func start() {
         uploader.configureSession()
+        tusUploader.configureSession()
 
         // Clean up stale uploading entries from previous app sessions
         // But preserve entries that have active URLSession tasks (to prevent duplicate uploads)
+        // across BOTH background sessions — multipart and TUS each have their own.
         let activeTasks = uploader.getActiveUploadAssetIds()
+            .union(tusUploader.getActiveUploadAssetIds())
         UploadStore.shared.cleanupStaleUploading(activeTasks: activeTasks)
+
+        // Kick off capabilities fetch in the background. Doesn't block sync — drainQueue
+        // falls back to the multipart path until the cache fills (or if the fetch fails).
+        ensureCapabilitiesLoaded()
 
         photo.requestAuthorization { status in
             guard status == .authorized || status == .limited else { return }
@@ -178,15 +206,20 @@ final class SyncCoordinator: ObservableObject {
             case let .success(serverAlbumId):
                 // Check if server has a target album set
                 guard let albumId = serverAlbumId else {
-                    // Server has no target album - clear local selection
+                    // Server has no target album - clear local selection. Completion must
+                    // fire AFTER the main-queue clear so the caller's
+                    // `guard settings.selectedAlbumName != nil` reads the updated value.
+                    // Otherwise it observes the stale non-nil value and proceeds with a
+                    // scan that produces a batch of doomed-to-400 uploads (the server
+                    // rejects them with "sync is paused").
                     if settings.selectedAlbumName != nil {
                         DispatchQueue.main.async {
                             self.settings.selectedAlbumName = nil
                             self.settings.albumId = 1
                             self.clearQueue()
                             print("SyncCoordinator: Target album cleared from server - stopping sync")
+                            completion(true)
                         }
-                        completion(true)
                     } else {
                         completion(false)
                     }
@@ -344,15 +377,21 @@ final class SyncCoordinator: ObservableObject {
             self.metrics.uploading += batch.count
         }
 
+        // Phase 5 — pick the upload path once per batch. Both flags must be true: server
+        // advertises tus.enabled in /api/capabilities AND user opted in via Settings.useTus.
+        // Decision is made per-batch (not per-asset) so a mid-batch capability flip can't
+        // produce a half-multipart-half-TUS batch with race-prone state.
+        let useTus = shouldUseTus()
         for asset in batch {
-            uploader.queueUpload(asset: asset, api: api) { result in
+            let completion: ((Result<Void, Error>) -> Void) = { [weak self] result in
+                guard let self else { return }
                 switch result {
                 case .success:
                     // Handoff succeeded; actual upload completion comes through
-                    // Uploader.onTaskFinished -> handleUploadFinished.
+                    // {Uploader,TusUploader}.onTaskFinished -> handleUploadFinished.
                     break
                 case .failure:
-                    // Export / multipart write failed — free the slot and try a replacement.
+                    // Export / body-write failed — free the slot and try a replacement.
                     self.syncQueue.async {
                         self.uploadingAssets.remove(asset.localIdentifier)
                         self.inFlightAssets.removeValue(forKey: asset.localIdentifier)
@@ -366,6 +405,48 @@ final class SyncCoordinator: ObservableObject {
                         }
                     }
                 }
+            }
+            if useTus {
+                tusUploader.queueUpload(asset: asset, api: api, completion: completion)
+            } else {
+                uploader.queueUpload(asset: asset, api: api, completion: completion)
+            }
+        }
+    }
+
+    // MARK: - Phase 5 — Capabilities cache + path selection
+
+    /// Returns true iff the user has opted in (Settings.useTus) AND the server advertises
+    /// tus.enabled (cached /api/capabilities). When capabilities haven't loaded yet — the
+    /// first drainQueue after a fresh launch — this returns false, and the batch goes via
+    /// the multipart path. The next refresh after ensureCapabilitiesLoaded completes flips
+    /// the answer; subsequent batches use TUS.
+    private func shouldUseTus() -> Bool {
+        guard Settings.shared.useTus else { return false }
+        guard let caps = cachedCapabilities else { return false }
+        return caps.tus.enabled
+    }
+
+    /// Lazy fetch + 1-hour cache. Called from start() and refreshed implicitly here when the
+    /// cache has expired. Failure is non-fatal — we just leave the cache empty and fall back
+    /// to the multipart path until the next attempt.
+    private func ensureCapabilitiesLoaded(completion: ((Capabilities?) -> Void)? = nil) {
+        if let fetchedAt = capabilitiesFetchedAt,
+           Date().timeIntervalSince(fetchedAt) < capabilitiesTTL,
+           let cached = cachedCapabilities {
+            completion?(cached)
+            return
+        }
+        api.fetchCapabilities { [weak self] result in
+            guard let self else { completion?(nil); return }
+            switch result {
+            case let .success(caps):
+                self.cachedCapabilities = caps
+                self.capabilitiesFetchedAt = Date()
+                completion?(caps)
+            case let .failure(err):
+                print("SyncCoordinator: capabilities fetch failed: \(err) — staying on multipart path")
+                completion?(nil)
             }
         }
     }

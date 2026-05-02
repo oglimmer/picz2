@@ -75,7 +75,7 @@ final class ProcessingStatusPoller {
         case .failed, .deadLetter:
             let detail = response.error ?? response.processingStatus.rawValue
             SyncLogger.shared.logProcessingFailure(assetId: contentId, error: detail)
-        case .ingested, .queued, .processing:
+        case .queued, .processing:
             break // unreachable — guarded by isTerminal
         }
     }
