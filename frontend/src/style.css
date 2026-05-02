@@ -2147,7 +2147,19 @@ body.landing-page .version-info { display: none; }
 @media (max-width: 480px) {
   .archive-grid { grid-template-columns: 1fr; }
   .gallery { grid-template-columns: repeat(2, 1fr); gap: var(--sp-2); padding: var(--sp-3); }
-  .left-controls { gap: var(--sp-1); }
+  .left-controls {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--sp-2);
+    width: 100%;
+  }
+  .left-controls > button {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
+  }
   .header-top-bar { flex-direction: column; align-items: flex-start; }
   .new-album-btn span { display: none; }
 }
