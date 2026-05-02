@@ -111,15 +111,18 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         )
         api.addBasicAuth(to: &request)
 
+        let assetId = asset.localIdentifier
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
             guard let self else { return }
             if let error {
-                UploadStore.shared.removeFromUploading(asset.localIdentifier)
+                SyncLogger.shared.logUploadFailure(assetId: assetId, error: error.localizedDescription)
+                UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(error))
                 return
             }
             guard let http = response as? HTTPURLResponse else {
-                UploadStore.shared.removeFromUploading(asset.localIdentifier)
+                SyncLogger.shared.logUploadFailure(assetId: assetId, error: "no response from server")
+                UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(NSError(domain: "TusUploader", code: -1,
                                              userInfo: [NSLocalizedDescriptionKey: "no http response"])))
                 return
@@ -129,7 +132,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 guard let location = http.value(forHTTPHeaderField: "Location"),
                       let uploadURL = self.resolveLocation(location, against: tusURL)
                 else {
-                    UploadStore.shared.removeFromUploading(asset.localIdentifier)
+                    SyncLogger.shared.logUploadFailure(assetId: assetId, error: "missing Location header")
+                    UploadStore.shared.removeFromUploading(assetId)
                     completion?(.failure(NSError(domain: "TusUploader", code: -1,
                                                  userInfo: [NSLocalizedDescriptionKey: "missing Location header"])))
                     return
@@ -138,17 +142,20 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             case 409:
                 // Pre-create dedupe — server already has a row for this contentId. Treat as
                 // success so SyncCoordinator stops retrying.
-                UploadStore.shared.markUploaded(asset.localIdentifier, checksum: exp.checksum)
-                self.onTaskFinished?(asset.localIdentifier, .success(serverAssetId: nil))
+                SyncLogger.shared.logUploadDeduped(assetId: assetId)
+                UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
+                self.onTaskFinished?(assetId, .success(serverAssetId: nil))
                 completion?(.success(()))
             case 429, 503:
                 let retry = self.parseRetryAfter(from: http) ?? 30
-                UploadStore.shared.removeFromUploading(asset.localIdentifier)
-                self.onTaskFinished?(asset.localIdentifier, .backpressure(retry))
+                SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
+                UploadStore.shared.removeFromUploading(assetId)
+                self.onTaskFinished?(assetId, .backpressure(retry))
                 completion?(.success(()))
             default:
-                UploadStore.shared.removeFromUploading(asset.localIdentifier)
-                self.onTaskFinished?(asset.localIdentifier, .clientError)
+                SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
+                UploadStore.shared.removeFromUploading(assetId)
+                self.onTaskFinished?(assetId, .clientError)
                 completion?(.failure(NSError(domain: "TusUploader", code: http.statusCode,
                                              userInfo: [NSLocalizedDescriptionKey: "POST /files/ returned \(http.statusCode)"])))
             }
@@ -235,6 +242,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         } else {
             UploadStore.shared.markUploaded(assetId, checksum: checksum)
             SyncCoordinator.shared.onUploadedOne(assetId: assetId)
+            SyncLogger.shared.logUploadSuccess(assetId: assetId)
             onTaskFinished?(assetId, .success(serverAssetId: nil))
         }
     }

@@ -51,6 +51,24 @@ class SyncLogger: ObservableObject {
         addLog(isManual: false, success: true, message: message)
     }
 
+    // TUS pre-create returned 409: server already has a row for this contentId.
+    // Bytes weren't transferred this run — log informationally so the user sees
+    // "this one was already on the server" instead of nothing at all.
+    func logUploadDeduped(assetId: String) {
+        let message = "Already on server: \(assetId.prefix(8))..."
+        addLog(isManual: false, success: true, message: message)
+    }
+
+    // TUS bytes landed (PATCH 2xx logged via logUploadSuccess), but the follow-up
+    // contentId → serverAssetId lookup exhausted its retries. Processing-status
+    // polling is disabled for this asset, so any FAILED / DEAD_LETTER outcome
+    // won't surface. Log informationally so the user knows the asset uploaded
+    // but post-upload visibility is degraded for this one.
+    func logProcessingStatusUnavailable(assetId: String) {
+        let message = "Processing status unavailable for \(assetId.prefix(8))..."
+        addLog(isManual: false, success: true, message: message)
+    }
+
     func logBackgroundSync(success: Bool, message: String) {
         addLog(isManual: false, success: success, message: "Background sync: \(message)")
     }

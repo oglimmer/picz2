@@ -476,6 +476,7 @@ final class SyncCoordinator: ObservableObject {
                 }
             case .failure:
                 print("SyncCoordinator: gave up resolving asset id for contentId=\(contentId) after \(maxAttempts) attempts; status polling disabled for this upload")
+                SyncLogger.shared.logProcessingStatusUnavailable(assetId: contentId)
                 completion(nil)
             }
         }
