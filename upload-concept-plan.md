@@ -401,7 +401,12 @@ Phase 6 (retention) landed before Phase 5, breaking the original sequence diagra
 
 ### Phase 5c — iOS client (gated, default off)
 
-**Status: scaffolded but unverified.** Code authored matching existing iOS patterns; not yet built in Xcode (no iOS dev environment in this session). R1 deploy is unaffected — R1 ships server-side with `tus.advertised=false` and iOS keeps using multipart. Verification before R2: build the iOS target, smoke-test on a TestFlight device, then wire `SyncCoordinator` selection (the last bullet, deliberately deferred).
+**Status: shipped end-to-end and verified on device (2026-05-02).** TUS uploads from iOS land cleanly when `Settings.useTus=true`; multipart path is unaffected when off. Two pre-existing iOS issues surfaced and were fixed during the first Xcode build:
+
+1. `ProcessingStatusPoller` line 78 still referenced `AssetProcessingStatus.ingested` — the enum case had been removed during Phase 4 R3 cleanup but the iOS target hadn't been built since, so the dangling reference went unnoticed. Removed.
+2. `SyncCoordinator.syncTargetAlbumFromServer` async-clear race (when server returns null target album): completion fired before the `DispatchQueue.main.async` clear, so the caller's `guard settings.selectedAlbumName != nil` saw the stale non-nil value and proceeded with a doomed scan. Moved `completion(true)` inside the async block so the caller observes the post-clear state. Pre-existing, only fires on the rare server-clears-target-album path; no data loss in either case.
+
+Also surfaced (not fixed in this commit): the user's `User.defaultAlbumId` was null, so iOS multipart uploads were 400ing because they don't include `albumId` in the form body and the server falls back to `currentUser.getDefaultAlbumId()`. Resolved out-of-band by `PUT /api/settings/target-album`. Operational, not a code bug.
 
 - [x] `Settings.useTus: Bool` — hidden TestFlight toggle, default `false`, persisted via `UserDefaults`. Cleared by `Settings.clear()`.
 - [x] `Models/Capabilities.swift` — Decodable matching the api response shape.
@@ -409,19 +414,13 @@ Phase 6 (retention) landed before Phase 5, breaking the original sequence diagra
 - [x] `TusUploader.swift` — singleton with its own background URLSession (identifier `com.oglimmer.photosync.tus`), drop-in shape match to `Uploader` (`configureSession`, `queueUpload`, `onTaskFinished`, `getActiveUploadAssetIds`). V1 sends a single PATCH per upload (the entire file from offset 0); the URLSession's built-in retry handles network blips. Cross-launch resume via `HEAD /files/{id}` is documented as deferred V2 work — needs Xcode + device verification.
 - [x] `APIClient.tusEndpointURL()` and `APIClient.tusUploadMetadata(...)` extension helpers — TUS spec-compliant `Upload-Metadata` (comma-separated key + base64 value pairs); auth piggy-backs on the existing HTTP Basic credentials.
 - [x] `SyncCoordinator` integration (2026-05-02) — picks `TusUploader.shared` vs `Uploader.shared` based on cached `/api/capabilities` × `Settings.useTus`, decided once per drainQueue batch (not per asset, to avoid a half-multipart-half-TUS batch if a capability flip races with the loop). Adapts `TusUploader.UploadOutcome` to `Uploader.UploadOutcome` in `init()` so `handleUploadFinished` stays path-agnostic. `start()` now configureSessions both uploaders, merges their `getActiveUploadAssetIds()` for stale-cleanup, and kicks off a non-blocking capabilities fetch (1 h TTL). Capabilities-fetch failure or pending state silently falls back to multipart. `Settings.useTus` defaults `false` so the user must opt in even after R2 capabilities flip.
-- [ ] **Status polling for TUS uploads** — V1 limitation: `tus-js-client` PATCH responses carry only TUS protocol headers, no `serverAssetId`, so `TusUploader` can't trigger `ProcessingStatusPoller.shared.poll(...)` post-upload. Multipart still does (the 202 body has `file.id`). Acceptable for V1: TUS-uploaded assets land successfully but iOS doesn't surface FAILED / DEAD_LETTER processing states for them. Fix when needed: add `/api/assets?contentId=...` lookup or have the post-finish hook record contentId→assetId in a small index that iOS can poll.
-
-  **Still unverified — needs Xcode.** The integration above was authored without a build/run cycle. Before any production iOS deploy:
-  1. Open `ios/PhotoCloudSync.xcodeproj`, ensure new files (`Models/Capabilities.swift`, `Services/TusUploader.swift`) are in the target's *Compile Sources* build phase if the project doesn't use synchronized groups.
-  2. Build for simulator. Fix any Swift errors (interplay between the two `UploadOutcome` enums is the most likely bite).
-  3. Smoke test:  `Settings.useTus = false` → multipart path still works (regression). `Settings.useTus = true` + server `tus.advertised=true` → TUS path uploads and gallery (web) shows the new file.
-  4. Background URLSession test: airplane-mode toggle mid-PATCH, force-quit + relaunch with pending uploads.
+- [x] **Status polling for TUS uploads** (2026-05-02) — fixed via a new `GET /api/assets/by-content?albumId=X&contentId=Y` endpoint that returns the same `AssetProcessingStatusResponse` shape as `/api/assets/{id}/status`. iOS `APIClient.lookupAssetByContentId` is called from `SyncCoordinator`'s TUS adapter when the upload completes with `serverAssetId=nil`; retries up to 4× with exponential backoff (200/400/800/1600ms) to ride out the post-finish hook race window (~200ms typical, 1s worst case observed in production). On success, normal `ProcessingStatusPoller` polling kicks in; on persistent failure (row never appears, hook crashed), nil is forwarded — upload is still recorded as success, only the FAILED/DEAD_LETTER notifications are unavailable for that asset.
 
 ### Phase 5d — Roll-out
 
-- [ ] **R1 — manifests only.** tusd Deployment goes live, `/api/capabilities` returns `tus.enabled=false`. Verify tusd boot, `OPTIONS /files/`, hook-path-secret round-trips end-to-end.
-- [ ] **R2 — flip capabilities.** `tus.enabled=true` in api config. iOS clients with `Settings.useTus=true` start using TUS; everyone else still on multipart. Soak with internal users for 1 week.
-- [ ] **R3 — TestFlight default-on.** iOS build with `Settings.useTus=true` default. Watch metrics for 2 weeks.
+- [x] **R1 — manifests only** (2026-05-01). tusd Deployment, hook secret, Ingress route. Four post-deploy tusd-protocol bugs found and fixed (see fix #1–#4 in Phase 5b notes). Verified `OPTIONS /files/` and hook round-trips end-to-end.
+- [x] **R2 — flip capabilities** (2026-05-01). `tus.advertised=true`, web frontend uses TUS automatically; multipart kept as fallback. Verified with real photo upload through `tus-js-client`.
+- [ ] **R3 — TestFlight default-on.** iOS build with `Settings.useTus=true` default. Watch metrics for 2 weeks. Pending operator decision on TestFlight cut.
 - [ ] **R4 — deprecate multipart.** Earliest 3 months after R3. `/api/upload` returns 410 Gone pointing at `/api/capabilities`. iOS minimum supported version forced upward.
 
 ### Testing

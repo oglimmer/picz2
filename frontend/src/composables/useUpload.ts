@@ -71,7 +71,20 @@ export function useUpload() {
           Authorization: `Basic ${btoa(credentials)}`,
         },
         onError(err) {
-          reject(err);
+          // tus.DetailedError exposes the original response status + headers on a real HTTP
+          // failure (vs. a network/parse error where they're absent). Translate to friendly
+          // copy at the source so the toast/log doesn't leak internals like
+          // "tus: unexpected response while creating upload, originated from request..."
+          const detailed = err as unknown as {
+            originalResponse?: {
+              getStatus?: () => number;
+              getHeader?: (name: string) => string | null;
+            };
+            message?: string;
+          };
+          const status = detailed?.originalResponse?.getStatus?.() ?? null;
+          const retryAfter = detailed?.originalResponse?.getHeader?.("Retry-After") ?? null;
+          reject(new Error(translateUploadError(status, retryAfter, detailed.message)));
         },
         onProgress(sent, total) {
           if (opts.onProgress && total > 0) {
@@ -105,17 +118,59 @@ export function useUpload() {
       method: "POST",
       body: formData,
     });
+    if (!res.ok) {
+      const retryAfter = res.headers.get("Retry-After");
+      let serverMessage: string | undefined;
+      try {
+        const body = (await res.json()) as { message?: string };
+        serverMessage = body?.message;
+      } catch {
+        // body not JSON (e.g. Spring Security 401 plain text); fall through to fallback.
+      }
+      throw new Error(translateUploadError(res.status, retryAfter, serverMessage));
+    }
     const data = (await res.json()) as {
       success: boolean;
       message?: string;
       file?: { id?: number };
     };
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || `upload failed: HTTP ${res.status}`);
+    if (!data.success) {
+      throw new Error(data.message || "Upload failed");
     }
     opts.onProgress?.(1);
     return { via: "multipart", serverAssetId: data.file?.id };
   }
 
   return { uploadFile };
+}
+
+/**
+ * Translate HTTP status + optional server message into user-facing copy. Shared by both
+ * upload paths so the user sees the same text regardless of which protocol surfaced the
+ * failure. Status `null` means a network / parse / library error with no HTTP response —
+ * fall through to the original message (e.g. "Failed to fetch").
+ */
+function translateUploadError(
+  status: number | null,
+  retryAfter: string | null,
+  fallbackMessage?: string,
+): string {
+  switch (status) {
+    case 401:
+    case 403:
+      return "Authentication failed — please log out and back in.";
+    case 409:
+      return "This file has already been uploaded.";
+    case 413:
+      return "File is too large.";
+    case 429:
+    case 503:
+      return retryAfter
+        ? `Server is busy — try again in ${retryAfter}s.`
+        : "Server is busy — try again shortly.";
+    case null:
+      return fallbackMessage || "Upload failed (network error)";
+    default:
+      return fallbackMessage || `Upload failed (HTTP ${status})`;
+  }
 }

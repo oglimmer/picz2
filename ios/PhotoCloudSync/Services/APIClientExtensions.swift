@@ -1,5 +1,66 @@
 import Foundation
 
+// MARK: - TUS asset-id lookup (Phase 5 follow-up)
+
+extension APIClient {
+    /// Resolve the server-side asset id for a freshly TUS-uploaded file. The TUS PATCH
+    /// response carries only protocol headers, not the asset id, so iOS calls this with the
+    /// client-side `contentId` (PHAsset.localIdentifier) to find the row that the post-finish
+    /// hook just inserted.
+    ///
+    /// Returns 404 when the row hasn't appeared yet — most often that means the post-finish
+    /// hook is still running (~200 ms race window). Callers retry briefly with backoff.
+    func lookupAssetByContentId(
+        albumId: Int,
+        contentId: String,
+        completion: @escaping (Result<Int, Error>) -> Void,
+    ) {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/assets/by-content"),
+            resolvingAgainstBaseURL: false,
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "albumId", value: String(albumId)),
+            URLQueryItem(name: "contentId", value: contentId),
+        ]
+        var request = URLRequest(url: components.url!)
+        addBasicAuth(to: &request)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient.lookupAssetByContentId", code: -1)))
+                return
+            }
+            if http.statusCode == 404 {
+                completion(.failure(NSError(
+                    domain: "APIClient.lookupAssetByContentId",
+                    code: 404,
+                    userInfo: [NSLocalizedDescriptionKey: "asset not found yet"],
+                )))
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode), let data else {
+                completion(.failure(NSError(
+                    domain: "APIClient.lookupAssetByContentId",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"],
+                )))
+                return
+            }
+            do {
+                let resp = try JSONDecoder().decode(AssetProcessingStatusResponse.self, from: data)
+                completion(.success(resp.id))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+}
+
 // MARK: - Server Capabilities (Phase 5)
 
 extension APIClient {

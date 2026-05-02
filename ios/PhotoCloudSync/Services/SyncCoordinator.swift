@@ -48,15 +48,35 @@ final class SyncCoordinator: ObservableObject {
         // Phase 5 — TUS path uses a parallel UploadOutcome enum on TusUploader (structurally
         // identical to Uploader.UploadOutcome). Adapt to the shared shape so handleUploadFinished
         // doesn't need to know which path produced it.
+        //
+        // Special case: TUS PATCH responses don't carry the server asset id, so we get
+        // .success(serverAssetId: nil). Resolve via contentId lookup with retry (handles the
+        // post-finish hook race) before calling handleUploadFinished, otherwise
+        // ProcessingStatusPoller would never start for TUS uploads.
         tusUploader.onTaskFinished = { [weak self] assetId, tusOutcome in
-            let outcome: Uploader.UploadOutcome
+            guard let self else { return }
             switch tusOutcome {
-            case let .success(serverAssetId): outcome = .success(serverAssetId: serverAssetId)
-            case .clientError: outcome = .clientError
-            case .transport: outcome = .transport
-            case let .backpressure(delay): outcome = .backpressure(delay)
+            case let .success(serverAssetId):
+                if let serverAssetId {
+                    self.handleUploadFinished(
+                        assetId: assetId,
+                        outcome: .success(serverAssetId: serverAssetId),
+                    )
+                } else {
+                    self.resolveTusUploadServerId(contentId: assetId) { [weak self] resolved in
+                        self?.handleUploadFinished(
+                            assetId: assetId,
+                            outcome: .success(serverAssetId: resolved),
+                        )
+                    }
+                }
+            case .clientError:
+                self.handleUploadFinished(assetId: assetId, outcome: .clientError)
+            case .transport:
+                self.handleUploadFinished(assetId: assetId, outcome: .transport)
+            case let .backpressure(delay):
+                self.handleUploadFinished(assetId: assetId, outcome: .backpressure(delay))
             }
-            self?.handleUploadFinished(assetId: assetId, outcome: outcome)
         }
     }
 
@@ -425,6 +445,40 @@ final class SyncCoordinator: ObservableObject {
         guard Settings.shared.useTus else { return false }
         guard let caps = cachedCapabilities else { return false }
         return caps.tus.enabled
+    }
+
+    /// Resolve the server-side asset id for a TUS upload, given the client's contentId
+    /// (PHAsset.localIdentifier). Retries up to 4 times with backoff to ride out the
+    /// post-finish hook race window (~200 ms typical; 1 s worst case observed in production
+    /// — see Phase 5b bug-fix #4 in the plan). Calls completion with the resolved id, or
+    /// nil if the row never appears (deleted? hook crashed?). nil disables status polling
+    /// for that asset; the upload itself is still recorded as success.
+    private func resolveTusUploadServerId(
+        contentId: String,
+        attempt: Int = 0,
+        completion: @escaping (Int?) -> Void,
+    ) {
+        let maxAttempts = 4
+        let albumId = settings.albumId
+        api.lookupAssetByContentId(albumId: albumId, contentId: contentId) { [weak self] result in
+            switch result {
+            case let .success(id):
+                completion(id)
+            case .failure where attempt < maxAttempts - 1:
+                // 200ms, 400ms, 800ms — covers the typical race + a comfortable safety margin.
+                let delay = 0.2 * pow(2.0, Double(attempt))
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    self?.resolveTusUploadServerId(
+                        contentId: contentId,
+                        attempt: attempt + 1,
+                        completion: completion,
+                    )
+                }
+            case .failure:
+                print("SyncCoordinator: gave up resolving asset id for contentId=\(contentId) after \(maxAttempts) attempts; status polling disabled for this upload")
+                completion(nil)
+            }
+        }
     }
 
     /// Lazy fetch + 1-hour cache. Called from start() and refreshed implicitly here when the
