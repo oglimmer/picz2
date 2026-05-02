@@ -94,6 +94,7 @@ iOSInjectionProject/
 
 target/
 mariadb_data/
+minio_data/
 uploads/
 node_modules/
 data/
