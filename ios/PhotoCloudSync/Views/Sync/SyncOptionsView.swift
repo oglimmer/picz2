@@ -33,6 +33,18 @@ struct SyncOptionsView: View {
                     }
                 }
 
+                // Phase 5 — TUS resumable uploads. Hidden under Advanced because the multipart
+                // path is the documented stable behaviour; TUS is opt-in until R3 (TestFlight
+                // default-on) ships. SyncCoordinator.shouldUseTus() requires both this flag AND
+                // server-advertised tus.enabled, so flipping it on a server that hasn't enabled
+                // TUS is a no-op (silently falls back to multipart).
+                Section(
+                    header: Text("Advanced"),
+                    footer: Text("Resumable uploads recover from network drops mid-file instead of restarting from zero. Requires server support; falls back to standard uploads automatically when unavailable."),
+                ) {
+                    Toggle("Resumable Uploads (TUS)", isOn: $sync.settings.useTus)
+                }
+
                 // Album Selection Section
                 Section(header: Text("Target Album")) {
                     Button("Refresh Albums") {

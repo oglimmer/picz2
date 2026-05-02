@@ -408,7 +408,7 @@ Phase 6 (retention) landed before Phase 5, breaking the original sequence diagra
 
 Also surfaced (not fixed in this commit): the user's `User.defaultAlbumId` was null, so iOS multipart uploads were 400ing because they don't include `albumId` in the form body and the server falls back to `currentUser.getDefaultAlbumId()`. Resolved out-of-band by `PUT /api/settings/target-album`. Operational, not a code bug.
 
-- [x] `Settings.useTus: Bool` — hidden TestFlight toggle, default `false`, persisted via `UserDefaults`. Cleared by `Settings.clear()`.
+- [x] `Settings.useTus: Bool` — toggle in `SyncOptionsView` under an "Advanced" section, default `false`, persisted via `UserDefaults`. Cleared by `Settings.clear()`. Footer text explains what TUS does in plain English. The toggle is a no-op when server-side `tus.advertised=false` (`shouldUseTus()` requires both flags), so it can ship without coordinating with R2/R3 capability flips.
 - [x] `Models/Capabilities.swift` — Decodable matching the api response shape.
 - [x] `APIClient.fetchCapabilities(completion:)` — unauthenticated GET, returns the same Decodable. Caller responsible for caching.
 - [x] `TusUploader.swift` — singleton with its own background URLSession (identifier `com.oglimmer.photosync.tus`), drop-in shape match to `Uploader` (`configureSession`, `queueUpload`, `onTaskFinished`, `getActiveUploadAssetIds`). V1 sends a single PATCH per upload (the entire file from offset 0); the URLSession's built-in retry handles network blips. Cross-launch resume via `HEAD /files/{id}` is documented as deferred V2 work — needs Xcode + device verification.
