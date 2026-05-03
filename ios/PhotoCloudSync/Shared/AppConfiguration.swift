@@ -15,7 +15,7 @@ enum AppConfiguration {
         URL(string: baseURL)!
     }
 
-    static var uploadEndpoint: String {
-        "\(baseURL)/api/upload"
+    static var tusEndpointURL: URL {
+        apiBaseURL.appendingPathComponent("files/")
     }
 }

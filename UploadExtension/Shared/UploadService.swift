@@ -3,43 +3,39 @@ import Foundation
 class UploadService {
     static let shared = UploadService()
 
-    // Configuration - Points to local Spring Boot server
-//    private var apiEndpoint = "http://localhost:8080/api/upload"
-    private var apiEndpoint = "https://picz2.oglimmer.com/api/upload"
+    // Production server
+//    private let baseURL = "http://localhost:8080"
+    private let baseURL = "https://picz2.oglimmer.com"
     private var email: String?
     private var password: String?
 
     private init() {}
 
-    /// Configure the API endpoint for uploads
-    func configure(apiEndpoint: String) {
-        self.apiEndpoint = apiEndpoint
-    }
-
-    /// Get the API base URL
+    /// Base URL for the JSON API surface (auth, albums). Distinct from the TUS upload
+    /// endpoint, which lives under /files/.
     func getApiBaseUrl() -> String {
-        apiEndpoint.replacingOccurrences(of: "/upload", with: "")
+        "\(baseURL)/api"
     }
 
-    /// Set Basic Auth credentials
+    private var tusEndpointURL: URL {
+        URL(string: "\(baseURL)/files/")!
+    }
+
     func setCredentials(email: String, password: String) {
         self.email = email
         self.password = password
     }
 
-    /// Clear credentials
     func clearCredentials() {
         email = nil
         password = nil
     }
 
-    /// Return the Authorization header value if credentials are present
     func getAuthorizationHeader() -> String? {
         guard let email, let password else { return nil }
         let creds = "\(email):\(password)"
         guard let data = creds.data(using: .utf8) else { return nil }
-        let token = data.base64EncodedString()
-        return "Basic \(token)"
+        return "Basic \(data.base64EncodedString())"
     }
 
     /// Verify credentials via /auth/check
@@ -67,7 +63,6 @@ class UploadService {
                 completion(.failure(NSError(domain: "UploadService", code: code, userInfo: [NSLocalizedDescriptionKey: "Auth failed"])))
                 return
             }
-            // Parse email (optional)
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let email = obj["email"] as? String {
                 completion(.success(email))
             } else {
@@ -76,20 +71,10 @@ class UploadService {
         }.resume()
     }
 
-    /// Upload media items to the configured REST API
+    /// Upload media items via TUS, sequentially, reporting per-file progress.
     func upload(
         mediaItems: [MediaItem],
         albumId: Int? = nil,
-        progress: @escaping (Double) -> Void,
-        completion: @escaping (Result<Int, Error>) -> Void,
-    ) {
-        performActualUpload(mediaItems: mediaItems, albumId: albumId, progress: progress, completion: completion)
-    }
-
-    /// Upload files to the API sequentially (one at a time)
-    private func performActualUpload(
-        mediaItems: [MediaItem],
-        albumId: Int?,
         progress: @escaping (Double) -> Void,
         completion: @escaping (Result<Int, Error>) -> Void,
     ) {
@@ -97,10 +82,8 @@ class UploadService {
         var failedError: Error?
         let totalCount = mediaItems.count
 
-        // Upload files sequentially using recursion
         func uploadNext(index: Int) {
             guard index < mediaItems.count else {
-                // All uploads complete
                 DispatchQueue.main.async {
                     if let error = failedError {
                         completion(.failure(error))
@@ -117,21 +100,14 @@ class UploadService {
                 case .success:
                     uploadedCount += 1
                     let currentProgress = Double(uploadedCount) / Double(totalCount)
-                    DispatchQueue.main.async {
-                        progress(currentProgress)
-                    }
+                    DispatchQueue.main.async { progress(currentProgress) }
                 case let .failure(error):
-                    if failedError == nil {
-                        failedError = error
-                    }
+                    if failedError == nil { failedError = error }
                 }
-
-                // Upload next file
                 uploadNext(index: index + 1)
             }
         }
 
-        // Start with first file
         uploadNext(index: 0)
     }
 
@@ -140,82 +116,133 @@ class UploadService {
         albumId: Int?,
         completion: @escaping (Result<Void, Error>) -> Void,
     ) {
-        var urlString = apiEndpoint
-        if let albumId {
-            urlString += "?albumId=\(albumId)"
-        }
-
-        guard let url = URL(string: urlString) else {
-            completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid API endpoint"])))
+        // Auth via Upload-Metadata is required by the server (D26) — Authorization header is
+        // sent too as belt-and-braces, but tusd does not forward arbitrary headers to hooks.
+        guard email != nil, password != nil else {
+            completion(.failure(NSError(domain: "UploadService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])))
             return
         }
 
-        var request = URLRequest(url: url)
+        let fileSize: Int64
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: item.url.path)
+            fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        let tusURL = tusEndpointURL
+        var request = URLRequest(url: tusURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        request.timeoutInterval = 60
+        request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+        request.setValue(String(fileSize), forHTTPHeaderField: "Upload-Length")
+        request.setValue(buildUploadMetadata(item: item, albumId: albumId), forHTTPHeaderField: "Upload-Metadata")
         if let auth = getAuthorizationHeader() {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
-        // Create multipart form data
-        let boundary = UUID().uuidString
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-        guard let fileData = try? Data(contentsOf: item.url) else {
-            completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not read file data"])))
-            return
-        }
-
-        var body = Data()
-
-        // Add file data
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(item.filename)\"\r\n".data(using: .utf8)!)
-
-        // Set appropriate content type based on file type
-        let contentType = if item.type == .image {
-            "image/\(item.url.pathExtension.lowercased())"
-        } else {
-            "video/\(item.url.pathExtension.lowercased())"
-        }
-        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
-        body.append(fileData)
-        body.append("\r\n".data(using: .utf8)!)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
-        request.httpBody = body
-
-        print("📤 Uploading: \(item.filename) (\(formatBytes(fileData.count)))")
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+        print("📤 Creating TUS upload: \(item.filename) (\(formatBytes(Int(fileSize))))")
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            guard let self else { return }
             if let error {
-                print("❌ Upload failed: \(item.filename) - \(error.localizedDescription)")
+                print("❌ TUS create failed: \(item.filename) - \(error.localizedDescription)")
                 completion(.failure(error))
                 return
             }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response"])))
+                return
+            }
+            switch http.statusCode {
+            case 200, 201:
+                guard let location = http.value(forHTTPHeaderField: "Location"),
+                      let uploadURL = self.resolveLocation(location, against: tusURL)
+                else {
+                    completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Location header"])))
+                    return
+                }
+                self.patchUpload(item: item, uploadURL: uploadURL, completion: completion)
+            case 401, 403:
+                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Authentication failed"])))
+            case 429, 503:
+                let retry = http.value(forHTTPHeaderField: "Retry-After") ?? "?"
+                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server busy (retry after \(retry)s)"])))
+            default:
+                let body = "POST /files/ returned \(http.statusCode)"
+                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: body])))
+            }
+        }.resume()
+    }
 
-            if let httpResponse = response as? HTTPURLResponse {
-                if 200 ... 299 ~= httpResponse.statusCode {
+    private func patchUpload(
+        item: MediaItem,
+        uploadURL: URL,
+        completion: @escaping (Result<Void, Error>) -> Void,
+    ) {
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = 600
+        request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+        request.setValue("0", forHTTPHeaderField: "Upload-Offset")
+        request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+        if let auth = getAuthorizationHeader() {
+            request.setValue(auth, forHTTPHeaderField: "Authorization")
+        }
+
+        let task = URLSession.shared.uploadTask(with: request, fromFile: item.url) { _, response, error in
+            if let error {
+                print("❌ TUS PATCH failed: \(item.filename) - \(error.localizedDescription)")
+                completion(.failure(error))
+                return
+            }
+            if let http = response as? HTTPURLResponse {
+                if 200 ... 299 ~= http.statusCode {
                     print("✅ Upload successful: \(item.filename)")
                     completion(.success(()))
                 } else {
-                    let errorMessage = if let data, let responseString = String(data: data, encoding: .utf8) {
-                        "Server returned \(httpResponse.statusCode): \(responseString)"
-                    } else {
-                        "Server returned status code \(httpResponse.statusCode)"
-                    }
-                    print("❌ Upload failed: \(item.filename) - \(errorMessage)")
-                    let error = NSError(
-                        domain: "UploadService",
-                        code: httpResponse.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: errorMessage],
-                    )
-                    completion(.failure(error))
+                    let msg = "PATCH returned \(http.statusCode)"
+                    print("❌ TUS PATCH failed: \(item.filename) - \(msg)")
+                    completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])))
                 }
+            } else {
+                completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No HTTP response"])))
             }
         }
-
         task.resume()
+    }
+
+    /// Build the TUS Upload-Metadata header. Each value is base64-encoded per the spec.
+    /// We omit ``contentId`` deliberately: a user re-sharing the same photo through the share
+    /// extension expects a new asset (matching the legacy multipart endpoint), not a 409 dedupe.
+    private func buildUploadMetadata(item: MediaItem, albumId: Int?) -> String {
+        var parts: [(String, String)] = [
+            ("filename", item.filename),
+            ("filetype", contentType(for: item)),
+        ]
+        if let albumId {
+            parts.append(("albumId", String(albumId)))
+        }
+        if let email, let password {
+            parts.append(("auth", "\(email):\(password)"))
+        }
+        return parts
+            .map { key, value in
+                let b64 = Data(value.utf8).base64EncodedString()
+                return "\(key) \(b64)"
+            }
+            .joined(separator: ",")
+    }
+
+    private func contentType(for item: MediaItem) -> String {
+        let ext = item.url.pathExtension.lowercased()
+        return item.type == .image ? "image/\(ext)" : "video/\(ext)"
+    }
+
+    private func resolveLocation(_ location: String, against base: URL) -> URL? {
+        if let abs = URL(string: location), abs.scheme != nil { return abs }
+        return URL(string: location, relativeTo: base)?.absoluteURL
     }
 
     private func formatBytes(_ bytes: Int) -> String {
