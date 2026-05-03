@@ -419,27 +419,56 @@
           @change="handleFileUpload"
         >
         <button
-          class="reorder-btn"
-          title="Reorder files by numbers in filename"
-          @click="handleReorderByFilename"
+          class="more-actions-btn"
+          :class="{ 'more-actions-btn-active': mobileActionsOpen }"
+          :aria-expanded="mobileActionsOpen"
+          @click="mobileActionsOpen = !mobileActionsOpen"
         >
-          🔢 Reorder by Filename
+          {{ mobileActionsOpen ? '✕ Close' : 'More ▾' }}
         </button>
-        <button
-          class="reorder-btn"
-          title="Reorder files by EXIF date (photo taken date)"
-          @click="handleReorderByExif"
+        <div
+          class="secondary-actions"
+          :class="{ 'secondary-actions--open': mobileActionsOpen }"
         >
-          📷 Reorder by EXIF
-        </button>
-        <button
-          class="duplicates-btn"
-          :class="{ 'duplicates-btn-active': duplicateFilterActive }"
-          :title="duplicateFilterActive ? 'Exit duplicate view' : 'Show only files with duplicate names'"
-          @click="toggleDuplicateFilter"
-        >
-          {{ duplicateFilterActive ? '✕ Exit Duplicates' : '🔍 Find Duplicates' }}
-        </button>
+          <button
+            class="reorder-btn"
+            title="Reorder files by numbers in filename"
+            @click="mobileActionsOpen = false; handleReorderByFilename()"
+          >
+            🔢 Reorder by Filename
+          </button>
+          <button
+            class="reorder-btn"
+            title="Reorder files by EXIF date (photo taken date)"
+            @click="mobileActionsOpen = false; handleReorderByExif()"
+          >
+            📷 Reorder by EXIF
+          </button>
+          <button
+            class="duplicates-btn"
+            :class="{ 'duplicates-btn-active': duplicateFilterActive }"
+            :title="duplicateFilterActive ? 'Exit duplicate view' : 'Show only files with duplicate names'"
+            @click="mobileActionsOpen = false; toggleDuplicateFilter()"
+          >
+            {{ duplicateFilterActive ? '✕ Exit Duplicates' : '🔍 Find Duplicates' }}
+          </button>
+          <button
+            class="reorder-mode-btn"
+            :class="{ 'reorder-mode-btn-active': reorderModeActive }"
+            :title="reorderModeActive ? 'Exit reorder mode' : 'Select and mass-move images'"
+            @click="mobileActionsOpen = false; toggleReorderMode()"
+          >
+            {{ reorderModeActive ? '✕ Exit Reorder' : '🔀 Reorder' }}
+          </button>
+          <button
+            class="tag-manage-btn"
+            :class="{ 'tag-manage-btn-active': tagPickerOpen }"
+            title="Choose which tags are available in this album"
+            @click="mobileActionsOpen = false; toggleTagPicker()"
+          >
+            🏷️ Manage Album Tags
+          </button>
+        </div>
         <button
           v-if="duplicateFilterActive"
           class="delete-selected-btn"
@@ -450,14 +479,6 @@
           🗑️ Delete Selected ({{ selectedForDeletion.size }})
         </button>
         <button
-          class="reorder-mode-btn"
-          :class="{ 'reorder-mode-btn-active': reorderModeActive }"
-          :title="reorderModeActive ? 'Exit reorder mode' : 'Select and mass-move images'"
-          @click="toggleReorderMode"
-        >
-          {{ reorderModeActive ? '✕ Exit Reorder' : '🔀 Reorder' }}
-        </button>
-        <button
           v-if="reorderModeActive"
           class="move-to-top-btn"
           :disabled="selectedForReorder.size === 0"
@@ -466,21 +487,17 @@
         >
           ⬆ Move to Top ({{ selectedForReorder.size }})
         </button>
-        <button
-          class="tag-manage-btn"
-          :class="{ 'tag-manage-btn-active': tagPickerOpen }"
-          title="Choose which tags are available in this album"
-          @click="toggleTagPicker"
-        >
-          🏷️ Manage Album Tags
-        </button>
       </div>
 
       <div class="filter-controls">
-        <label for="tag-filter">Filter by tag:</label>
+        <label
+          for="tag-filter"
+          class="filter-label"
+        >Filter by tag:</label>
         <select
           id="tag-filter"
           v-model="selectedTag"
+          aria-label="Filter by tag"
         >
           <option value="">
             All photos
@@ -854,6 +871,7 @@ export default {
     const tagPickerOpen = ref(false)
     const pickerSelectedTagIds = ref(new Set())
     const savingEnabledTags = ref(false)
+    const mobileActionsOpen = ref(false)
 
     const EXCLUDED_DUPLICATE_NAME = 'fullsizerender.heic'
 
@@ -1941,6 +1959,7 @@ export default {
       enabledAlbumTags,
       togglableTags,
       tagPickerOpen,
+      mobileActionsOpen,
       pickerSelectedTagIds,
       savingEnabledTags,
       toggleTagPicker,

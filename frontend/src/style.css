@@ -874,6 +874,7 @@ body.landing-page .version-info { display: none; }
 .reorder-mode-btn,
 .move-to-top-btn,
 .tag-manage-btn,
+.more-actions-btn,
 .play-btn,
 .audio-btn,
 .delete-recording-btn {
@@ -897,6 +898,7 @@ body.landing-page .version-info { display: none; }
 .duplicates-btn:hover,
 .reorder-mode-btn:hover,
 .tag-manage-btn:hover,
+.more-actions-btn:hover,
 .play-btn:hover,
 .audio-btn:hover {
   background: var(--c-surface);
@@ -905,10 +907,19 @@ body.landing-page .version-info { display: none; }
 }
 .duplicates-btn-active,
 .reorder-mode-btn-active,
-.tag-manage-btn-active {
+.tag-manage-btn-active,
+.more-actions-btn-active {
   background: var(--c-accent-soft) !important;
   border-color: var(--c-accent) !important;
   color: var(--c-accent) !important;
+}
+
+/* Secondary actions: inline on desktop, collapsible on mobile */
+.secondary-actions {
+  display: contents;
+}
+.more-actions-btn {
+  display: none;
 }
 .delete-selected-btn {
   background: var(--c-danger-soft);
@@ -2148,18 +2159,42 @@ body.landing-page .version-info { display: none; }
   .archive-grid { grid-template-columns: 1fr; }
   .gallery { grid-template-columns: repeat(2, 1fr); gap: var(--sp-2); padding: var(--sp-3); }
   .left-controls {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
     gap: var(--sp-2);
     width: 100%;
   }
-  .left-controls > button {
+  .left-controls > button,
+  .left-controls > .refresh-btn,
+  .left-controls > .upload-btn,
+  .left-controls > .more-actions-btn,
+  .left-controls > .delete-selected-btn,
+  .left-controls > .move-to-top-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .more-actions-btn { display: inline-flex; }
+  .secondary-actions {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+  }
+  .secondary-actions--open { display: flex; }
+  .secondary-actions > button {
     width: 100%;
     justify-content: center;
     white-space: normal;
     text-align: center;
     line-height: 1.2;
   }
+  .filter-controls .filter-label { display: none; }
   .header-top-bar { flex-direction: column; align-items: flex-start; }
   .new-album-btn span { display: none; }
 }
