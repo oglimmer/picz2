@@ -168,4 +168,32 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       "SELECT f.filePath FROM FileMetadata f "
           + "WHERE f.filePath IS NOT NULL AND f.filePath LIKE 'originals/%'")
   List<String> findAllOriginalsKeys();
+
+  /**
+   * Phase 4.5 follow-up — image-typed DONE rows missing at least one of the three image
+   * derivatives. Used by the {@code REGEN_THUMBNAILS} admin endpoint to enqueue a regen job per
+   * stranded asset (e.g. an old vipsthumbnail OOM that produced two of three sizes before
+   * markFailed promoted the row to DONE-with-gaps).
+   *
+   * <p>Excludes assets that already have a {@code QUEUED}/{@code PROCESSING} job — repeat clicks
+   * of the endpoint don't double-enqueue.
+   *
+   * <p>Returns IDs only (projection); the worker re-fetches the full entity inside its own TX.
+   * Cap is applied at the SQL layer so a misconfigured caller can't load tens of thousands of
+   * rows into the api pod's heap.
+   */
+  @Query(
+      value =
+          "SELECT fm.id FROM file_metadata fm "
+              + "WHERE fm.processing_status = 'DONE' "
+              + "AND fm.mime_type LIKE 'image/%' "
+              + "AND (fm.thumbnail_path IS NULL OR fm.medium_path IS NULL OR fm.large_path IS NULL) "
+              + "AND NOT EXISTS ("
+              + "  SELECT 1 FROM processing_jobs pj "
+              + "  WHERE pj.asset_id = fm.id AND pj.status IN ('QUEUED', 'PROCESSING')"
+              + ") "
+              + "ORDER BY fm.id ASC "
+              + "LIMIT :maxRows",
+      nativeQuery = true)
+  List<Long> findMissingThumbnailIds(@Param("maxRows") int maxRows);
 }

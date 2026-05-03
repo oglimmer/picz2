@@ -56,7 +56,13 @@ backend:
   # .processing-tmp/{id} workdirs, and .audio-tmp staging — all of which are wiped per
   # request/job.
   persistence:
-    enabled: true
+    # Retired 2026-05-03 after photo + recording bytes were verified in MinIO and the api/worker
+    # pods stopped mounting the PVC (Gap 8). Setting enabled=false drops the PVC manifest from
+    # the chart on the next helm upgrade; the underlying Longhorn PV (reclaimPolicy=Retain at
+    # provision time) was deleted explicitly with `kubectl delete pv pvc-bcfc2395-…` so Longhorn
+    # frees the disk. Kept the rest of the persistence block as a knob in case a future
+    # local-disk requirement re-emerges.
+    enabled: false
     mounted: false
     storageClass: ""
     accessMode: ReadWriteOnce

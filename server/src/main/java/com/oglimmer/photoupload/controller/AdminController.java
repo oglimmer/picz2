@@ -51,6 +51,30 @@ public class AdminController {
   }
 
   /**
+   * Phase 4.5 follow-up — enqueue {@code REGEN_THUMBNAILS} jobs for image-typed DONE rows that
+   * are missing one or more derivatives. Idempotent: assets already queued/processing are skipped
+   * by the repository query, so repeat clicks just no-op.
+   *
+   * <p>{@code maxRows} caps a single batch (default 500, hard upper bound 5000). Caller pages by
+   * re-invoking until {@code enqueued == 0}.
+   */
+  @PostMapping("/regen-missing-thumbnails")
+  public ResponseEntity<AdminOperationResponse> regenMissingThumbnails(
+      @RequestParam(value = "maxRows", required = false, defaultValue = "500") int maxRows) {
+    int enqueued = fileStorageService.enqueueRegenForMissingThumbnails(maxRows);
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message(
+                enqueued == 0
+                    ? "No eligible assets — nothing to enqueue"
+                    : "Enqueued " + enqueued + " regen-thumbnails job(s)")
+            .stats(java.util.Map.of("enqueued", enqueued, "maxRows", maxRows))
+            .build();
+    return ResponseEntity.ok(response);
+  }
+
+  /**
    * Lists processing jobs that have exhausted their retry budget. Surfaces the original asset id
    * and last error so an operator can decide whether to delete the asset, fix the underlying issue,
    * or re-enqueue the job (re-enqueue UI is a future follow-up).

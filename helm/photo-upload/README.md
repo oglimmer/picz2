@@ -90,8 +90,9 @@ The following table lists the configurable parameters of the Photo Upload chart 
 | `backend.service.type`             | Kubernetes service type               | `ClusterIP`            |
 | `backend.service.port`             | Service port                          | `8080`                 |
 | `backend.javaOpts`                 | Java JVM options                      | `-Xmx768m -Xms512m`    |
-| `backend.persistence.enabled`      | Enable persistent storage for uploads | `true`                 |
-| `backend.persistence.size`         | Persistent volume size                | `10Gi`                 |
+| `backend.persistence.enabled`      | Render a PVC for the backend (legacy — no longer needed; uploads go to S3) | `false`              |
+| `backend.persistence.mounted`      | Mount the PVC into the pod (false → emptyDir for transient .multipart-tmp) | `false`              |
+| `backend.persistence.size`         | PVC size if `enabled=true`            | `30Gi`                 |
 | `backend.persistence.storageClass` | Storage class name                    | `""`                   |
 
 ### Frontend Parameters
@@ -161,14 +162,17 @@ The frontend includes basic HTTP checks on the root path.
 
 ## Persistent Storage
 
-The backend requires persistent storage for uploaded photos. By default, a PersistentVolumeClaim is created with 10Gi storage. You can customize this in the values:
+The backend used to require a PVC for uploaded photos. After the Phase 3 / Gap 8 migration to MinIO (S3) all bytes — originals, derivatives, and slideshow audio — live in object storage, and the backend pod runs on `emptyDir` for transient multipart staging only. The PVC was retired entirely on 2026-05-03 (`backend.persistence.enabled: false` is now the default).
+
+If you have a legacy use case that genuinely needs local-disk persistence, set:
 
 ```yaml
 backend:
   persistence:
     enabled: true
-    size: 50Gi
-    storageClass: "fast-ssd"
+    mounted: true
+    size: 30Gi
+    storageClass: "longhorn-local"
 ```
 
 ## Security

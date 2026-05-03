@@ -403,6 +403,136 @@ public class FileProcessingService {
   }
 
   /**
+   * Phase 4.5 follow-up — regenerate the three image derivatives (thumbnail / medium / large)
+   * for an asset that's missing one or more, or whose derivatives the operator wants rebuilt
+   * (e.g. after a vips upgrade). Same mechanics as {@link #rotateAndReprocess(Long)} minus the
+   * rotate step: lease into PROCESSING, pick the best S3-backed source via
+   * {@link #pickRotationSource(FileMetadata)} (works on retention-purged assets too), regenerate
+   * locally, PUT each derivative to its deterministic key, refresh {@code publicToken} so viewer
+   * caches miss, transition back to DONE.
+   *
+   * <p>Does <em>not</em> touch {@code rotation}, {@code width}/{@code height}, {@code fileSize},
+   * or the original-key bytes. The original is never written back even when present — we read,
+   * we generate, that's it.
+   */
+  public void regenerateThumbnails(Long fileMetadataId) {
+    TransactionTemplate tx = new TransactionTemplate(transactionManager);
+    FileMetadata metadata =
+        tx.execute(
+            status -> {
+              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+              if (found == null) {
+                return null;
+              }
+              found.setProcessingStatus(ProcessingStatus.PROCESSING);
+              found.setProcessingAttempts(
+                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+              found.setProcessingError(null);
+              return metadataRepository.save(found);
+            });
+    if (metadata == null) {
+      log.warn("regenerateThumbnails: metadata id {} not found (deleted?)", fileMetadataId);
+      return;
+    }
+
+    String originalName = metadata.getOriginalName();
+    String mimeType = metadata.getMimeType();
+    Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+
+    if (!MimeTypePredicates.isImageFile(mimeType)) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Cannot regenerate thumbnails for non-image asset (mime=" + mimeType + ")"));
+      return;
+    }
+    if (objectStorage.isEmpty()) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException("Regen-thumbnails requires the asset to be on object storage"));
+      return;
+    }
+    String sourceKey = pickRotationSource(metadata);
+    if (sourceKey == null) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Regen-thumbnails has no S3-backed source for asset " + fileMetadataId));
+      return;
+    }
+    boolean fromOriginal = sourceKey.equals(metadata.getFilePath());
+
+    Path workdir = null;
+    try {
+      workdir =
+          Files.createDirectories(
+              fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+      Path localSource = workdir.resolve(metadata.getStoredFilename());
+      objectStorage.get().getToFile(sourceKey, localSource);
+
+      log.info(
+          "🖼️  Regenerating derivatives for asset {} ({}, source={})",
+          fileMetadataId,
+          originalName,
+          fromOriginal ? "original" : sourceKey);
+      Path[] thumbnails = thumbnailService.generateAllThumbnails(localSource, localSource);
+      if (thumbnails[0] == null && thumbnails[1] == null && thumbnails[2] == null) {
+        throw new StorageException("Thumbnail regeneration produced no output for " + originalName);
+      }
+      if (thumbnails[0] != null) {
+        metadata.setThumbnailPath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[0],
+                StoragePaths.derivativeThumbnailKey(fileMetadataId),
+                "image/jpeg"));
+      }
+      if (thumbnails[1] != null) {
+        metadata.setMediumPath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[1],
+                StoragePaths.derivativeMediumKey(fileMetadataId),
+                "image/jpeg"));
+      }
+      if (thumbnails[2] != null) {
+        metadata.setLargePath(
+            storeDerivative(
+                fileStorageLocation,
+                thumbnails[2],
+                StoragePaths.derivativeLargeKey(fileMetadataId),
+                "image/jpeg"));
+      }
+
+      // Cache-bust like rotate does — viewer browsers fetch the new derivative bytes after the
+      // next gallery reload instead of holding the stale ones.
+      byte[] tokenBytes = new byte[24];
+      new SecureRandom().nextBytes(tokenBytes);
+      metadata.setPublicToken(HexFormat.of().formatHex(tokenBytes));
+
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
+      final FileMetadata toSave = metadata;
+      tx.executeWithoutResult(status -> metadataRepository.save(toSave));
+      log.info("✅ Regenerated derivatives for asset {} ({})", fileMetadataId, originalName);
+    } catch (IOException e) {
+      log.error("I/O error regenerating thumbnails for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } catch (Exception e) {
+      log.error("Unexpected error regenerating thumbnails for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } finally {
+      if (workdir != null) {
+        deleteRecursive(workdir);
+      }
+    }
+  }
+
+  /**
    * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file
    * to S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
    * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we

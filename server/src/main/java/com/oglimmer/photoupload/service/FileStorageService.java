@@ -1280,4 +1280,46 @@ public class FileStorageService {
           jobEnqueueService.enqueue(fileId, JobType.ROTATE_LEFT);
         });
   }
+
+  /**
+   * Phase 4.5 follow-up — walk image-typed DONE rows that are missing one or more derivatives and
+   * enqueue a {@code REGEN_THUMBNAILS} job for each. Used by the admin endpoint to mop up assets
+   * stranded by an old processing failure or a vips-output gap that got past the markFailed
+   * happy-path.
+   *
+   * <p>Single API-side TX: status flip + job insert per row, so a partial crash leaves no row in
+   * an "I claimed it but never queued" state. Repository query already excludes assets with an
+   * active job, so re-running the endpoint converges idempotently.
+   *
+   * <p>{@code maxRows} caps the batch size — caller pages by re-invoking. Default upstream is 500
+   * which keeps any single tick of the worker's drain loop bounded too.
+   *
+   * @return number of jobs actually enqueued
+   */
+  public int enqueueRegenForMissingThumbnails(int maxRows) {
+    int safeMax = Math.max(1, Math.min(maxRows, 5000));
+    List<Long> ids = metadataRepository.findMissingThumbnailIds(safeMax);
+    if (ids.isEmpty()) {
+      log.info("Regen-thumbnails sweep: no eligible assets");
+      return 0;
+    }
+    log.info("Regen-thumbnails sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          for (Long id : ids) {
+            FileMetadata locked =
+                metadataRepository
+                    .findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
+            locked.setProcessingStatus(ProcessingStatus.QUEUED);
+            locked.setProcessingAttempts(0);
+            locked.setProcessingError(null);
+            locked.setProcessingCompletedAt(null);
+            metadataRepository.save(locked);
+            jobEnqueueService.enqueue(id, JobType.REGEN_THUMBNAILS);
+          }
+        });
+    log.info("Regen-thumbnails sweep: enqueued {} jobs", ids.size());
+    return ids.size();
+  }
 }
