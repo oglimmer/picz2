@@ -224,10 +224,11 @@ const processingTitle = computed(() => {
   }
 })
 const isVideoFile = computed(() => isVideo(props.file))
-// Rotation needs the original bytes; once retention has purged the original
-// (originalAvailable === false) the rotate button is hidden. Treat undefined as available so
-// older list responses (pre-Phase-6 backend) keep showing the button.
-const canRotate = computed(() => props.file.originalAvailable !== false)
+// Rotation works even on assets whose original has been purged by retention — the worker falls
+// back to the largest available derivative (output is bounded by LARGE=2400px regardless), so
+// we no longer gate the button on originalAvailable. The flag is kept on FileInfo for any
+// future "download original" UI but does not affect rotation.
+const canRotate = computed(() => true)
 const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))
 const exifDate = computed(() => props.file.exifDateTimeOriginal ? formatDate(props.file.exifDateTimeOriginal) : null)

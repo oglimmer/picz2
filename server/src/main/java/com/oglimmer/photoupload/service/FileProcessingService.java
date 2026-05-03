@@ -289,13 +289,26 @@ public class FileProcessingService {
           new StorageException("Cannot rotate non-image asset (mime=" + mimeType + ")"));
       return;
     }
-    if (objectStorage.isEmpty() || !StoragePaths.isS3Key(metadata.getFilePath())) {
+    if (objectStorage.isEmpty()) {
       markFailed(
           tx,
           fileMetadataId,
           new StorageException("Rotate requires the asset to be on object storage"));
       return;
     }
+    // Source key for the rotation: prefer the original, then fall back through the derivative
+    // ladder for assets whose original has been purged by retention. Output is bounded by
+    // LARGE=2400px anyway, so feeding `large` produces pixel-equivalent derivatives to feeding
+    // the original — see the rationale in FileStorageService.rotateImageLeft.
+    String sourceKey = pickRotationSource(metadata);
+    if (sourceKey == null) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException("Rotate has no S3-backed source for asset " + fileMetadataId));
+      return;
+    }
+    boolean originalRetained = sourceKey.equals(metadata.getFilePath());
 
     Path workdir = null;
     try {
@@ -303,22 +316,29 @@ public class FileProcessingService {
           Files.createDirectories(
               fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
       Path localOriginal = workdir.resolve(metadata.getStoredFilename());
-      objectStorage.get().getToFile(metadata.getFilePath(), localOriginal);
+      objectStorage.get().getToFile(sourceKey, localOriginal);
 
-      log.info("🔄 Rotating asset {} ({}) 90° left", fileMetadataId, originalName);
+      log.info(
+          "🔄 Rotating asset {} ({}) 90° left (source={})",
+          fileMetadataId,
+          originalName,
+          originalRetained ? "original" : sourceKey);
       boolean rotated = thumbnailService.rotateImageLeft(localOriginal);
       if (!rotated) {
         throw new StorageException("ImageMagick rotate failed for " + originalName);
       }
 
-      // Push the rotated bytes back over the existing key. Same content type — we already
-      // know it's an image at this point.
-      objectStorage.get().putFile(metadata.getFilePath(), localOriginal, mimeType);
-      try {
-        metadata.setFileSize(Files.size(localOriginal));
-      } catch (IOException sizeError) {
-        log.warn(
-            "Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
+      // Push the rotated bytes back to originals/ only when an original existed. If retention
+      // already purged it, we deliberately don't recreate the key — that would resurrect bytes
+      // the operator decided to drop, and would still only contain ≤2400px of pixels.
+      if (originalRetained) {
+        objectStorage.get().putFile(metadata.getFilePath(), localOriginal, mimeType);
+        try {
+          metadata.setFileSize(Files.size(localOriginal));
+        } catch (IOException sizeError) {
+          log.warn(
+              "Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
+        }
       }
 
       // Regenerate thumbnails from the rotated original. Derivative keys are deterministic per
@@ -400,6 +420,27 @@ public class FileProcessingService {
       return s3Key;
     }
     return toRelativePath(fileStorageLocation, local);
+  }
+
+  /**
+   * Pick the best S3-backed source for a rotation. Original first; if retention has nulled
+   * {@code file_path} we step down through the derivative ladder. Returns null if no S3-backed
+   * source exists at all (api-side guard should have rejected before enqueue, but defensive).
+   */
+  private String pickRotationSource(FileMetadata metadata) {
+    if (StoragePaths.isS3Key(metadata.getFilePath())) {
+      return metadata.getFilePath();
+    }
+    if (StoragePaths.isS3Key(metadata.getLargePath())) {
+      return metadata.getLargePath();
+    }
+    if (StoragePaths.isS3Key(metadata.getMediumPath())) {
+      return metadata.getMediumPath();
+    }
+    if (StoragePaths.isS3Key(metadata.getThumbnailPath())) {
+      return metadata.getThumbnailPath();
+    }
+    return null;
   }
 
   private void deleteRecursive(Path dir) {

@@ -87,6 +87,8 @@ spec:
               value: {{ .Values.retention.dryRun | quote }}
             - name: RETENTION_TUS_UPLOAD_DAYS
               value: {{ .Values.retention.tusUploadDays | default 7 | quote }}
+            - name: RETENTION_ORPHAN_GRACE_HOURS
+              value: {{ .Values.retention.orphanGraceHours | default 24 | quote }}
             {{- if .Values.objectStorage.enabled }}
             - name: STORAGE_S3_ENABLED
               value: "true"

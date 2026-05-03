@@ -154,4 +154,18 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       nativeQuery = true)
   List<FileMetadata> findRetentionPurgeCandidates(
       @Param("cutoff") Instant cutoff, @Param("maxRows") int maxRows);
+
+  /**
+   * Phase 5 follow-up — projection of every {@code originals/} S3 key currently referenced by a
+   * row. The retention runner's orphan-detection pass set-diffs this against {@code listObjects}
+   * over the {@code originals/} prefix to find keys that have no row pointing at them (post-finish
+   * hook crash, multipart insert failure after PUT, etc.).
+   *
+   * <p>Projection-only; no entity hydration. Returning a {@code List} is fine — even at 100k+
+   * rows the result is a few MiB of short strings.
+   */
+  @Query(
+      "SELECT f.filePath FROM FileMetadata f "
+          + "WHERE f.filePath IS NOT NULL AND f.filePath LIKE 'originals/%'")
+  List<String> findAllOriginalsKeys();
 }

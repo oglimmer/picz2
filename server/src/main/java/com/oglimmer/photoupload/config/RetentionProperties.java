@@ -42,4 +42,18 @@ public class RetentionProperties {
    * Same nightly CronJob as the originals sweep; runs as a second pass after originals.
    */
   private int tusUploadDays = 7;
+
+  /**
+   * Phase 5 follow-up — orphan-detection grace window. An {@code originals/} key whose
+   * {@code LastModified} is older than this *and* has no {@code file_metadata.file_path} row
+   * pointing at it is treated as an orphan and deleted. The grace covers two race windows:
+   * <ul>
+   *   <li>TUS post-finish hook between {@code S3 COPY} and {@code file_metadata INSERT}
+   *       (sub-second normally, ~1s worst-case observed).</li>
+   *   <li>Multipart upload between {@code S3 PUT} and the row-insert TX commit (same shape).</li>
+   * </ul>
+   * Default is hours rather than days so a real orphan from a crashed hook doesn't sit around
+   * occupying storage for a week, but it's wide enough that no in-flight upload can be misclassified.
+   */
+  private int orphanGraceHours = 24;
 }

@@ -1239,19 +1239,24 @@ public class FileStorageService {
     if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
       throw new ValidationException("Only image files can be rotated");
     }
-    // Phase 6 / Gap 4-finish: rotation needs the original bytes. Once retention has nulled
-    // file_path, the original is gone from MinIO permanently — 410 lets the UI distinguish
-    // "purged, will never work again" from a transient "validation" error.
-    if (metadata.getFilePath() == null) {
-      throw new ResourceGoneException(
-          "Original was purged by retention policy and can no longer be rotated.");
-    }
-    // Rotation needs the worker to download the original from S3, rotate it, and PUT it back.
-    // Pre-S3 rows (Gap 2a migration was completed) never reach this branch in practice, but
-    // reject loudly rather than silently succeeding without rotating bytes.
-    if (!StoragePaths.isS3Key(metadata.getFilePath())) {
+    // Original may have been purged by retention — that's fine. The worker will fall back to the
+    // largest available derivative as the rotation source (output is bounded by LARGE=2400px
+    // anyway, so feeding `large` produces pixel-equivalent derivatives to feeding the original).
+    // What we cannot tolerate is a legacy local-disk filePath that has neither been migrated nor
+    // purged — the worker pod has no PVC mount, so it cannot read those bytes.
+    if (metadata.getFilePath() != null && !StoragePaths.isS3Key(metadata.getFilePath())) {
       throw new ValidationException(
           "This asset is on legacy local storage. Migrate to object storage before rotating.");
+    }
+    // No usable rotation source at all — original purged AND no S3-backed derivative either.
+    // Should be unreachable in practice (every DONE asset has at least a thumbnail) but explicit
+    // rejection beats a confusing worker-side failure.
+    if (metadata.getFilePath() == null
+        && !StoragePaths.isS3Key(metadata.getLargePath())
+        && !StoragePaths.isS3Key(metadata.getMediumPath())
+        && !StoragePaths.isS3Key(metadata.getThumbnailPath())) {
+      throw new ResourceGoneException(
+          "Original was purged and no derivative is available to rotate.");
     }
 
     log.info(

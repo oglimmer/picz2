@@ -5,9 +5,12 @@ import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.config.RetentionProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.storage.StoragePaths;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -188,5 +191,90 @@ public class RetentionService {
         failed,
         properties.isDryRun());
     return new Result(candidates.size(), purged, failed, properties.isDryRun());
+  }
+
+  /**
+   * Phase 5 follow-up — third pass that deletes orphan {@code originals/} keys: bytes that exist
+   * in MinIO but no {@code file_metadata.file_path} row points at them. Two known failure modes
+   * produce orphans:
+   * <ul>
+   *   <li>TUS post-finish hook crashes between the {@code S3 COPY} (tus-uploads → originals) and
+   *       the row-insert TX. {@code FileStorageService.registerTusUpload} explicitly defers
+   *       cleanup to "the orphan job".</li>
+   *   <li>Multipart upload {@code FileStorageService.storeFile} crashes between the streaming PUT
+   *       and the same row-insert TX.</li>
+   * </ul>
+   * Algorithm: load the set of every {@code originals/} key currently referenced by any row, list
+   * {@code originals/} from S3 with a {@code lastModified < now - graceHours} filter, and delete
+   * the difference. The grace window prevents false positives from racing in-flight uploads.
+   *
+   * <p>The originals-purge sweep ({@link #run()}) leaves {@code file_path = NULL} on rows whose
+   * S3 object it has deleted, so retention-purged rows correctly do not appear in the live-key
+   * set — but their S3 keys are gone too, so they don't appear in the listing either. No
+   * interference between the two passes.
+   *
+   * <p>No DB side: pure S3 operation. Failures are counted but don't abort.
+   */
+  public Result runOriginalsOrphanCleanup() {
+    int graceHours = properties.getOrphanGraceHours();
+    if (graceHours <= 0) {
+      log.warn(
+          "retention.orphan-grace-hours={} — refusing to run orphan sweep. Set a positive value.",
+          graceHours);
+      return new Result(0, 0, 0, properties.isDryRun());
+    }
+
+    Instant cutoff = Instant.now().minus(Duration.ofHours(graceHours));
+    int maxRows = properties.getMaxRowsPerRun();
+    log.info(
+        "Orphan-detection sweep starting — prefix={}, graceCutoff={}, maxRows={}, dryRun={}",
+        StoragePaths.ORIGINALS_PREFIX,
+        cutoff,
+        maxRows,
+        properties.isDryRun());
+
+    Set<String> liveKeys = new HashSet<>(metadataRepository.findAllOriginalsKeys());
+    List<String> aged = objectStorage.listKeysOlderThan(StoragePaths.ORIGINALS_PREFIX, cutoff);
+
+    List<String> orphans = new java.util.ArrayList<>();
+    for (String key : aged) {
+      if (!liveKeys.contains(key)) {
+        orphans.add(key);
+      }
+    }
+    if (orphans.size() > maxRows) {
+      log.warn(
+          "Orphan eligibility ({}) exceeds maxRowsPerRun ({}) — truncating to cap",
+          orphans.size(),
+          maxRows);
+      orphans = orphans.subList(0, maxRows);
+    }
+
+    int purged = 0;
+    int failed = 0;
+    for (String key : orphans) {
+      try {
+        if (properties.isDryRun()) {
+          log.info("Dry run — would delete orphan original {}", key);
+        } else {
+          objectStorage.delete(key);
+          purged++;
+          log.info("Deleted orphan original {}", key);
+        }
+      } catch (Exception e) {
+        failed++;
+        log.warn("Failed to delete orphan original {}: {}", key, e.getMessage(), e);
+      }
+    }
+
+    log.info(
+        "Orphan-detection sweep complete — listed={}, liveRows={}, eligible={}, purged={}, failed={}, dryRun={}",
+        aged.size(),
+        liveKeys.size(),
+        orphans.size(),
+        purged,
+        failed,
+        properties.isDryRun());
+    return new Result(orphans.size(), purged, failed, properties.isDryRun());
   }
 }

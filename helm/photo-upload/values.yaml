@@ -143,10 +143,17 @@ retention:
   # by the same nightly CronJob's second pass. Sole GC mechanism for stale TUS uploads (tusd
   # 2.x has no in-process expiry and our MinIO is single-drive, no lifecycle API).
   tusUploadDays: 7
+  # Phase 5 follow-up — orphan-detection grace window for the third pass. Only originals/ keys
+  # whose S3 LastModified is older than this AND have no file_metadata row pointing at them are
+  # deleted. Wider than any post-finish-hook race (sub-second normally, ~1s observed) but short
+  # enough that real orphans don't sit around for a week.
+  orphanGraceHours: 24
   # Soft cap so a misconfigured cutoff (e.g. 0) can't sweep the whole table in one firing.
   maxRowsPerRun: 5000
-  # First run after deploy: keep this true and verify the log. Switch to false to actually purge.
-  dryRun: true
+  # First nightly run on 2026-05-02 logged 2408 eligible originals + 0 TUS + 0 orphans cleanly,
+  # so the live sweep was enabled on 2026-05-03. Set back to true if a future schema change
+  # warrants a fresh dry-run validation.
+  dryRun: false
   # K8s job housekeeping.
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
