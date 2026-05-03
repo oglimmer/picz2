@@ -1,168 +1,73 @@
-# Photo Uploader - macOS Share Extension
+# Photo Upload
 
-A complete photo upload solution with a macOS Share Extension and Node.js server that allows you to upload photos and videos from Photos.app to a local or remote server.
+Personal photo / video gallery with iOS background sync, TUS resumable uploads, and S3-backed storage. Deployed as a Helm chart to a single-node K3s cluster.
 
-## Features
+## Components
 
-### macOS Extension
+| Path        | Stack                              | Role                                                                  |
+| ----------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `server/`   | Spring Boot 4 / Java 25            | Backend JAR — runs as both `api` and `worker` pods (different `SPRING_PROFILES_ACTIVE`). |
+| `frontend/` | Vue 3 + Vite + TypeScript + Nginx  | SPA (`picz2.oglimmer.com`).                                           |
+| `ios/`      | Swift (Xcode project)              | iOS app `PhotoCloudSync` — the primary client.                        |
+| `helm/`     | Helm chart                         | K8s deploy — five workloads (api, worker, frontend, tusd, retention CronJob). |
 
-- ✅ Share Extension integration with Photos.app
-- ✅ Support for multiple photos and videos (up to 100)
-- ✅ Progress indicator during upload
-- ✅ Clean, native macOS UI
-- ✅ Real file uploads with progress tracking
+## Local development
 
-### Node.js Server
+```bash
+# Full stack on Docker (browse via http://localhost)
+docker compose up
 
-- ✅ Express-based upload server
-- ✅ Multer for file handling
-- ✅ File type validation
-- ✅ Automatic unique filenames
-- ✅ CORS enabled
-- ✅ File size limits (configurable)
-- ✅ REST API endpoints
-
-## Project Structure
-
-```
-PhotoUploader/
-├── PhotoUploader/              # Main app
-│   ├── PhotoUploaderApp.swift
-│   ├── ContentView.swift
-│   └── Assets.xcassets/
-├── ShareExtension/             # Share Extension
-│   ├── ShareViewController.swift
-│   ├── Info.plist
-│   └── ShareExtension.entitlements
-└── Shared/                     # Shared code
-    └── UploadService.swift     # Upload logic
+# Minimal stack — just MariaDB + Traefik, for running the server in your IDE
+docker compose -f compose.local.yml up
 ```
 
-## Quick Start
+Ports: api `:8080`, frontend `:5173`, MariaDB `:3306`, MinIO `:9000` / console `:9001`.
 
-**See START.md for detailed step-by-step instructions.**
-
-### 1. Start the Server
+### Server
 
 ```bash
 cd server
-npm install
-npm start
+./mvnw -q -DskipTests compile
+./mvnw test                                          # most tests
+./mvnw test -Dtest='RetentionServiceOrphanCleanupTest'  # single class
+./mvnw test -Drun.testcontainers=true                # IT classes (need real Docker daemon, not Docker Desktop)
 ```
 
-### 2. Build the Extension
+### Frontend
 
 ```bash
-open PhotoUploader.xcodeproj
-# Press ⌘+R
+cd frontend
+npm install
+npm run dev          # Vite dev server with HMR
+npm run build        # vue-tsc + vite build
+npm run type-check
+npm run lint
 ```
 
-### 3. Test It
+### iOS
 
-1. Open Photos.app
-2. Select photos/videos
-3. Share → "Upload Photos"
-4. Watch files upload to `server/uploads/`
+Open `ios/PhotoCloudSync/PhotoCloudSync.xcodeproj` in Xcode. Requires a paid Apple Developer account (uses background URLSessions + APNS).
 
-## Complete Guide
+## Deploying to the cluster
 
-- **START.md** - Quick start guide
-- **INTEGRATION_GUIDE.md** - Full integration documentation
-- **server/README.md** - Server API documentation
-
-## How It Works
-
-### Upload Flow
-
-1. User selects photos/videos in Photos.app
-2. Clicks Share → "Upload Photos"
-3. Extension loads selected media
-4. User clicks "Upload" button
-5. Files are uploaded to `http://localhost:3000/upload`
-6. Server saves files to `server/uploads/`
-7. Success message shown
-
-### Current Configuration
-
-- **Server:** `http://localhost:3000/upload`
-- **Method:** HTTP POST with multipart/form-data
-- **Files:** Uploaded individually with progress tracking
-- **Storage:** `server/uploads/` directory
-
-### Changing the Server URL
-
-Edit `Shared/UploadService.swift:7`:
-
-```swift
-private var apiEndpoint = "http://localhost:3000/upload"
-// Change to your server:
-private var apiEndpoint = "https://your-server.com/upload"
+```bash
+./oglimmer.sh build -s -v          # server image — rolls api + worker
+./oglimmer.sh build -f -v          # frontend image
+./oglimmer.sh build -a -v          # both
+./oglimmer.sh release              # bump VERSION, tag, build a release
+./oglimmer.sh --help               # full options
 ```
 
-## Entitlements
+The script reads `VERSION`, builds `registry.oglimmer.com/picz2-{be,fe}:<version>` plus `:latest`, pushes both, and runs `kubectl rollout restart` on the relevant Deployments. With `imagePullPolicy: Always`, the next CronJob firing also picks up the new digest.
 
-The app uses the following entitlements:
+For helm-side configuration (values, upgrade pattern, ops cookbook), see [`helm/photo-upload/README.md`](helm/photo-upload/README.md).
 
-- **App Sandbox:** Enabled for security
-- **Network Client:** Required for API uploads
-- **User Selected Files (Read-Only):** Access shared files from Photos.app
-- **Temporary File Access:** Read photos/videos from Photos.app's temporary location
+## Architecture & decisions
 
-## Bundle Identifiers
+The single source of truth for *why* the codebase looks the way it does — phase history, gap inventory, decision log (D1–D31) — is **[`upload-concept-plan.md`](upload-concept-plan.md)**.
 
-- Main App: `com.example.PhotoUploader`
-- Share Extension: `com.example.PhotoUploader.ShareExtension`
-
-**Important:** Change these to match your developer account before distributing.
-
-## Supported Media Types
-
-- **Images:** All formats supported by Photos.app (JPEG, PNG, HEIC, etc.)
-- **Videos:** All formats supported by Photos.app (MOV, MP4, etc.)
-- **Max items:** 100 photos or videos per upload (configurable in Info.plist)
-
-## Customization
-
-### Change the display name:
-
-Edit `ShareExtension/Info.plist`:
-
-```xml
-<key>INFOPLIST_KEY_CFBundleDisplayName</key>
-<string>Your Custom Name</string>
-```
-
-### Adjust supported file types:
-
-Edit `ShareExtension/Info.plist` under `NSExtensionActivationRule`:
-
-```xml
-<key>NSExtensionActivationSupportsImageWithMaxCount</key>
-<integer>100</integer>
-<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
-<integer>100</integer>
-```
-
-## Troubleshooting
-
-### Share Extension doesn't appear:
-
-1. Make sure the main app runs at least once
-2. Restart Photos.app
-3. Check System Settings > Privacy & Security > Extensions
-
-### Upload fails:
-
-1. Check network permissions in entitlements
-2. Verify API endpoint is correct
-3. Check console logs for error messages
-
-### Can't access photos:
-
-1. Ensure file access entitlements are configured
-2. Check that Photos.app has proper permissions
-3. Verify share extension is signed correctly
+In one paragraph: backend runs as `api` and `worker` pods sharing the same JAR; api handles HTTP and serves bytes from MinIO, worker drains a `processing_jobs` table via `SELECT … FOR UPDATE SKIP LOCKED` (MariaDB ≥ 10.6 required). Every job (PROCESS / ROTATE_LEFT / REGEN_THUMBNAILS) downloads its source from S3 to an `emptyDir` workdir, runs vips/HEIC/ffmpeg locally, and PUTs derivatives back to deterministic `derivatives/{assetId}/...` keys. TUS resumable uploads land in `tus-uploads/{uuid}` via a separate tusd Deployment; a hook callback at `/api/tus/hooks/{secret}` finalises by S3-COPYing to `originals/`, inserting the row, and enqueuing a job — all in one TX. A nightly retention CronJob (also the same JAR, `retention` profile) runs three passes: aged-original purge, abandoned-TUS-upload cleanup, and orphan-key detection.
 
 ## License
 
-MIT License - Feel free to modify and use as needed.
+MIT.
