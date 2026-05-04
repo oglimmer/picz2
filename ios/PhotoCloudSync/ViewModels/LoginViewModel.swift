@@ -3,20 +3,15 @@ import Foundation
 
 @MainActor
 class LoginViewModel: ViewModelProtocol {
-    @Published var username: String = ""
+    @Published var email: String = ""
     @Published var password: String = ""
     @Published var isLoading: Bool = false
     @Published var alertState: AlertState?
 
-    private let apiClient: APIClient
-
-    init(apiClient: APIClient? = nil) {
-        // Allow dependency injection for testing
-        self.apiClient = apiClient ?? APIClient()
-    }
+    init() {}
 
     var isFormValid: Bool {
-        !username.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !email.trimmingCharacters(in: .whitespaces).isEmpty &&
             !password.isEmpty
     }
 
@@ -24,7 +19,7 @@ class LoginViewModel: ViewModelProtocol {
         guard isFormValid else {
             alertState = AlertState(
                 title: "Invalid Input",
-                message: "Please enter both username and password",
+                message: "Please enter both email and password",
             )
             completion(false)
             return
@@ -33,23 +28,27 @@ class LoginViewModel: ViewModelProtocol {
         isLoading = true
         alertState = nil
 
-        // Create API client with credentials
-        let api = APIClient(username: username, password: password)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
+        let api = APIClient(username: trimmedEmail, password: password)
 
-        // Test connection by fetching albums
-        api.fetchAlbums { [weak self] result in
+        api.checkAuth { [weak self] result in
             guard let self else { return }
 
             DispatchQueue.main.async {
                 self.isLoading = false
 
                 switch result {
-                case .success:
-                    // Save credentials to keychain
-                    if KeychainHelper.shared.save(username: self.username, password: self.password) {
-                        print("LoginViewModel: Login successful, credentials saved")
+                case let .success(authResponse):
+                    if KeychainHelper.shared.save(username: trimmedEmail, password: self.password) {
+                        print("LoginViewModel: Login successful, credentials saved (verified=\(authResponse.emailVerified))")
 
-                        // Request notification permissions after first login
+                        if !authResponse.emailVerified {
+                            self.alertState = AlertState(
+                                title: "Email not verified",
+                                message: "Please check your inbox for the verification link before using the app.",
+                            )
+                        }
+
                         if PushNotificationManager.shared.authorizationStatus == .notDetermined {
                             PushNotificationManager.shared.requestPermission { _ in }
                         }
@@ -64,7 +63,7 @@ class LoginViewModel: ViewModelProtocol {
                     }
 
                 case let .failure(error):
-                    self.handleError(AppError.authentication(error.localizedDescription))
+                    self.handleError(error)
                     completion(false)
                 }
             }

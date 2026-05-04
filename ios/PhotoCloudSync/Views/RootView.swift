@@ -11,7 +11,9 @@ struct RootView: View {
             if isLoggedIn {
                 MainTabView(isLoggedIn: $isLoggedIn)
             } else {
-                LoginView(isLoggedIn: $isLoggedIn)
+                NavigationStack {
+                    WelcomeView(isLoggedIn: $isLoggedIn)
+                }
             }
         }
         .onAppear {

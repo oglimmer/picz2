@@ -393,6 +393,114 @@ extension APIClient {
     }
 }
 
+// MARK: - Authentication Endpoints
+
+extension APIClient {
+    /// Validate the credentials currently set on this client against `/api/auth/check`.
+    /// Returns the server-side email and `emailVerified` flag.
+    func checkAuth(completion: @escaping (Result<AuthCheckResponse, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/auth/check"))
+        request.httpMethod = "GET"
+        addBasicAuth(to: &request)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(AppError.network(error)))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode), let data else {
+                completion(.failure(AppError.authentication("Invalid email or password")))
+                return
+            }
+            do {
+                let decoded = try JSONDecoder().decode(AuthCheckResponse.self, from: data)
+                if decoded.success {
+                    completion(.success(decoded))
+                } else {
+                    completion(.failure(AppError.authentication("Invalid email or password")))
+                }
+            } catch {
+                completion(.failure(AppError.api(message: "Failed to decode response: \(error.localizedDescription)", statusCode: http.statusCode)))
+            }
+        }.resume()
+    }
+
+    /// Create a new account. Unauthenticated POST to `/api/users`. On success the server
+    /// has emailed a verification link; the user can't sign in until they click it.
+    static func register(email: String, password: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: AppConfiguration.apiBaseURL.appendingPathComponent("api/users"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["email": email, "password": password]
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(AppError.network(error)))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                let message = data
+                    .flatMap { try? JSONDecoder().decode(ErrorResponse.self, from: $0) }?
+                    .message ?? "Failed to create account"
+                completion(.failure(AppError.api(message: message, statusCode: http.statusCode)))
+                return
+            }
+            completion(.success(()))
+        }.resume()
+    }
+
+    /// Request a password-reset email. Unauthenticated POST to
+    /// `/api/users/password-reset-request`. Server returns 200 even if the email is unknown
+    /// (to avoid leaking account existence) — mirror that behavior in the UI.
+    static func requestPasswordReset(email: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: AppConfiguration.apiBaseURL.appendingPathComponent("api/users/password-reset-request"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["email": email]
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(AppError.network(error)))
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                let message = data
+                    .flatMap { try? JSONDecoder().decode(ErrorResponse.self, from: $0) }?
+                    .message ?? "Failed to send reset link"
+                completion(.failure(AppError.api(message: message, statusCode: http.statusCode)))
+                return
+            }
+            completion(.success(()))
+        }.resume()
+    }
+}
+
 // MARK: - Response Models
 
 struct AlbumResponse: Codable {
@@ -408,4 +516,10 @@ struct SuccessResponse: Codable {
 struct ErrorResponse: Codable {
     let success: Bool
     let message: String
+}
+
+struct AuthCheckResponse: Codable {
+    let success: Bool
+    let email: String?
+    let emailVerified: Bool
 }
