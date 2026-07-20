@@ -23,11 +23,14 @@ backend:
     # R2 slim: api pod no longer runs ImageMagick / ffmpeg / vips. Heavy work moved to the worker
     # pod (Phase 4e). Steady-state api footprint is just heap + Tomcat NIO + S3 SDK direct buffers.
     # 1Gi limit is comfortable; requests sized at 768Mi so the scheduler reserves the working set.
+    # CPU request follows the same move: with the encode pipeline gone the api idles at ~2m, so
+    # 500m reserved a core-half of a 4-core Pi node permanently for work that no longer happens
+    # here. 100m keeps a real CFS weight; the 4000m limit still covers request bursts.
     limits:
       cpu: 4000m
       memory: 1Gi
     requests:
-      cpu: 500m
+      cpu: 100m
       memory: 768Mi
 
   # R2 slim: heap halved to 512m since api no longer holds derivative bytes in flight. Direct-memory
