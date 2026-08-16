@@ -170,7 +170,6 @@
       :album-name="album?.name || 'this album'"
       :is-confirmation="isConfirmationMode"
       @close="showSubscriptionDialog = false"
-      @subscribed="handleSubscribed"
     />
   </div>
 </template>
@@ -522,10 +521,6 @@ export default {
       }
     }
 
-    function handleSubscribed() {
-      info('Subscription created! Please check your email to confirm.')
-    }
-
     return {
       album,
       files,
@@ -553,7 +548,6 @@ export default {
       handlePauseResume,
       handleStopPlayback,
       handleConsent,
-      handleSubscribed,
       showBackToTop,
       scrollToTop
     }
