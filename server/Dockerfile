@@ -105,7 +105,10 @@ RUN apt-get update && \
         libfontconfig1 \
         libde265-0 \
         libaom3 \
-        libx265-199 \
+        # Soname-versioned package — tracks the base image's libx265. eclipse-temurin:latest
+        # moved to Ubuntu 26.04, which ships libx265-215; the old libx265-199 no longer exists
+        # and apt fails the whole layer.
+        libx265-215 \
         libbrotli1 \
         libbz2-1.0 \
         libdeflate0 \
