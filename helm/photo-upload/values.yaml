@@ -45,8 +45,8 @@ backend:
   # receive HTTP 503 with Retry-After so clients back off instead of stalling the pod.
   processingQueueCapacity: 50
 
-  # Phase 4 deployment-split knob. The api pod runs api profile only; the worker pod
-  # (replicas: 1 below) drains processing_jobs. JobDispatcher is @Profile(WORKER) and simply
+  # Phase 4 deployment-split knob. The api pod runs api profile only; the worker pods
+  # (worker.replicas below) drain processing_jobs. JobDispatcher is @Profile(WORKER) and simply
   # isn't loaded on the api pod.
   sprintProfilesActive: "api"
 
@@ -90,18 +90,56 @@ worker:
     repository: registry.oglimmer.com/picz2-be
     pullPolicy: Always
     tag: ""
-  # R2: 1 worker pod drains processing_jobs. Each pod has Semaphore(1), so scale-out gives
-  # parallelism but isn't required day-1 on the single-node Pi cluster (per D22).
-  replicas: 1
+  # Worker pods drain processing_jobs. Each pod has Semaphore(1) and heif-convert is
+  # effectively single-threaded, so a pod plateaus near 0.8 cores no matter how high its CPU
+  # limit is — replica count, not the limit, is the throughput knob (per D22).
+  #
+  # Raised 1 -> 2 on 2026-08-16: a single worker converted ~6/min against ~50/min of uploads,
+  # so the queue hit the 200-job backpressure threshold and the api pod started rejecting
+  # TUS pre-create. Two workers sustain ~16/min and cleared a 201-job backlog in ~12 minutes.
+  replicas: 2
   # Heavy pipeline budget: ImageMagick / HEIC + ffmpeg can each push native memory toward
   # 1.5 GiB. JVM heap is capped low (-Xmx512m) since most of the work happens in subprocesses.
+  # CPU limit is deliberately below one node's capacity: the Pi nodes have 4 cores, and a
+  # 4000m limit let a single HEIC batch consume an entire node. That starved Longhorn's
+  # instance-manager / csi-plugin (4s probe timeouts) until the MinIO volume degraded and
+  # every S3 call from the api pod hung to its 60s timeout (incident 2026-08-16).
   resources:
     limits:
-      cpu: 4000m
+      cpu: 1500m
       memory: 2Gi
     requests:
       cpu: 500m
       memory: 1Gi
+  # Placement overrides for the worker only — the chart's top-level nodeSelector/affinity/
+  # tolerations apply to every pod, which is not what we want here. Falls back to the global
+  # values when left empty.
+  #
+  # The worker is the cluster's heaviest CPU consumer, so keep it off the node that carries
+  # both the MinIO pod and MariaDB — saturating that node is what starved Longhorn's probes
+  # and degraded the MinIO volume on 2026-08-16.
+  #
+  # Expressed as pod anti-affinity rather than a node list on purpose: only 4 of the 6 nodes
+  # accept workloads at all (node24/node25 are control-plane, tainted CriticalAddonsOnly), and
+  # those 4 run 64-87% CPU-requested, so a hardcoded node list is both brittle and prone to
+  # leaving the worker unschedulable. Anti-affinity tracks MinIO/MariaDB wherever they move.
+  #
+  # The CPU limit above is the primary control; this is secondary hardening.
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        namespaces: ["minio"]
+        labelSelector:
+          matchLabels:
+            app: minio
+      - topologyKey: kubernetes.io/hostname
+        namespaces: ["default"]
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: mariadb
   # Worker-side JVM is small — actual encode RAM lives in vipsthumbnail / ffmpeg subprocesses.
   # MaxRAMPercentage=35 caps heap on the small-pod side without us tuning per-pod -Xmx by hand.
   javaOpts: "-Xmx512m -XX:MaxRAMPercentage=35.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"

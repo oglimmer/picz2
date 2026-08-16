@@ -156,15 +156,18 @@ spec:
         # while a job runs and is wiped after each one.
         emptyDir:
           sizeLimit: {{ .Values.worker.workdir.sizeLimit | default "5Gi" }}
-      {{- with .Values.nodeSelector }}
+      # Worker-specific placement, falling back to the chart-wide values when unset. The worker
+      # is pinned away from the storage/DB nodes (see worker.affinity in values.yaml); the other
+      # pods keep using the global keys.
+      {{- with (.Values.worker.nodeSelector | default .Values.nodeSelector) }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (.Values.worker.affinity | default .Values.affinity) }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with (.Values.worker.tolerations | default .Values.tolerations) }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
