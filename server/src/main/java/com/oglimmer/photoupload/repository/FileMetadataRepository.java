@@ -196,4 +196,35 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
               + "LIMIT :maxRows",
       nativeQuery = true)
   List<Long> findMissingThumbnailIds(@Param("maxRows") int maxRows);
+
+  /**
+   * Video-typed DONE rows that never produced a web-playable MP4. The transcode failure path in
+   * {@code FileProcessingService} only logs a warning — the job still completes DONE with
+   * thumbnails and EXIF — so these rows are invisible unless you go looking for a null
+   * {@code transcoded_video_path}.
+   *
+   * <p>Introduced after a run where every 10-bit HDR clip failed to encode: x264's {@code main}
+   * profile is 8-bit only and the command specified no {@code -pix_fmt}, so ffmpeg picked
+   * yuv420p10le to match the source and the encoder refused it. 26 assets were stranded before
+   * anyone noticed.
+   *
+   * <p>Self-correcting: a successful re-encode populates {@code transcoded_video_path}, which
+   * drops the row out of this set. Same {@code NOT EXISTS} guard as the thumbnail sweep so repeat
+   * calls don't double-enqueue, and the same SQL-level cap.
+   */
+  @Query(
+      value =
+          "SELECT fm.id FROM file_metadata fm "
+              + "WHERE fm.processing_status = 'DONE' "
+              + "AND fm.mime_type LIKE 'video/%' "
+              + "AND fm.transcoded_video_path IS NULL "
+              + "AND fm.file_path IS NOT NULL "
+              + "AND NOT EXISTS ("
+              + "  SELECT 1 FROM processing_jobs pj "
+              + "  WHERE pj.asset_id = fm.id AND pj.status IN ('QUEUED', 'PROCESSING')"
+              + ") "
+              + "ORDER BY fm.id ASC "
+              + "LIMIT :maxRows",
+      nativeQuery = true)
+  List<Long> findMissingVideoTranscodeIds(@Param("maxRows") int maxRows);
 }

@@ -75,6 +75,30 @@ public class AdminController {
   }
 
   /**
+   * Re-enqueues a full PROCESS job for videos that completed without a web-playable MP4. Intended
+   * for recovering assets stranded by a transcode bug — the failure path only warns, so the row
+   * looks DONE while the derivative is missing.
+   *
+   * <p>Idempotent: rows with a live job are skipped, and a successful re-encode removes the row
+   * from the eligible set. Caller pages by re-invoking until {@code enqueued == 0}.
+   */
+  @PostMapping("/reprocess-missing-video-transcodes")
+  public ResponseEntity<AdminOperationResponse> reprocessMissingVideoTranscodes(
+      @RequestParam(value = "maxRows", required = false, defaultValue = "500") int maxRows) {
+    int enqueued = fileStorageService.enqueueReprocessForMissingVideoTranscodes(maxRows);
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message(
+                enqueued == 0
+                    ? "No eligible assets — nothing to enqueue"
+                    : "Enqueued " + enqueued + " video re-process job(s)")
+            .stats(java.util.Map.of("enqueued", enqueued, "maxRows", maxRows))
+            .build();
+    return ResponseEntity.ok(response);
+  }
+
+  /**
    * Lists processing jobs that have exhausted their retry budget. Surfaces the original asset id
    * and last error so an operator can decide whether to delete the asset, fix the underlying issue,
    * or re-enqueue the job (re-enqueue UI is a future follow-up).

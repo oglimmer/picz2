@@ -1322,4 +1322,46 @@ public class FileStorageService {
     log.info("Regen-thumbnails sweep: enqueued {} jobs", ids.size());
     return ids.size();
   }
+
+  /**
+   * Re-enqueues a full {@code PROCESS} job for every video whose transcode never produced an MP4.
+   *
+   * <p>Deliberately {@code PROCESS} and not {@code REGEN_THUMBNAILS}: the latter rejects anything
+   * whose mime type isn't {@code image/*} and would mark these rows FAILED. {@code PROCESS} re-runs
+   * the whole pipeline — transcode, thumbnail, EXIF — which redoes a little work that already
+   * succeeded, but it is the only path that reaches {@code FfmpegService.transcodeVideo}.
+   *
+   * <p>Safe to re-run: {@code processFile} resets the row to PROCESSING and clears the previous
+   * error, and every derivative key is derived from the asset id, so a second pass overwrites in
+   * place rather than orphaning bytes.
+   *
+   * <p>Idempotent across calls — the query skips rows with a live job, and a row leaves the set as
+   * soon as it has a transcode. Page by re-invoking until {@code enqueued == 0}.
+   */
+  public int enqueueReprocessForMissingVideoTranscodes(int maxRows) {
+    int safeMax = Math.max(1, Math.min(maxRows, 5000));
+    List<Long> ids = metadataRepository.findMissingVideoTranscodeIds(safeMax);
+    if (ids.isEmpty()) {
+      log.info("Video-transcode sweep: no eligible assets");
+      return 0;
+    }
+    log.info("Video-transcode sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          for (Long id : ids) {
+            FileMetadata locked =
+                metadataRepository
+                    .findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
+            locked.setProcessingStatus(ProcessingStatus.QUEUED);
+            locked.setProcessingAttempts(0);
+            locked.setProcessingError(null);
+            locked.setProcessingCompletedAt(null);
+            metadataRepository.save(locked);
+            jobEnqueueService.enqueue(id, JobType.PROCESS);
+          }
+        });
+    log.info("Video-transcode sweep: enqueued {} jobs", ids.size());
+    return ids.size();
+  }
 }
