@@ -41,6 +41,13 @@ public class FfmpegService {
             "main",
             "-level",
             "4.0",
+            // Force 8-bit output. iPhone HDR/Dolby Vision clips are 10-bit HEVC, and without
+            // this ffmpeg picks a matching 10-bit pixel format (yuv420p10le) for the encoder —
+            // which x264's `main` profile cannot represent, so the encode dies with
+            // "main profile doesn't support a bit depth of 10" and the asset ends up with no
+            // web-playable derivative. The failure is silent: the job still completes DONE.
+            "-pix_fmt",
+            "yuv420p",
             "-preset",
             "medium",
             "-c:a",
