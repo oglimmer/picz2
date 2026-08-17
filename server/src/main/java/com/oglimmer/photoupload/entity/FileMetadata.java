@@ -74,6 +74,15 @@ public class FileMetadata {
   @Column(name = "exif_date_time_original")
   private Instant exifDateTimeOriginal;
 
+  /**
+   * Which tag {@link #exifDateTimeOriginal} came from. Null means the value predates the
+   * timezone-aware extractor and may be offset by the capture zone's UTC offset — the re-extract
+   * sweep selects exactly these rows.
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "exif_date_source", length = 32)
+  private CaptureDateSource exifDateSource;
+
   @Column(name = "rotation", nullable = false)
   private Integer rotation = 0;
 

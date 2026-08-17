@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
+import com.oglimmer.photoupload.entity.CaptureDateSource;
+import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -66,7 +68,8 @@ class ThumbnailServiceDispatchTest {
 
     Path a = Paths.get("/tmp/a");
     Path b = Paths.get("/tmp/b");
-    Instant when = Instant.parse("2026-04-27T00:00:00Z");
+    CaptureDate when =
+        CaptureDate.of(Instant.parse("2026-04-27T00:00:00Z"), CaptureDateSource.MVHD_UTC);
 
     when(heic.convertHeicToJpeg(a, b)).thenReturn(true);
     when(ffmpeg.transcodeVideo(a, b)).thenReturn(true);

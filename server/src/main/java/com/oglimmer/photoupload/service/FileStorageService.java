@@ -1364,4 +1364,46 @@ public class FileStorageService {
     log.info("Video-transcode sweep: enqueued {} jobs", ids.size());
     return ids.size();
   }
+
+  /**
+   * Enqueues an {@code EXTRACT_CAPTURE_DATE} job per asset whose capture date still comes from the
+   * old extractor. Photos stored a local wall clock as if it were UTC while videos stored a true
+   * instant, so sorting an album by EXIF date sheared the two apart by the capture zone's UTC
+   * offset; re-reading the original fixes the value in place.
+   *
+   * <p>Metadata-only on the worker side — no transcode, no thumbnail regeneration — so a full
+   * backfill costs one object GET and one probe per asset.
+   *
+   * <p>Same shape as the other sweeps: single API-side TX per batch, repository query skips rows
+   * with a live job, {@code maxRows} capped at 5000. Page by re-invoking until {@code enqueued ==
+   * 0}. Retention-purged rows are never eligible — their originals are gone.
+   *
+   * @return number of jobs actually enqueued
+   */
+  public int enqueueCaptureDateReextract(int maxRows) {
+    int safeMax = Math.max(1, Math.min(maxRows, 5000));
+    List<Long> ids = metadataRepository.findStaleCaptureDateIds(safeMax);
+    if (ids.isEmpty()) {
+      log.info("Capture-date sweep: no eligible assets");
+      return 0;
+    }
+    log.info("Capture-date sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          for (Long id : ids) {
+            FileMetadata locked =
+                metadataRepository
+                    .findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
+            locked.setProcessingStatus(ProcessingStatus.QUEUED);
+            locked.setProcessingAttempts(0);
+            locked.setProcessingError(null);
+            locked.setProcessingCompletedAt(null);
+            metadataRepository.save(locked);
+            jobEnqueueService.enqueue(id, JobType.EXTRACT_CAPTURE_DATE);
+          }
+        });
+    log.info("Capture-date sweep: enqueued {} jobs", ids.size());
+    return ids.size();
+  }
 }

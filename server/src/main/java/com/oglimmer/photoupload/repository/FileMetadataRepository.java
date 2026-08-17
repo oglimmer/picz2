@@ -227,4 +227,32 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
               + "LIMIT :maxRows",
       nativeQuery = true)
   List<Long> findMissingVideoTranscodeIds(@Param("maxRows") int maxRows);
+
+  /**
+   * DONE image/video rows whose capture date was never re-derived by the timezone-aware extractor
+   * ({@code exif_date_source IS NULL}). Used by the {@code EXTRACT_CAPTURE_DATE} admin endpoint.
+   *
+   * <p>Requires {@code file_path}: the capture time lives in the original's EXIF/QuickTime atoms
+   * and no derivative carries it, so retention-purged rows can never be fixed and are excluded
+   * rather than enqueued and failed.
+   *
+   * <p>Self-shrinking — the worker always writes a source (including {@code NONE} when the file
+   * has no readable timestamp), so a row leaves this set after one pass. Same {@code NOT EXISTS}
+   * guard and SQL-level cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
+   */
+  @Query(
+      value =
+          "SELECT fm.id FROM file_metadata fm "
+              + "WHERE fm.processing_status = 'DONE' "
+              + "AND fm.exif_date_source IS NULL "
+              + "AND fm.file_path IS NOT NULL "
+              + "AND (fm.mime_type LIKE 'image/%' OR fm.mime_type LIKE 'video/%') "
+              + "AND NOT EXISTS ("
+              + "  SELECT 1 FROM processing_jobs pj "
+              + "  WHERE pj.asset_id = fm.id AND pj.status IN ('QUEUED', 'PROCESSING')"
+              + ") "
+              + "ORDER BY fm.id ASC "
+              + "LIMIT :maxRows",
+      nativeQuery = true)
+  List<Long> findStaleCaptureDateIds(@Param("maxRows") int maxRows);
 }

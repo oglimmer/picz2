@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -29,6 +30,7 @@ class FileProcessingServiceStatusTest {
   private FileStorageProperties properties;
   private FileMetadataRepository repository;
   private ThumbnailService thumbnailService;
+  private CaptureDateExtractor captureDateExtractor;
   private PlatformTransactionManager txManager;
   private FileProcessingService service;
 
@@ -45,6 +47,8 @@ class FileProcessingServiceStatusTest {
     properties.setUploadDir(tempDir.toString());
     repository = mock(FileMetadataRepository.class);
     thumbnailService = mock(ThumbnailService.class);
+    captureDateExtractor = mock(CaptureDateExtractor.class);
+    when(captureDateExtractor.extract(any(), any())).thenReturn(CaptureDate.none());
     txManager = mock(PlatformTransactionManager.class);
     when(txManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
     when(repository.save(any(FileMetadata.class)))
@@ -61,7 +65,12 @@ class FileProcessingServiceStatusTest {
             });
     service =
         new FileProcessingService(
-            properties, repository, thumbnailService, txManager, java.util.Optional.empty());
+            properties,
+            repository,
+            thumbnailService,
+            captureDateExtractor,
+            txManager,
+            java.util.Optional.empty());
   }
 
   private FileMetadata seedMetadata() {

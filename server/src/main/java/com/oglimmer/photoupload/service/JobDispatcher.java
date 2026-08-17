@@ -86,6 +86,8 @@ public class JobDispatcher {
         case PROCESS -> fileProcessingService.processFile(job.getAssetId());
         case ROTATE_LEFT -> fileProcessingService.rotateAndReprocess(job.getAssetId());
         case REGEN_THUMBNAILS -> fileProcessingService.regenerateThumbnails(job.getAssetId());
+        case EXTRACT_CAPTURE_DATE ->
+            fileProcessingService.reextractCaptureDate(job.getAssetId());
       }
     } catch (Exception e) {
       // The service-layer methods catch their own exceptions today, but treat any leak

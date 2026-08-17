@@ -98,6 +98,12 @@ retention:
   # days. tusd 2.x has no in-process expiry and our MinIO is single-drive (no lifecycle API),
   # so this server-side sweep is the only GC mechanism for stale TUS uploads.
   tus-upload-days: "${RETENTION_TUS_UPLOAD_DAYS:7}"
+capture-date:
+  # EXIF DateTimeOriginal is a bare wall clock. iPhones also write OffsetTimeOriginal (0x9011),
+  # which pins it to a real instant and always wins; this zone is only assumed for photos that
+  # lack the tag (older cameras, editor-stripped files). Videos never use it — QuickTime carries
+  # its own offset. Set to UTC to reproduce the pre-fix behaviour.
+  fallback-zone: "${CAPTURE_DATE_FALLBACK_ZONE:Europe/Berlin}"
 jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"

@@ -1,14 +1,12 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.drew.imaging.ImageMetadataReader;
-import com.drew.metadata.Metadata;
-import com.drew.metadata.exif.ExifSubIFDDirectory;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.exception.StorageException;
+import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
@@ -19,7 +17,6 @@ import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.HexFormat;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +37,7 @@ public class FileProcessingService {
   private final FileStorageProperties properties;
   private final FileMetadataRepository metadataRepository;
   private final ThumbnailService thumbnailService;
+  private final CaptureDateExtractor captureDateExtractor;
   private final PlatformTransactionManager transactionManager;
   // Optional: present iff storage.s3.enabled=true. When present, originals are read from MinIO
   // into a per-job temp dir, derivatives are produced locally and PUT back to S3, and the temp
@@ -214,15 +212,11 @@ public class FileProcessingService {
         }
       }
 
-      // 4) EXIF / video creation date
-      Instant exifInstant = null;
-      if (MimeTypePredicates.isImageFile(mimeType)) {
-        exifInstant = extractExifDateTimeOriginal(currentFile);
-      } else if (MimeTypePredicates.isVideoFile(mimeType)) {
-        exifInstant = thumbnailService.extractVideoCreationDate(currentFile);
-      }
-      if (exifInstant != null) {
-        metadata.setExifDateTimeOriginal(exifInstant);
+      // 4) Capture date (image EXIF / video creation time), resolved to a true instant
+      CaptureDate captureDate = captureDateExtractor.extract(currentFile, mimeType);
+      metadata.setExifDateSource(captureDate.source());
+      if (captureDate.isPresent()) {
+        metadata.setExifDateTimeOriginal(captureDate.instant());
       }
 
       // Persist all updates in one short transaction
@@ -533,6 +527,100 @@ public class FileProcessingService {
   }
 
   /**
+   * Re-reads the capture date of an already-processed asset and nothing else.
+   *
+   * <p>Exists because every row written before the timezone-aware extractor holds a photo's local
+   * wall clock relabelled UTC, which sorts photos and videos on two different clocks. Deliberately
+   * does not touch derivatives — re-running {@code PROCESS} would redo transcodes that already
+   * succeeded, and on a Pi that is hours of work for a metadata fix.
+   *
+   * <p>Reads the original only. Retention-purged rows ({@code file_path} null) can't be re-read at
+   * all — no derivative carries the source EXIF — so the api-side query excludes them and this
+   * method fails loudly if one slips through.
+   */
+  public void reextractCaptureDate(Long fileMetadataId) {
+    TransactionTemplate tx = new TransactionTemplate(transactionManager);
+    FileMetadata metadata =
+        tx.execute(
+            status -> {
+              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+              if (found == null) {
+                return null;
+              }
+              found.setProcessingStatus(ProcessingStatus.PROCESSING);
+              found.setProcessingAttempts(
+                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+              found.setProcessingError(null);
+              return metadataRepository.save(found);
+            });
+    if (metadata == null) {
+      log.warn("reextractCaptureDate: metadata id {} not found (deleted?)", fileMetadataId);
+      return;
+    }
+
+    String originalName = metadata.getOriginalName();
+    String mimeType = metadata.getMimeType();
+    Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+    if (metadata.getFilePath() == null) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Cannot re-extract capture date for asset "
+                  + fileMetadataId
+                  + ": original is gone (retention-purged)"));
+      return;
+    }
+    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
+
+    Path workdir = null;
+    try {
+      Path currentFile;
+      if (s3Backed) {
+        workdir =
+            Files.createDirectories(
+                fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+        currentFile = workdir.resolve(metadata.getStoredFilename());
+        objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
+      } else {
+        currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
+      }
+
+      CaptureDate captureDate = captureDateExtractor.extract(currentFile, mimeType);
+      Instant previous = metadata.getExifDateTimeOriginal();
+      metadata.setExifDateSource(captureDate.source());
+      if (captureDate.isPresent()) {
+        metadata.setExifDateTimeOriginal(captureDate.instant());
+      }
+      // A NONE result keeps whatever the old extractor stored: it is at worst offset by a UTC
+      // offset, which still beats dropping the only capture date we have. The recorded source
+      // makes such rows findable.
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
+      final FileMetadata toSave = metadata;
+      tx.executeWithoutResult(status -> metadataRepository.save(toSave));
+      log.info(
+          "🕒 Capture date for asset {} ({}): {} → {} (source={})",
+          fileMetadataId,
+          originalName,
+          previous,
+          metadata.getExifDateTimeOriginal(),
+          captureDate.source());
+    } catch (IOException e) {
+      log.error("I/O error re-extracting capture date for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } catch (Exception e) {
+      log.error("Unexpected error re-extracting capture date for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } finally {
+      if (workdir != null) {
+        deleteRecursive(workdir);
+      }
+    }
+  }
+
+  /**
    * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file
    * to S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
    * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
@@ -618,25 +706,6 @@ public class FileProcessingService {
   private String truncateError(Throwable cause) {
     String msg = cause.getClass().getSimpleName() + ": " + cause.getMessage();
     return msg.length() > 4000 ? msg.substring(0, 4000) : msg;
-  }
-
-  private Instant extractExifDateTimeOriginal(Path imagePath) {
-    try {
-      Metadata metadata = ImageMetadataReader.readMetadata(imagePath.toFile());
-      ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
-      if (directory != null && directory.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
-        Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
-        if (date != null) {
-          Instant exifInstant = date.toInstant();
-          log.info("📷 Extracted EXIF DateTimeOriginal: {}", exifInstant);
-          return exifInstant;
-        }
-      }
-      return null;
-    } catch (Exception e) {
-      log.debug("Could not read EXIF from {}: {}", imagePath.getFileName(), e.getMessage());
-      return null;
-    }
   }
 
   private String toRelativePath(Path storageRoot, Path absolutePath) {

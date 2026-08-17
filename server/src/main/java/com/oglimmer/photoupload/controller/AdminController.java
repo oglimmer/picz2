@@ -99,6 +99,32 @@ public class AdminController {
   }
 
   /**
+   * Re-reads the capture date of assets that still carry the old extractor's value — photos held a
+   * local wall clock relabelled UTC while videos held a true instant, which sheared the two apart
+   * in "reorder by EXIF". Worker-side cost is one GET plus one metadata read per asset; no
+   * derivatives are touched.
+   *
+   * <p>Idempotent: each pass stamps {@code exif_date_source}, which drops the row out of the
+   * eligible set. Caller pages by re-invoking until {@code enqueued == 0}. Retention-purged assets
+   * are skipped — their originals no longer exist.
+   */
+  @PostMapping("/reextract-capture-dates")
+  public ResponseEntity<AdminOperationResponse> reextractCaptureDates(
+      @RequestParam(value = "maxRows", required = false, defaultValue = "500") int maxRows) {
+    int enqueued = fileStorageService.enqueueCaptureDateReextract(maxRows);
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message(
+                enqueued == 0
+                    ? "No eligible assets — nothing to enqueue"
+                    : "Enqueued " + enqueued + " capture-date re-extract job(s)")
+            .stats(java.util.Map.of("enqueued", enqueued, "maxRows", maxRows))
+            .build();
+    return ResponseEntity.ok(response);
+  }
+
+  /**
    * Lists processing jobs that have exhausted their retry budget. Surfaces the original asset id
    * and last error so an operator can decide whether to delete the asset, fix the underlying issue,
    * or re-enqueue the job (re-enqueue UI is a future follow-up).

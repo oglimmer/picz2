@@ -4,9 +4,9 @@ package com.oglimmer.photoupload.service;
 import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
 import com.oglimmer.photoupload.config.Profiles;
+import com.oglimmer.photoupload.model.CaptureDate;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.Getter;
@@ -155,7 +155,7 @@ public class ThumbnailService {
     return ffmpegService.generateVideoThumbnail(videoFile, outputPath);
   }
 
-  public Instant extractVideoCreationDate(Path videoFile) {
+  public CaptureDate extractVideoCreationDate(Path videoFile) {
     return ffmpegService.extractVideoCreationDate(videoFile);
   }
 
