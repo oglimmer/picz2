@@ -233,8 +233,13 @@
               <spaceBeforeCloseEmptyElement>false</spaceBeforeCloseEmptyElement>
               <keepBlankLines>true</keepBlankLines>
               <nrOfIndentSpace>2</nrOfIndentSpace>
-              <sortDependencies>groupId,artifactId</sortDependencies>
-              <sortPlugins>groupId,artifactId</sortPlugins>
+              <!-- Sorting is deliberately off. sortpom moves <dependency>/<plugin> elements but
+                   treats XML comments as independent nodes, so an alphabetical sort strands each
+                   explanatory comment above whatever dependency happens to land beneath it (the
+                   "AWS SDK v2 / apache-client" note was separated from its dependency this way).
+                   Grouping here is intentional and documented; keep it hand-ordered. -->
+              <sortDependencies/>
+              <sortPlugins/>
             </sortPom>
             <trimTrailingWhitespace/>
             <endWithNewline/>
@@ -254,7 +259,10 @@
               <include>**/*.yml</include>
               <include>**/*.yaml</include>
             </includes>
-            <jackson/>
+            <!-- No <jackson/> step: it round-trips YAML through Jackson's object model, which has
+                 no node type for comments, so every comment in application*.yml is silently
+                 deleted on apply. Those comments carry the profile/retention/TUS rationale, so
+                 whitespace hygiene is all we run here. -->
             <trimTrailingWhitespace/>
             <endWithNewline/>
           </yaml>
