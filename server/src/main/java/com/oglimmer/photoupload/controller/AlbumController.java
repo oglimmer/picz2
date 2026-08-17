@@ -11,6 +11,7 @@ import com.oglimmer.photoupload.model.AlbumRequest;
 import com.oglimmer.photoupload.model.AlbumResponse;
 import com.oglimmer.photoupload.model.AlbumsListResponse;
 import com.oglimmer.photoupload.model.AnalyticsStatsResponse;
+import com.oglimmer.photoupload.model.BulkTagResponse;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
 import com.oglimmer.photoupload.model.MessageResponse;
@@ -247,6 +248,38 @@ public class AlbumController {
         ReorderResponse.builder()
             .success(true)
             .message("Files reordered by filename numbers")
+            .updatedCount(updatedCount)
+            .build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  @PostMapping("/{id}/files/tags/{tagName}")
+  public ResponseEntity<BulkTagResponse> addTagToAllFiles(
+      @PathVariable Long id, @PathVariable String tagName) {
+    int updatedCount = fileStorageService.addTagToAllFilesInAlbum(id, tagName);
+
+    BulkTagResponse response =
+        BulkTagResponse.builder()
+            .success(true)
+            .message("Tag added to all files in album")
+            .tagName(tagName)
+            .updatedCount(updatedCount)
+            .build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  @DeleteMapping("/{id}/files/tags/{tagName}")
+  public ResponseEntity<BulkTagResponse> removeTagFromAllFiles(
+      @PathVariable Long id, @PathVariable String tagName) {
+    int updatedCount = fileStorageService.removeTagFromAllFilesInAlbum(id, tagName);
+
+    BulkTagResponse response =
+        BulkTagResponse.builder()
+            .success(true)
+            .message("Tag removed from all files in album")
+            .tagName(tagName)
             .updatedCount(updatedCount)
             .build();
 

@@ -468,6 +468,17 @@
           >
             🏷️ Manage Album Tags
           </button>
+          <button
+            class="tag-all-btn"
+            :class="{ 'tag-all-btn-active': allFilesHaveAllTag }"
+            :disabled="taggingAllFiles || (files.length === 0 && !selectedTag)"
+            :title="allFilesHaveAllTag
+              ? 'Remove the &quot;all&quot; tag from every photo and video in this album'
+              : 'Give every photo and video in this album the &quot;all&quot; tag'"
+            @click="mobileActionsOpen = false; handleToggleAllTag()"
+          >
+            {{ taggingAllFiles ? '⏳ Working…' : allFilesHaveAllTag ? '🏷️ Untag All from "all"' : '🏷️ Tag All as "all"' }}
+          </button>
         </div>
         <button
           v-if="duplicateFilterActive"
@@ -801,6 +812,8 @@ export default {
       deleteFile,
       addTag,
       removeTag,
+      addTagToAllFiles,
+      removeTagFromAllFiles,
       reorderFiles,
       reorderByFilename,
       reorderByExif
@@ -1045,7 +1058,15 @@ export default {
     const selectedFileIds = ref(new Set())
     const lastSelectedIndex = ref(null)
     const selectionActive = computed(() => selectedFileIds.value.size > 0)
-    const SYSTEM_TAGS = new Set(['no_tag', 'all'])
+    const ALL_TAG = 'all'
+    const SYSTEM_TAGS = new Set(['no_tag', ALL_TAG])
+    const taggingAllFiles = ref(false)
+    // Drives the "Tag All"/"Untag All" label. Based on the loaded files, which is the whole album
+    // unless a tag filter is active — the button itself always acts on the whole album, and the
+    // reload after each run brings the label back in sync.
+    const allFilesHaveAllTag = computed(() =>
+      files.value.length > 0 && files.value.every(f => (f.tags || []).includes(ALL_TAG))
+    )
     const togglableTags = computed(() =>
       availableTags.value.filter(t => !SYSTEM_TAGS.has(t.name))
     )
@@ -1430,6 +1451,46 @@ export default {
         }
       }
       if (count > 0) success(`Tagged ${count} photo${count !== 1 ? 's' : ''} with "${tagName}"`)
+    }
+
+    // Album-wide toggle for the `all` system tag: first click gives every photo/video the tag,
+    // clicking again takes it off every one of them.
+    async function handleToggleAllTag() {
+      if (!album.value || taggingAllFiles.value) return
+      const removing = allFilesHaveAllTag.value
+
+      const confirmed = await confirmDialog(
+        removing
+          ? 'Remove the "all" tag from every photo and video in this album?'
+          : 'Give every photo and video in this album the "all" tag?',
+        { type: 'warning', confirmText: removing ? 'Remove' : 'Tag All' }
+      )
+
+      if (!confirmed) {
+        return
+      }
+
+      taggingAllFiles.value = true
+      try {
+        const count = removing
+          ? await removeTagFromAllFiles(album.value.id, ALL_TAG)
+          : await addTagToAllFiles(album.value.id, ALL_TAG)
+        await loadAlbumFiles(album.value.id, props.presentationMode)
+        if (count === 0) {
+          info(removing
+            ? 'No photos had the "all" tag.'
+            : 'All photos already have the "all" tag.')
+        } else {
+          const plural = count !== 1 ? 's' : ''
+          success(removing
+            ? `Removed "all" from ${count} photo${plural}`
+            : `Tagged ${count} photo${plural} with "all"`)
+        }
+      } catch (err) {
+        error(`Error updating "all" tag: ${err.message}`)
+      } finally {
+        taggingAllFiles.value = false
+      }
     }
 
     function handleGalleryKeydown(e) {
@@ -1966,6 +2027,9 @@ export default {
       closeTagPicker,
       togglePickerTag,
       saveEnabledTags,
+      allFilesHaveAllTag,
+      taggingAllFiles,
+      handleToggleAllTag,
       selectedFile,
       draggingIndex,
       dragOverIndex,

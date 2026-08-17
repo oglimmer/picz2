@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -965,6 +966,173 @@ public class FileStorageService {
     return imageTagRepository.findByFileMetadataId(fileId).stream()
         .map(it -> it.getTag().getName())
         .collect(Collectors.toList());
+  }
+
+  /**
+   * Add {@code tagName} to every file in the album, skipping files that already carry it. Any
+   * {@code no_tag} marker is dropped from the files that end up with a real tag — unconditionally,
+   * unlike {@link #addTagToFile}, which only drops it when the new tag is the file's first real
+   * one. Returns the number of files actually changed.
+   */
+  @Transactional
+  public int addTagToAllFilesInAlbum(Long albumId, String tagName) {
+    User currentUser = userContext.getCurrentUser();
+    Album album = requireOwnedAlbum(currentUser, albumId);
+    Tag tag = resolveTagForBulkOperation(currentUser, tagName);
+
+    // Enforce album's enabled-tags list (system tags NO_TAG and ALL_TAG are always allowed)
+    if (!isSystemTag(tagName)
+        && !albumEnabledTagRepository.existsByAlbumIdAndTagId(album.getId(), tag.getId())) {
+      throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
+    }
+
+    int changed = 0;
+    for (FileMetadata metadata : albumFilesWithTags(album, currentUser)) {
+      List<ImageTag> imageTags = metadata.getImageTags();
+      if (imageTags.stream().anyMatch(it -> it.getTag().getId().equals(tag.getId()))) {
+        continue;
+      }
+
+      ImageTag imageTag = new ImageTag();
+      imageTag.setFileMetadata(metadata);
+      imageTag.setTag(tag);
+      imageTagRepository.save(imageTag);
+      imageTags.add(imageTag);
+      changed++;
+
+      // no_tag only ever means "this file has no real tag", so strip it as soon as one is present.
+      // Deliberately not gated on "was this the first real tag": a file can carry a stale no_tag
+      // next to a real one, and this sweep is the natural place to heal that.
+      if (!NO_TAG.equals(tagName)) {
+        removeTagRowFromFetchedFile(metadata, it -> NO_TAG.equals(it.getTag().getName()));
+      }
+    }
+
+    log.info(
+        "Added tag '{}' to {} file(s) in album '{}' for user: {}",
+        tagName,
+        changed,
+        album.getName(),
+        currentUser.getEmail());
+    return changed;
+  }
+
+  /**
+   * Remove {@code tagName} from every file in the album, skipping files that don't carry it.
+   * Mirrors the {@code no_tag} bookkeeping of {@link #removeTagFromFile}: a file left without any
+   * real tag gets {@code no_tag} back. Returns the number of files actually changed.
+   */
+  @Transactional
+  public int removeTagFromAllFilesInAlbum(Long albumId, String tagName) {
+    User currentUser = userContext.getCurrentUser();
+    Album album = requireOwnedAlbum(currentUser, albumId);
+    Tag tag =
+        tagRepository
+            .findByUserAndName(currentUser, tagName)
+            .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
+
+    int changed = 0;
+    for (FileMetadata metadata : albumFilesWithTags(album, currentUser)) {
+      boolean removed =
+          removeTagRowFromFetchedFile(metadata, it -> it.getTag().getId().equals(tag.getId()));
+      if (!removed) {
+        continue;
+      }
+      changed++;
+
+      // If no real tag remains, restore no_tag
+      boolean hasRealTag =
+          metadata.getImageTags().stream().anyMatch(it -> !NO_TAG.equals(it.getTag().getName()));
+      if (!hasRealTag) {
+        addNoTagToFetchedFile(metadata, currentUser);
+      }
+    }
+
+    log.info(
+        "Removed tag '{}' from {} file(s) in album '{}' for user: {}",
+        tagName,
+        changed,
+        album.getName(),
+        currentUser.getEmail());
+    return changed;
+  }
+
+  private Album requireOwnedAlbum(User user, Long albumId) {
+    return albumRepository
+        .findByUserAndId(user, albumId)
+        .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
+  }
+
+  private List<FileMetadata> albumFilesWithTags(Album album, User user) {
+    return metadataRepository.findByAlbumIdAndUserIdWithTagsOrderByDisplayOrderAsc(
+        album.getId(), user.getId());
+  }
+
+  /**
+   * Drop a tag row from a file whose {@code imageTags} collection is initialized (the bulk methods
+   * JOIN FETCH it). The removal has to go through the collection: it is mapped {@code
+   * CascadeType.ALL} + {@code orphanRemoval}, so a row deleted straight through {@code
+   * imageTagRepository} is re-persisted by the cascade at flush time and the delete is silently
+   * lost. Removing from the collection lets orphanRemoval issue the DELETE. Returns whether the
+   * file carried a matching row.
+   *
+   * <p>The single-file {@link #addTagToFile}/{@link #removeTagFromFile} path is not affected — it
+   * loads the file without the fetch join, so the collection stays uninitialized and no cascade
+   * runs over it.
+   */
+  private boolean removeTagRowFromFetchedFile(FileMetadata metadata, Predicate<ImageTag> match) {
+    Optional<ImageTag> row = metadata.getImageTags().stream().filter(match).findFirst();
+    if (row.isEmpty()) {
+      return false;
+    }
+    metadata.getImageTags().remove(row.get());
+    log.debug(
+        "Removed tag '{}' from file: {}",
+        row.get().getTag().getName(),
+        metadata.getStoredFilename());
+    return true;
+  }
+
+  /** Counterpart of {@link #removeTagRowFromFetchedFile} for restoring {@code no_tag}. */
+  private void addNoTagToFetchedFile(FileMetadata metadata, User user) {
+    ensureNoTagExists(user);
+    Tag noTag =
+        tagRepository
+            .findByUserAndName(user, NO_TAG)
+            .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", NO_TAG));
+    if (metadata.getImageTags().stream()
+        .anyMatch(it -> it.getTag().getId().equals(noTag.getId()))) {
+      return;
+    }
+    ImageTag imageTag = new ImageTag();
+    imageTag.setFileMetadata(metadata);
+    imageTag.setTag(noTag);
+    imageTagRepository.save(imageTag);
+    metadata.getImageTags().add(imageTag);
+  }
+
+  /**
+   * Look up the tag for a bulk add. System tags are lazily created (same as {@code no_tag} on
+   * upload) because a user may never have touched them before; any other tag must already exist.
+   */
+  private Tag resolveTagForBulkOperation(User user, String tagName) {
+    Optional<Tag> existing = tagRepository.findByUserAndName(user, tagName);
+    if (existing.isPresent()) {
+      return existing.get();
+    }
+    if (!isSystemTag(tagName)) {
+      throw new ResourceNotFoundException("Tag", "name", tagName);
+    }
+    Tag tag = new Tag();
+    tag.setUser(user);
+    tag.setName(tagName);
+    Tag saved = tagRepository.save(tag);
+    log.info("Created special '{}' tag for user: {}", tagName, user.getEmail());
+    return saved;
+  }
+
+  private static boolean isSystemTag(String tagName) {
+    return NO_TAG.equals(tagName) || ALL_TAG.equals(tagName);
   }
 
   @Transactional

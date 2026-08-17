@@ -17,6 +17,8 @@ export interface FilesComposable {
   deleteFile: (fileId: number) => Promise<void>;
   addTag: (fileId: number, tagName: string) => Promise<void>;
   removeTag: (fileId: number, tagName: string) => Promise<void>;
+  addTagToAllFiles: (albumId: number, tagName: string) => Promise<number>;
+  removeTagFromAllFiles: (albumId: number, tagName: string) => Promise<number>;
   reorderFiles: (fileIds: number[]) => Promise<void>;
   reorderByFilename: (albumId: number) => Promise<number>;
   reorderByExif: (albumId: number) => Promise<number>;
@@ -239,6 +241,53 @@ export function useFiles(): FilesComposable {
   }
 
   /**
+   * Add a tag to every file in an album. Returns how many files actually changed
+   * (files that already had the tag are skipped by the backend).
+   */
+  async function addTagToAllFiles(
+    albumId: number,
+    tagName: string,
+  ): Promise<number> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/files/tags/${encodeURIComponent(tagName)}`,
+      {
+        method: "POST",
+      },
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Unknown error");
+    }
+
+    return data.updatedCount || 0;
+  }
+
+  /**
+   * Remove a tag from every file in an album. Returns how many files actually changed.
+   */
+  async function removeTagFromAllFiles(
+    albumId: number,
+    tagName: string,
+  ): Promise<number> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/files/tags/${encodeURIComponent(tagName)}`,
+      {
+        method: "DELETE",
+      },
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Unknown error");
+    }
+
+    return data.updatedCount || 0;
+  }
+
+  /**
    * Reorder files
    */
   async function reorderFiles(fileIds: number[]): Promise<void> {
@@ -327,6 +376,8 @@ export function useFiles(): FilesComposable {
     deleteFile,
     addTag,
     removeTag,
+    addTagToAllFiles,
+    removeTagFromAllFiles,
     reorderFiles,
     reorderByFilename,
     reorderByExif,
