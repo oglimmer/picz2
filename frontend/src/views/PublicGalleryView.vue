@@ -98,36 +98,51 @@
       </div>
     </div>
 
-    <!-- Gallery -->
+    <!-- Gallery, split into image groups (per tag) -->
     <div
       v-else
-      class="gallery presentation-gallery"
+      class="presentation-sections"
     >
-      <div
-        v-for="file in files"
-        :key="file.id"
-        class="gallery-item"
-        @click="openImage(file)"
+      <section
+        v-for="section in presentationSections"
+        :key="section.group ? `group-${section.group.id}` : 'lead'"
+        class="presentation-section"
+        :class="{ 'presentation-section--lead': !section.group }"
       >
-        <div class="image-container">
-          <img
-            :src="getThumbnailUrl(file)"
-            :alt="file.originalName"
-            loading="lazy"
-          >
+        <PresentationGroupHeader
+          v-if="section.group"
+          :group="section.group"
+          :count="section.files.length"
+        />
+        <div class="gallery presentation-gallery">
           <div
-            v-if="isVideoFile(file)"
-            class="video-play-overlay"
+            v-for="file in section.files"
+            :key="file.id"
+            class="gallery-item"
+            @click="openImage(file)"
           >
-            <span class="play-icon">▶</span>
+            <div class="image-container">
+              <img
+                :src="getThumbnailUrl(file)"
+                :alt="file.originalName"
+                loading="lazy"
+              >
+              <div
+                v-if="isVideoFile(file)"
+                class="video-play-overlay"
+              >
+                <span class="play-icon">▶</span>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
 
     <!-- Lightbox -->
     <Lightbox
       :file="selectedFile"
+      :group-context="lightboxGroupContext"
       :is-playing="isPlaying"
       :is-paused="isPaused"
       :audio-player="audioPlayer"
@@ -181,17 +196,20 @@ import { useSettings } from '../composables/useSettings'
 import { useSlideshowPlayback } from '../composables/useSlideshowPlayback'
 import { useNotifications } from '../composables/useNotifications'
 import { useAnalytics } from '../composables/useAnalytics'
+import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { isVideo } from '../utils/format'
 import Lightbox from '../components/Lightbox.vue'
 import CookieConsent from '../components/CookieConsent.vue'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
+import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
 
 export default {
   name: 'PublicGalleryView',
   components: {
     Lightbox,
     CookieConsent,
-    SubscriptionDialog
+    SubscriptionDialog,
+    PresentationGroupHeader
   },
   props: {
     shareToken: {
@@ -236,6 +254,9 @@ export default {
       resumePlayback
     } = useSlideshowPlayback()
 
+    // Presentation image groups (read-only here)
+    const { loadPublicGroups, buildSections, groupContextFor } = usePresentationGroups()
+
     const { error, warning, info } = useNotifications()
 
     // Analytics - handle cookie consent for GDPR compliance
@@ -262,6 +283,14 @@ export default {
         file.tags && file.tags.includes(selectedTag.value)
       )
     })
+
+    const presentationSections = computed(() =>
+      buildSections(files.value, selectedTag.value)
+    )
+
+    const lightboxGroupContext = computed(() =>
+      groupContextFor(presentationSections.value, selectedFile.value?.id)
+    )
 
     // Computed: Get tags actually used in files
     const tagsUsedInAlbum = computed(() => {
@@ -337,6 +366,7 @@ export default {
       window.addEventListener('scroll', handleScroll, { passive: true })
       await loadAlbumInfo()
       await loadAlbumFiles()
+      await loadPublicGroups(props.shareToken)
 
       // Load language settings
       await loadLanguageSettings()
@@ -524,6 +554,8 @@ export default {
     return {
       album,
       files,
+      presentationSections,
+      lightboxGroupContext,
       loadingFiles,
       selectedTag,
       tagsUsedInAlbum,

@@ -42,6 +42,26 @@ export interface Tag {
   albumId: number;
 }
 
+// Presentation image group — a per-(album, tag) section marker anchored to one image.
+// The group owns that image and every following one until the next group starts.
+export interface PresentationGroup {
+  id: number;
+  albumId: number;
+  tag: string;
+  startFileId: number;
+  label: string;
+  text?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// One rendered block of the presentation grid. `group` is null for images that come
+// before the first group marker.
+export interface PresentationSection {
+  group: PresentationGroup | null;
+  files: AlbumFile[];
+}
+
 export interface ImageTiming {
   imageId: number;
   startTime: number;

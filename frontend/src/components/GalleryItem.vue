@@ -72,6 +72,19 @@
       >
         ⬇ Move here
       </button>
+      <span
+        v-if="groupStart"
+        class="group-start-badge"
+        title="A group starts at this photo"
+      >◆ Group start</span>
+      <button
+        v-else-if="canStartGroup"
+        class="start-group-btn"
+        title="Start a new group at this photo"
+        @click.stop="$emit('start-group', file.id)"
+      >
+        ＋ Start group
+      </button>
     </div>
     <div
       v-if="showFileInfo"
@@ -163,6 +176,10 @@ interface Props {
   bulkSelect?: boolean
   selectVariant?: 'delete' | 'reorder'
   moveTarget?: boolean
+  /** Presentation mode, logged in: offer "start a group at this photo". */
+  canStartGroup?: boolean
+  /** This photo is already the anchor of a group — show a marker instead of the button. */
+  groupStart?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -177,7 +194,9 @@ const props = withDefaults(defineProps<Props>(), {
   selectionActive: false,
   bulkSelect: false,
   selectVariant: 'delete',
-  moveTarget: false
+  moveTarget: false,
+  canStartGroup: false,
+  groupStart: false
 })
 
 const emit = defineEmits<{
@@ -189,6 +208,7 @@ const emit = defineEmits<{
   'filter-tag': [tagName: string]
   'toggle-select': [fileId: number, shiftKey?: boolean]
   'move-here': [fileId: number]
+  'start-group': [fileId: number]
   'drag-start': [event: DragEvent]
   'drag-over': [event: DragEvent]
   'drag-enter': [event: DragEvent]

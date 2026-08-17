@@ -678,11 +678,46 @@
       </div>
     </div>
 
+    <!-- Presentation gallery, split into image groups (per tag) -->
+    <div
+      v-else-if="presentationMode"
+      class="presentation-sections"
+    >
+      <section
+        v-for="section in presentationSections"
+        :key="section.group ? `group-${section.group.id}` : 'lead'"
+        class="presentation-section"
+        :class="{ 'presentation-section--lead': !section.group }"
+      >
+        <PresentationGroupHeader
+          v-if="section.group"
+          :group="section.group"
+          :count="section.files.length"
+          :editable="canManageGroups"
+          @edit="openEditGroupDialog"
+          @delete="handleDeleteGroup"
+        />
+        <div class="gallery presentation-gallery">
+          <GalleryItem
+            v-for="file in section.files"
+            :key="`${file.id}:${file.publicToken}`"
+            :file="file"
+            :show-file-info="false"
+            :show-drag-handle="false"
+            :can-start-group="canManageGroups"
+            :group-start="Boolean(groupStartingAt(file.id, selectedTag))"
+            @click="openLightbox"
+            @start-group="openCreateGroupDialog"
+          />
+        </div>
+      </section>
+    </div>
+
     <!-- Gallery -->
     <div
       v-else
       class="gallery"
-      :class="[{ 'presentation-gallery': presentationMode }, !presentationMode && `gallery--${albumSize}`]"
+      :class="`gallery--${albumSize}`"
     >
       <GalleryItem
         v-for="(file, index) in displayedFiles"
@@ -720,6 +755,7 @@
     <!-- Lightbox -->
     <Lightbox
       :file="selectedFile"
+      :group-context="lightboxGroupContext"
       :is-recording="isInRecordingMode"
       :is-saving="savingRecording"
       :is-playing="isPlaying"
@@ -754,6 +790,18 @@
       @add-tag="handleBulkAddTag"
       @clear="clearSelection"
     />
+
+    <!-- Create / edit an image group -->
+    <PresentationGroupDialog
+      :show="groupDialogOpen"
+      :mode="groupDialogMode"
+      :tag="selectedTag"
+      :initial-label="groupDialogTarget?.label || ''"
+      :initial-text="groupDialogTarget?.text || ''"
+      :saving="groupDialogSaving"
+      @save="handleSaveGroup"
+      @close="groupDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -773,11 +821,14 @@ import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
 import { useAnalytics } from '../composables/useAnalytics'
 import { useUpload } from '../composables/useUpload'
+import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { formatBytes } from '../utils/format'
 import GalleryItem from '../components/GalleryItem.vue'
 import Lightbox from '../components/Lightbox.vue'
 import EditableTitle from '../components/EditableTitle.vue'
 import BulkTagBar from '../components/BulkTagBar.vue'
+import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
+import PresentationGroupDialog from '../components/PresentationGroupDialog.vue'
 
 export default {
   name: 'GalleryView',
@@ -785,7 +836,9 @@ export default {
     GalleryItem,
     Lightbox,
     EditableTitle,
-    BulkTagBar
+    BulkTagBar,
+    PresentationGroupHeader,
+    PresentationGroupDialog
   },
   props: {
     albumId: {
@@ -854,6 +907,15 @@ export default {
       resumePlayback,
       deleteRecording
     } = useSlideshowPlayback()
+    const {
+      loadGroups,
+      createGroup,
+      updateGroup,
+      deleteGroup,
+      groupStartingAt,
+      buildSections,
+      groupContextFor
+    } = usePresentationGroups()
     const { success, error, warning, info, removeNotification } = useNotifications()
     const { confirm: confirmDialog } = useConfirm()
     const { getAlbumStatistics, resetAlbumAnalytics, setAnalyticsPaused } = useAnalytics()
@@ -909,6 +971,91 @@ export default {
         return (nameCounts.get(key) || 0) > 1
       })
     })
+
+    // Presentation image groups — sections derived from the group markers of the selected tag.
+    const presentationSections = computed(() =>
+      buildSections(displayedFiles.value, selectedTag.value)
+    )
+
+    // The zoomed view is where most people actually read a presentation, so the section heading
+    // follows them in there. Non-presentation mode has no groups loaded, so this stays null.
+    const lightboxGroupContext = computed(() =>
+      groupContextFor(presentationSections.value, selectedFile.value?.id)
+    )
+
+    // Groups belong to one tag, so managing them needs a tag selected. Hidden while a
+    // slideshow is being recorded or played so the presentation stays chrome-free.
+    const canManageGroups = computed(() =>
+      props.presentationMode &&
+      isLoggedIn.value &&
+      Boolean(selectedTag.value) &&
+      !isInRecordingMode.value &&
+      !isPlaying.value
+    )
+
+    const groupDialogOpen = ref(false)
+    const groupDialogMode = ref('create')
+    const groupDialogSaving = ref(false)
+    const groupDialogTarget = ref(null)
+    const groupDialogAnchorFileId = ref(null)
+
+    function openCreateGroupDialog(fileId) {
+      if (!selectedTag.value) {
+        warning('Select a tag filter first — groups belong to one tag.')
+        return
+      }
+      groupDialogMode.value = 'create'
+      groupDialogTarget.value = null
+      groupDialogAnchorFileId.value = fileId
+      groupDialogOpen.value = true
+    }
+
+    function openEditGroupDialog(group) {
+      groupDialogMode.value = 'edit'
+      groupDialogTarget.value = group
+      groupDialogAnchorFileId.value = null
+      groupDialogOpen.value = true
+    }
+
+    async function handleSaveGroup(label, text) {
+      if (!album.value) return
+
+      groupDialogSaving.value = true
+      try {
+        if (groupDialogMode.value === 'edit') {
+          await updateGroup(groupDialogTarget.value.id, { label, text })
+          success('Group updated.')
+        } else {
+          await createGroup(
+            album.value.id,
+            selectedTag.value,
+            groupDialogAnchorFileId.value,
+            { label, text }
+          )
+          success('Group created.')
+        }
+        groupDialogOpen.value = false
+      } catch (err) {
+        error('Could not save group: ' + err.message)
+      } finally {
+        groupDialogSaving.value = false
+      }
+    }
+
+    async function handleDeleteGroup(group) {
+      const confirmed = await confirmDialog(
+        `Remove the group "${group.label}"? The photos stay exactly where they are.`,
+        { confirmText: 'Remove group', type: 'danger' }
+      )
+      if (!confirmed) return
+
+      try {
+        await deleteGroup(group.id)
+        success('Group removed.')
+      } catch (err) {
+        error('Could not remove group: ' + err.message)
+      }
+    }
 
     function toggleDuplicateFilter() {
       if (duplicateFilterActive.value) {
@@ -1188,9 +1335,10 @@ export default {
         await loadAlbumFiles(album.value.id, props.presentationMode)
       }
 
-      // Load recordings for presentation mode
+      // Load recordings and image groups for presentation mode
       if (props.presentationMode && album.value) {
         await loadRecordings(album.value.id)
+        await loadGroups(album.value.id)
       }
     })
 
@@ -1214,6 +1362,7 @@ export default {
         await loadAlbumFiles(album.value.id, isPresentation)
         if (isPresentation) {
           await loadRecordings(album.value.id)
+          await loadGroups(album.value.id)
         }
       }
     })
@@ -1235,6 +1384,7 @@ export default {
           await loadAlbumFiles(album.value.id, props.presentationMode)
           if (props.presentationMode) {
             await loadRecordings(album.value.id)
+            await loadGroups(album.value.id)
           }
         }
       }
@@ -2016,6 +2166,18 @@ export default {
       isLoggedIn,
       album,
       files,
+      presentationSections,
+      lightboxGroupContext,
+      canManageGroups,
+      groupStartingAt,
+      groupDialogOpen,
+      groupDialogMode,
+      groupDialogSaving,
+      groupDialogTarget,
+      openCreateGroupDialog,
+      openEditGroupDialog,
+      handleSaveGroup,
+      handleDeleteGroup,
       selectedFileIds,
       selectionActive,
       frequentTags,
