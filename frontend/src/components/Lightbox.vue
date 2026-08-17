@@ -6,10 +6,17 @@
   >
     <span class="close-lightbox">&times;</span>
     <div
-      v-if="isRecording"
+      v-if="isRecording || isSaving"
       class="recording-overlay"
     >
-      <span class="recording-indicator-lightbox">🔴 REC</span>
+      <span
+        v-if="isSaving"
+        class="recording-indicator-lightbox saving"
+      >💾 Saving recording…</span>
+      <span
+        v-else
+        class="recording-indicator-lightbox"
+      >🔴 REC</span>
     </div>
     <div
       v-if="isPlaying && controlsVisible"
@@ -88,6 +95,10 @@ export default {
       default: null
     },
     isRecording: {
+      type: Boolean,
+      default: false
+    },
+    isSaving: {
       type: Boolean,
       default: false
     },

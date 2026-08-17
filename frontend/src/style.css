@@ -2269,6 +2269,11 @@ body.landing-page .version-info { display: none; }
   border-radius: var(--r-full);
   backdrop-filter: blur(4px);
 }
+/* Replaces the REC badge while the recording uploads, so the lightbox never looks idle — an idle
+   lightbox is what got clicked a second time and produced a spurious save failure. */
+.recording-indicator-lightbox.saving {
+  background: rgba(40, 40, 40, .85);
+}
 
 .playback-overlay {
   position: absolute;

@@ -120,9 +120,29 @@ export function useSlideshow(): SlideshowComposable {
   }
 
   /**
-   * Stop recording and upload to server
+   * Stop recording and upload to server.
+   *
+   * Re-entrant by design: the upload holds `isInRecordingMode` true until the server answers, and
+   * for a long recording that blob takes seconds to POST. The lightbox stays mounted (and keeps
+   * its Escape handler) for that whole window, so a second close gesture lands here while the
+   * first upload is still in flight. Starting a second stop+upload would call
+   * `stopAudioRecording()` on an already-stopped MediaRecorder, which rejects with "No active
+   * recording" — surfacing a bogus save failure even though the first upload succeeds. Hand every
+   * concurrent caller the same in-flight promise instead.
    */
-  async function stopRecordingAndUpload(): Promise<unknown> {
+  let inFlightUpload: Promise<unknown> | null = null;
+
+  function stopRecordingAndUpload(): Promise<unknown> {
+    if (inFlightUpload) {
+      return inFlightUpload;
+    }
+    inFlightUpload = performStopAndUpload().finally(() => {
+      inFlightUpload = null;
+    });
+    return inFlightUpload;
+  }
+
+  async function performStopAndUpload(): Promise<unknown> {
     try {
       uploading.value = true;
       uploadError.value = null;
@@ -175,8 +195,12 @@ export function useSlideshow(): SlideshowComposable {
       );
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Upload failed");
+        // A gateway error answers with HTML, not the API's JSON envelope — parsing it blind
+        // replaces the status with an opaque JSON syntax error.
+        const errorData = await response.json().catch(() => null);
+        throw new Error(
+          errorData?.message || `Upload failed (HTTP ${response.status})`,
+        );
       }
 
       const result = await response.json();

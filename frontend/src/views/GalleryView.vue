@@ -721,6 +721,7 @@
     <Lightbox
       :file="selectedFile"
       :is-recording="isInRecordingMode"
+      :is-saving="savingRecording"
       :is-playing="isPlaying"
       :is-paused="isPaused"
       :audio-player="audioPlayer"
@@ -870,6 +871,7 @@ export default {
     const isPaused = ref(false)
     const controlsVisible = ref(true)
     const fileInput = ref(null)
+    const savingRecording = ref(false)
     const uploadProgress = ref({ current: 0, total: 0, status: '' })
     const isEditingDescription = ref(false)
     const editedDescription = ref('')
@@ -1740,8 +1742,14 @@ export default {
     }
 
     async function closeLightbox() {
+      // The save below keeps the lightbox mounted until the upload resolves, so every further
+      // close gesture (backdrop click, repeated Escape) re-enters here. Swallow those instead of
+      // stacking a second save, a second reload and a second toast on top of the first.
+      if (savingRecording.value) return
+
       // If recording, stop and upload
       if (isInRecordingMode.value) {
+        savingRecording.value = true
         try {
           await stopRecordingAndUpload()
           // Reload recordings so UI reflects the newly saved recording
@@ -1762,6 +1770,8 @@ export default {
             // Don't close lightbox, let user try again
             return
           }
+        } finally {
+          savingRecording.value = false
         }
       }
 
@@ -2034,6 +2044,7 @@ export default {
       draggingIndex,
       dragOverIndex,
       isInRecordingMode,
+      savingRecording,
       isPlaying,
       isPaused,
       formattedRecordingDuration,
