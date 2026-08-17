@@ -2,8 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.model.AlbumInfo;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.service.AlbumService;
@@ -12,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;

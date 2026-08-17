@@ -38,8 +38,8 @@ import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignReques
 
 /**
  * Thin wrapper around the S3 SDK. Each upload uses {@link RequestBody#fromFile(Path)} which streams
- * directly from disk — never reading the whole file into the JVM heap. That is the entire reason
- * we bother with this layer instead of {@code S3Client.putObject(... InputStream ...)}.
+ * directly from disk — never reading the whole file into the JVM heap. That is the entire reason we
+ * bother with this layer instead of {@code S3Client.putObject(... InputStream ...)}.
  */
 @Service
 @ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
@@ -54,16 +54,15 @@ public class ObjectStorageService {
 
   /**
    * Run an SDK call through the breaker. {@link CallNotPermittedException} (breaker OPEN) is
-   * translated to {@link MinioUnavailableException} so {@code GlobalExceptionHandler} can map it
-   * to a 503 with {@code Retry-After}. Any other SDK exception bubbles up unchanged AND is
-   * recorded as a failure by the breaker.
+   * translated to {@link MinioUnavailableException} so {@code GlobalExceptionHandler} can map it to
+   * a 503 with {@code Retry-After}. Any other SDK exception bubbles up unchanged AND is recorded as
+   * a failure by the breaker.
    */
   private <T> T withBreaker(Supplier<T> supplier) {
     try {
       return minioCircuitBreaker.executeSupplier(supplier);
     } catch (CallNotPermittedException e) {
-      throw new MinioUnavailableException(
-          "MinIO circuit breaker is OPEN; refusing call fast", e);
+      throw new MinioUnavailableException("MinIO circuit breaker is OPEN; refusing call fast", e);
     }
   }
 
@@ -71,15 +70,14 @@ public class ObjectStorageService {
     try {
       minioCircuitBreaker.executeRunnable(r);
     } catch (CallNotPermittedException e) {
-      throw new MinioUnavailableException(
-          "MinIO circuit breaker is OPEN; refusing call fast", e);
+      throw new MinioUnavailableException("MinIO circuit breaker is OPEN; refusing call fast", e);
     }
   }
 
   /**
    * Upload a file. The {@code key} is the object name within the bucket (e.g. {@code
-   * originals/abc.jpg}). {@code contentType} is stored as metadata so file-serve can hand it to
-   * the browser without re-sniffing.
+   * originals/abc.jpg}). {@code contentType} is stored as metadata so file-serve can hand it to the
+   * browser without re-sniffing.
    */
   public void putFile(String key, Path source, String contentType) {
     PutObjectRequest.Builder req =
@@ -108,8 +106,8 @@ public class ObjectStorageService {
   }
 
   /**
-   * Download an object to a local file. Used by the worker pipeline, which always operates on
-   * local files (libvips, ffmpeg, etc).
+   * Download an object to a local file. Used by the worker pipeline, which always operates on local
+   * files (libvips, ffmpeg, etc).
    */
   public void getToFile(String key, Path destination) {
     GetObjectRequest req =
@@ -126,10 +124,10 @@ public class ObjectStorageService {
   }
 
   /**
-   * Stream a possibly-ranged object — forwards an HTTP {@code Range} header verbatim to S3 so
-   * MinIO does the slicing, not the JVM. Callers should mirror the response's
-   * {@link GetObjectResponse#contentRange()} and {@link GetObjectResponse#contentLength()} into
-   * the outgoing HTTP response. {@code rangeHeader} may be null/blank to fetch the whole object.
+   * Stream a possibly-ranged object — forwards an HTTP {@code Range} header verbatim to S3 so MinIO
+   * does the slicing, not the JVM. Callers should mirror the response's {@link
+   * GetObjectResponse#contentRange()} and {@link GetObjectResponse#contentLength()} into the
+   * outgoing HTTP response. {@code rangeHeader} may be null/blank to fetch the whole object.
    */
   public ResponseInputStream<GetObjectResponse> openStream(String key, String rangeHeader) {
     GetObjectRequest.Builder req =
@@ -141,11 +139,11 @@ public class ObjectStorageService {
   }
 
   /**
-   * List object keys under {@code prefix} whose {@code LastModified} is strictly before
-   * {@code cutoff}. Used by the retention CronJob's TUS-cleanup pass — the S3 ListObjectsV2 API
-   * doesn't support a date filter, so we page through and filter client-side. Cheap regardless:
-   * pages are 1000 keys each, and the {@code tus-uploads/} prefix is short-lived in normal
-   * operation (post-finish hook deletes the object) so the prefix is usually nearly empty.
+   * List object keys under {@code prefix} whose {@code LastModified} is strictly before {@code
+   * cutoff}. Used by the retention CronJob's TUS-cleanup pass — the S3 ListObjectsV2 API doesn't
+   * support a date filter, so we page through and filter client-side. Cheap regardless: pages are
+   * 1000 keys each, and the {@code tus-uploads/} prefix is short-lived in normal operation
+   * (post-finish hook deletes the object) so the prefix is usually nearly empty.
    */
   public List<String> listKeysOlderThan(String prefix, java.time.Instant cutoff) {
     List<String> keys = new ArrayList<>();

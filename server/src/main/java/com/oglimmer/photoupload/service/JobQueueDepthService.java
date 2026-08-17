@@ -16,8 +16,8 @@ import org.springframework.stereotype.Service;
  * volatile snapshot consumed by:
  *
  * <ul>
- *   <li>{@link com.oglimmer.photoupload.web.UploadBackpressureFilter} — sums QUEUED + PROCESSING
- *       so the upload hot path never hits the DB.
+ *   <li>{@link com.oglimmer.photoupload.web.UploadBackpressureFilter} — sums QUEUED + PROCESSING so
+ *       the upload hot path never hits the DB.
  *   <li>The Prometheus gauge for {@code photoupload.jobs.queued{status=...}} — exposed via
  *       Micrometer so alerts can fire on QUEUED depth or any DEAD_LETTER row.
  * </ul>

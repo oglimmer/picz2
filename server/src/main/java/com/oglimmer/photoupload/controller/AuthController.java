@@ -2,8 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.model.AuthCheckResponse;
 import com.oglimmer.photoupload.repository.UserRepository;
@@ -11,6 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

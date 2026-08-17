@@ -1,9 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.eatthepath.pushy.apns.ApnsClient;
 import com.eatthepath.pushy.apns.ApnsClientBuilder;
 import com.eatthepath.pushy.apns.auth.ApnsSigningKey;
@@ -11,6 +8,7 @@ import com.eatthepath.pushy.apns.util.ApnsPayloadBuilder;
 import com.eatthepath.pushy.apns.util.SimpleApnsPayloadBuilder;
 import com.eatthepath.pushy.apns.util.SimpleApnsPushNotification;
 import com.oglimmer.photoupload.config.ApnsConfig;
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.DeviceToken;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -21,6 +19,7 @@ import java.nio.file.Path;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;

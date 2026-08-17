@@ -26,9 +26,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 /**
- * Phase 5 — covers the path-secret guard and the "always 200 + JSON body" envelope. The
- * dispatch table itself (pre-create / post-finish / post-terminate handlers) lives in {@link
- * TusHookService} and is exercised by {@code TusHookServiceTest}.
+ * Phase 5 — covers the path-secret guard and the "always 200 + JSON body" envelope. The dispatch
+ * table itself (pre-create / post-finish / post-terminate handlers) lives in {@link TusHookService}
+ * and is exercised by {@code TusHookServiceTest}.
  */
 @ExtendWith(MockitoExtension.class)
 class TusHookControllerTest {

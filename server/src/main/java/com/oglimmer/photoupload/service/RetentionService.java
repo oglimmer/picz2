@@ -23,10 +23,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * row is older than {@code retention.original-days}. Each row is processed in its own transaction
  * so a single S3 outage doesn't roll back the whole batch.
  *
- * <p>Idempotent: a re-run never matches the same row twice because the eligibility query filters
- * on {@code file_path IS NOT NULL}. Crash-safe in the same way — if the JVM dies between the S3
- * delete and the DB null-out, the next run will see the row again, and the second S3 delete is a
- * no-op (S3 DELETE is naturally idempotent).
+ * <p>Idempotent: a re-run never matches the same row twice because the eligibility query filters on
+ * {@code file_path IS NOT NULL}. Crash-safe in the same way — if the JVM dies between the S3 delete
+ * and the DB null-out, the next run will see the row again, and the second S3 delete is a no-op (S3
+ * DELETE is naturally idempotent).
  */
 @Profile(Profiles.RETENTION)
 @Service
@@ -102,8 +102,8 @@ public class RetentionService {
 
   /**
    * Per-row TX. S3 delete first; on success the column nulls out in its own transaction. The S3
-   * delete is idempotent so a crash between the two halves leaves the row purgeable on the next
-   * run — which is the intended self-healing behaviour.
+   * delete is idempotent so a crash between the two halves leaves the row purgeable on the next run
+   * — which is the intended self-healing behaviour.
    */
   private void purgeOne(FileMetadata row) {
     String key = row.getFilePath();
@@ -130,17 +130,17 @@ public class RetentionService {
   }
 
   /**
-   * Phase 5 follow-up — second pass that deletes abandoned TUS uploads under the
-   * {@code tus-uploads/} prefix. tusd 2.x has no in-process expiry and our MinIO is single-drive
-   * (no bucket lifecycle), so this is the only GC mechanism for stale incomplete uploads.
+   * Phase 5 follow-up — second pass that deletes abandoned TUS uploads under the {@code
+   * tus-uploads/} prefix. tusd 2.x has no in-process expiry and our MinIO is single-drive (no
+   * bucket lifecycle), so this is the only GC mechanism for stale incomplete uploads.
    *
    * <p>Self-healing: a successful TUS upload's tus-uploads/{uuid} is deleted by the post-finish
    * hook in {@link FileStorageService#registerTusUpload}, so the prefix is normally near-empty.
-   * Anything still here older than {@link RetentionProperties#getTusUploadDays()} is something
-   * the client never finished — safe to delete.
+   * Anything still here older than {@link RetentionProperties#getTusUploadDays()} is something the
+   * client never finished — safe to delete.
    *
-   * <p>No DB side: this is purely an S3 operation. Delete failures are counted but don't abort
-   * the sweep — the next nightly run will retry.
+   * <p>No DB side: this is purely an S3 operation. Delete failures are counted but don't abort the
+   * sweep — the next nightly run will retry.
    */
   public Result runTusCleanup() {
     int days = properties.getTusUploadDays();
@@ -194,24 +194,26 @@ public class RetentionService {
   }
 
   /**
-   * Phase 5 follow-up — third pass that deletes orphan {@code originals/} keys: bytes that exist
-   * in MinIO but no {@code file_metadata.file_path} row points at them. Two known failure modes
+   * Phase 5 follow-up — third pass that deletes orphan {@code originals/} keys: bytes that exist in
+   * MinIO but no {@code file_metadata.file_path} row points at them. Two known failure modes
    * produce orphans:
+   *
    * <ul>
    *   <li>TUS post-finish hook crashes between the {@code S3 COPY} (tus-uploads → originals) and
-   *       the row-insert TX. {@code FileStorageService.registerTusUpload} explicitly defers
-   *       cleanup to "the orphan job".</li>
+   *       the row-insert TX. {@code FileStorageService.registerTusUpload} explicitly defers cleanup
+   *       to "the orphan job".
    *   <li>Multipart upload {@code FileStorageService.storeFile} crashes between the streaming PUT
-   *       and the same row-insert TX.</li>
+   *       and the same row-insert TX.
    * </ul>
+   *
    * Algorithm: load the set of every {@code originals/} key currently referenced by any row, list
    * {@code originals/} from S3 with a {@code lastModified < now - graceHours} filter, and delete
    * the difference. The grace window prevents false positives from racing in-flight uploads.
    *
-   * <p>The originals-purge sweep ({@link #run()}) leaves {@code file_path = NULL} on rows whose
-   * S3 object it has deleted, so retention-purged rows correctly do not appear in the live-key
-   * set — but their S3 keys are gone too, so they don't appear in the listing either. No
-   * interference between the two passes.
+   * <p>The originals-purge sweep ({@link #run()}) leaves {@code file_path = NULL} on rows whose S3
+   * object it has deleted, so retention-purged rows correctly do not appear in the live-key set —
+   * but their S3 keys are gone too, so they don't appear in the listing either. No interference
+   * between the two passes.
    *
    * <p>No DB side: pure S3 operation. Failures are counted but don't abort.
    */

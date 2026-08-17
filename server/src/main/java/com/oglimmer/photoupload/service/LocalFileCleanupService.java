@@ -7,8 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * Best-effort local-disk cleanup helpers (thumbnail / transcoded video). Carries no Vips/Heic/Ffmpeg
- * dependency so the api pod can wire it without dragging in worker-only beans.
+ * Best-effort local-disk cleanup helpers (thumbnail / transcoded video). Carries no
+ * Vips/Heic/Ffmpeg dependency so the api pod can wire it without dragging in worker-only beans.
  */
 @Service
 @Slf4j

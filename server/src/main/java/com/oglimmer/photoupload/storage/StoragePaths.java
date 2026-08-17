@@ -4,8 +4,8 @@ package com.oglimmer.photoupload.storage;
 import com.oglimmer.photoupload.entity.FileMetadata;
 
 /**
- * Single source of truth for the S3 key convention. Keeps the prefix check co-located with the
- * key generators so they cannot drift.
+ * Single source of truth for the S3 key convention. Keeps the prefix check co-located with the key
+ * generators so they cannot drift.
  *
  * <pre>
  *   originals/{stored_filename}

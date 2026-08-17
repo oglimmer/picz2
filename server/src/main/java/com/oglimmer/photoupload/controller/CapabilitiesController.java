@@ -10,8 +10,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * What ingest paths the server supports today. Clients (iOS / web) cache this and pick TUS or
- * multipart based on what's advertised here. Phase 5d/R1 ships {@code tus.advertised=false}
- * even though the tusd Deployment is live; R2 flips advertised to switch clients over.
+ * multipart based on what's advertised here. Phase 5d/R1 ships {@code tus.advertised=false} even
+ * though the tusd Deployment is live; R2 flips advertised to switch clients over.
  */
 @Profile(Profiles.API)
 @RestController

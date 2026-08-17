@@ -21,8 +21,8 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 /**
  * Wires AWS SDK v2 against the in-cluster MinIO. Beans are created only when {@code
- * storage.s3.enabled=true} so a developer running the app without MinIO doesn't need to set up
- * fake credentials.
+ * storage.s3.enabled=true} so a developer running the app without MinIO doesn't need to set up fake
+ * credentials.
  */
 @Configuration
 @ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
@@ -53,7 +53,9 @@ public class ObjectStorageConfig {
             StaticCredentialsProvider.create(
                 AwsBasicCredentials.create(properties.getAccessKey(), properties.getSecretKey())))
         .serviceConfiguration(
-            S3Configuration.builder().pathStyleAccessEnabled(properties.isPathStyleAccess()).build())
+            S3Configuration.builder()
+                .pathStyleAccessEnabled(properties.isPathStyleAccess())
+                .build())
         .httpClientBuilder(ApacheHttpClient.builder())
         .overrideConfiguration(apiCallTimeouts())
         // SDK v2.30+ defaults to Flexible Checksums (CRC32) and stops sending Content-MD5 on
@@ -74,7 +76,9 @@ public class ObjectStorageConfig {
             StaticCredentialsProvider.create(
                 AwsBasicCredentials.create(properties.getAccessKey(), properties.getSecretKey())))
         .serviceConfiguration(
-            S3Configuration.builder().pathStyleAccessEnabled(properties.isPathStyleAccess()).build())
+            S3Configuration.builder()
+                .pathStyleAccessEnabled(properties.isPathStyleAccess())
+                .build())
         .build();
   }
 }

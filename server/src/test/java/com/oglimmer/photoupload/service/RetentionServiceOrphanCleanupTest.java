@@ -28,8 +28,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * Phase 5 follow-up — covers the orphan-detection pass added to {@link RetentionService}. Mirrors
- * the shape of {@link RetentionServiceTusCleanupTest}; the originals-purge sweep ({@code run()})
- * is exercised separately in production.
+ * the shape of {@link RetentionServiceTusCleanupTest}; the originals-purge sweep ({@code run()}) is
+ * exercised separately in production.
  */
 @ExtendWith(MockitoExtension.class)
 class RetentionServiceOrphanCleanupTest {

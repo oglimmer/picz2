@@ -2,8 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.SettingRequest;
@@ -14,6 +12,7 @@ import com.oglimmer.photoupload.service.GallerySettingService;
 import com.oglimmer.photoupload.service.UserSettingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;

@@ -37,11 +37,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  */
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
-    properties = {
-      "app.apns.enabled=false",
-      "app.mail.enabled=false",
-      "spring.mail.host=localhost"
-    })
+    properties = {"app.apns.enabled=false", "app.mail.enabled=false", "spring.mail.host=localhost"})
 @Testcontainers
 @EnabledIfSystemProperty(
     named = "run.testcontainers",
@@ -65,10 +61,11 @@ class ProcessingJobLeaseTest {
   void seedFixtures() {
     jdbcTemplate.update(
         "INSERT INTO users (email, password) VALUES (?, ?)", "it@example.com", "irrelevant");
-    userId = jdbcTemplate.queryForObject("SELECT id FROM users WHERE email = ?", Long.class, "it@example.com");
+    userId =
+        jdbcTemplate.queryForObject(
+            "SELECT id FROM users WHERE email = ?", Long.class, "it@example.com");
 
-    jdbcTemplate.update(
-        "INSERT INTO albums (user_id, name) VALUES (?, ?)", userId, "it-album");
+    jdbcTemplate.update("INSERT INTO albums (user_id, name) VALUES (?, ?)", userId, "it-album");
     albumId =
         jdbcTemplate.queryForObject(
             "SELECT id FROM albums WHERE user_id = ? AND name = ?", Long.class, userId, "it-album");
@@ -164,10 +161,10 @@ class ProcessingJobLeaseTest {
   }
 
   /**
-   * Re-runs the V31 backfill SQL against a fresh FAILED row to verify the upgrade-time
-   * recovery path: every FAILED asset gets a QUEUED job and its own status flips back to QUEUED.
-   * Flyway already executed V31 at startup against an empty table, so this exercises the
-   * idempotent re-run.
+   * Re-runs the V31 backfill SQL against a fresh FAILED row to verify the upgrade-time recovery
+   * path: every FAILED asset gets a QUEUED job and its own status flips back to QUEUED. Flyway
+   * already executed V31 at startup against an empty table, so this exercises the idempotent
+   * re-run.
    */
   @Test
   void v31BackfillEnqueuesFailedAssets() {

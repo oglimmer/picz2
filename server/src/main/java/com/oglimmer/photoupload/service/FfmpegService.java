@@ -131,11 +131,11 @@ public class FfmpegService {
   /**
    * Reads the capture time of a video as a true instant.
    *
-   * <p>Probes <em>all</em> format tags rather than naming one: an iPhone .MOV carries both
-   * {@code com.apple.quicktime.creationdate} (local time with an explicit offset) and
-   * {@code creation_time} (the mvhd atom, which ffmpeg emits already normalised to UTC). The Apple
-   * tag is preferred — it is the value the Photos app shows — but both resolve to the same instant,
-   * so the mvhd fallback is equally usable for sorting.
+   * <p>Probes <em>all</em> format tags rather than naming one: an iPhone .MOV carries both {@code
+   * com.apple.quicktime.creationdate} (local time with an explicit offset) and {@code
+   * creation_time} (the mvhd atom, which ffmpeg emits already normalised to UTC). The Apple tag is
+   * preferred — it is the value the Photos app shows — but both resolve to the same instant, so the
+   * mvhd fallback is equally usable for sorting.
    */
   public CaptureDate extractVideoCreationDate(Path videoFile) {
     List<String> cmd =
@@ -191,8 +191,8 @@ public class FfmpegService {
   }
 
   /**
-   * Turns ffprobe's {@code default=noprint_wrappers=1} output into a tag map. Each line is
-   * {@code TAG:key=value}; anything else (blank lines, a stray section wrapper) is skipped.
+   * Turns ffprobe's {@code default=noprint_wrappers=1} output into a tag map. Each line is {@code
+   * TAG:key=value}; anything else (blank lines, a stray section wrapper) is skipped.
    */
   static Map<String, String> parseFormatTags(String output) {
     Map<String, String> tags = new LinkedHashMap<>();
@@ -212,9 +212,9 @@ public class FfmpegService {
 
   /**
    * Parses the timestamp forms ffprobe emits. {@code Instant.parse} alone is not enough: it rejects
-   * the colon-less offset Apple writes ({@code 2026-08-17T14:23:11+0200}), and a bare
-   * {@code DateTimeParseException} there would have silently dropped the date. A value with no zone
-   * at all is treated as UTC, which is what the mvhd atom is defined to hold.
+   * the colon-less offset Apple writes ({@code 2026-08-17T14:23:11+0200}), and a bare {@code
+   * DateTimeParseException} there would have silently dropped the date. A value with no zone at all
+   * is treated as UTC, which is what the mvhd atom is defined to hold.
    *
    * @return the instant, or null if the value is absent or in no recognised form
    */

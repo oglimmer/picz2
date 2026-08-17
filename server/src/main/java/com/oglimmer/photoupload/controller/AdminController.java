@@ -2,8 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.entity.JobStatus;
 import com.oglimmer.photoupload.model.AdminOperationResponse;
 import com.oglimmer.photoupload.model.DeadLetterJobResponse;
@@ -12,6 +10,7 @@ import com.oglimmer.photoupload.service.FileStorageService;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,8 +30,8 @@ public class AdminController {
   private final ProcessingJobRepository processingJobRepository;
 
   /**
-   * Finds S3 objects with no corresponding DB row and deletes them. Always run with
-   * {@code dryRun=true} first to review what would be removed before committing.
+   * Finds S3 objects with no corresponding DB row and deletes them. Always run with {@code
+   * dryRun=true} first to review what would be removed before committing.
    */
   @PostMapping("/purge-orphaned-s3")
   public ResponseEntity<AdminOperationResponse> purgeOrphanedS3(
@@ -43,7 +42,8 @@ public class AdminController {
     AdminOperationResponse response =
         AdminOperationResponse.builder()
             .success(true)
-            .message(dryRun ? "Dry run complete — no objects deleted" : "Orphaned S3 objects purged")
+            .message(
+                dryRun ? "Dry run complete — no objects deleted" : "Orphaned S3 objects purged")
             .stats(result)
             .build();
 
@@ -51,9 +51,9 @@ public class AdminController {
   }
 
   /**
-   * Phase 4.5 follow-up — enqueue {@code REGEN_THUMBNAILS} jobs for image-typed DONE rows that
-   * are missing one or more derivatives. Idempotent: assets already queued/processing are skipped
-   * by the repository query, so repeat clicks just no-op.
+   * Phase 4.5 follow-up — enqueue {@code REGEN_THUMBNAILS} jobs for image-typed DONE rows that are
+   * missing one or more derivatives. Idempotent: assets already queued/processing are skipped by
+   * the repository query, so repeat clicks just no-op.
    *
    * <p>{@code maxRows} caps a single batch (default 500, hard upper bound 5000). Caller pages by
    * re-invoking until {@code enqueued == 0}.

@@ -27,16 +27,11 @@ class JobMetricsConfigTest {
     config.registerGauges();
 
     for (JobStatus status : JobStatus.values()) {
-      Gauge g =
-          registry
-              .find(JobMetricsConfig.METRIC_NAME)
-              .tag("status", status.name())
-              .gauge();
+      Gauge g = registry.find(JobMetricsConfig.METRIC_NAME).tag("status", status.name()).gauge();
       assertThat(g).as("gauge for status %s", status).isNotNull();
     }
 
-    Gauge queued =
-        registry.find(JobMetricsConfig.METRIC_NAME).tag("status", "QUEUED").gauge();
+    Gauge queued = registry.find(JobMetricsConfig.METRIC_NAME).tag("status", "QUEUED").gauge();
     Gauge deadLetter =
         registry.find(JobMetricsConfig.METRIC_NAME).tag("status", "DEAD_LETTER").gauge();
     assertThat(queued.value()).isEqualTo(7.0);

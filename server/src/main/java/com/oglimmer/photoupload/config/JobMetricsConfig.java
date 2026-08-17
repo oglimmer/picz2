@@ -13,8 +13,8 @@ import org.springframework.context.annotation.Configuration;
  * Registers one Micrometer {@link Gauge} per {@link JobStatus} value, all sharing the metric name
  * {@code photoupload.jobs.queued} and tagged by {@code status}. Each gauge is pull-driven: when
  * Prometheus scrapes {@code /actuator/prometheus}, Micrometer asks the supplier for the current
- * value, which reads the cached snapshot in {@link JobQueueDepthService}. There's no per-scrape
- * DB cost.
+ * value, which reads the cached snapshot in {@link JobQueueDepthService}. There's no per-scrape DB
+ * cost.
  */
 @Configuration
 @RequiredArgsConstructor

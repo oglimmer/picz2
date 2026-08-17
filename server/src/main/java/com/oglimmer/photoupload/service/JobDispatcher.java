@@ -67,8 +67,7 @@ public class JobDispatcher {
   }
 
   private void pollOnce() {
-    ProcessingJob job =
-        jobLeaseService.leaseNext(workerId, jobsProperties.getLease().getSeconds());
+    ProcessingJob job = jobLeaseService.leaseNext(workerId, jobsProperties.getLease().getSeconds());
     if (job == null) {
       return;
     }
@@ -86,14 +85,12 @@ public class JobDispatcher {
         case PROCESS -> fileProcessingService.processFile(job.getAssetId());
         case ROTATE_LEFT -> fileProcessingService.rotateAndReprocess(job.getAssetId());
         case REGEN_THUMBNAILS -> fileProcessingService.regenerateThumbnails(job.getAssetId());
-        case EXTRACT_CAPTURE_DATE ->
-            fileProcessingService.reextractCaptureDate(job.getAssetId());
+        case EXTRACT_CAPTURE_DATE -> fileProcessingService.reextractCaptureDate(job.getAssetId());
       }
     } catch (Exception e) {
       // The service-layer methods catch their own exceptions today, but treat any leak
       // defensively so the lease is released cleanly.
-      log.error(
-          "{} threw for asset {}: {}", jobType, job.getAssetId(), e.getMessage(), e);
+      log.error("{} threw for asset {}: {}", jobType, job.getAssetId(), e.getMessage(), e);
       jobLeaseService.markFailedOrDeadLetter(job.getId(), e.toString());
       return;
     }

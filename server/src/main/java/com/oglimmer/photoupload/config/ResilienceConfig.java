@@ -16,9 +16,9 @@ import org.springframework.context.annotation.Configuration;
  * {@link com.oglimmer.photoupload.service.ObjectStorageService}, plus the Micrometer binding so
  * breaker state and call counts surface on {@code /actuator/prometheus}.
  *
- * <p>Defaults intentionally trip aggressively — a stalled MinIO that pins Tomcat threads is a
- * worse failure mode than a couple of false-positive trips on a slow but recovering cluster. The
- * api pod's readiness probe ({@code MinioHealthIndicator}) takes it out of the Service while the
+ * <p>Defaults intentionally trip aggressively — a stalled MinIO that pins Tomcat threads is a worse
+ * failure mode than a couple of false-positive trips on a slow but recovering cluster. The api
+ * pod's readiness probe ({@code MinioHealthIndicator}) takes it out of the Service while the
  * breaker is OPEN so retries route to a healthy replica or queue at the LB.
  */
 @Configuration

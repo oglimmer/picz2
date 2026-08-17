@@ -107,9 +107,9 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   List<String> findAllStoredPaths();
 
   /**
-   * Of the given file paths, return those still referenced by rows outside the named album.
-   * Used during album deletion to skip physical-storage cleanup for files cross-album-shared via
-   * {@code duplicateAlbum} (which copies metadata rows but reuses the same storage paths).
+   * Of the given file paths, return those still referenced by rows outside the named album. Used
+   * during album deletion to skip physical-storage cleanup for files cross-album-shared via {@code
+   * duplicateAlbum} (which copies metadata rows but reuses the same storage paths).
    */
   @Query(
       "SELECT DISTINCT f.filePath FROM FileMetadata f "
@@ -128,16 +128,14 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
 
   /**
    * Phase 6 / Gap 4-finish — rows eligible for original-purge by the nightly retention CronJob.
-   * Conditions:
-   *   - processing finished cleanly ({@code processing_status='DONE'}), so the worker did produce
-   *     the derivatives we intend to keep serving from;
-   *   - row is older than the cutoff (operator-configured retention window);
-   *   - {@code file_path} is non-null (i.e. not already purged) AND points at an S3 originals key
-   *     (legacy local-disk paths are out of scope — Gap 8 unmounted the PVC for the api/worker
-   *     pods, but the retention runner deliberately does not delete bytes off any local disk);
-   *   - {@code thumbnail_path IS NOT NULL} as a defensive sanity check that *some* derivative
-   *     exists. {@code DONE} rows always have this in practice, but this protects against an
-   *     anomalous row that was force-marked DONE without derivatives.
+   * Conditions: - processing finished cleanly ({@code processing_status='DONE'}), so the worker did
+   * produce the derivatives we intend to keep serving from; - row is older than the cutoff
+   * (operator-configured retention window); - {@code file_path} is non-null (i.e. not already
+   * purged) AND points at an S3 originals key (legacy local-disk paths are out of scope — Gap 8
+   * unmounted the PVC for the api/worker pods, but the retention runner deliberately does not
+   * delete bytes off any local disk); - {@code thumbnail_path IS NOT NULL} as a defensive sanity
+   * check that *some* derivative exists. {@code DONE} rows always have this in practice, but this
+   * protects against an anomalous row that was force-marked DONE without derivatives.
    *
    * <p>{@code LIMIT :maxRows} keeps a single CronJob firing bounded if the cutoff is misconfigured.
    */
@@ -161,8 +159,8 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
    * over the {@code originals/} prefix to find keys that have no row pointing at them (post-finish
    * hook crash, multipart insert failure after PUT, etc.).
    *
-   * <p>Projection-only; no entity hydration. Returning a {@code List} is fine — even at 100k+
-   * rows the result is a few MiB of short strings.
+   * <p>Projection-only; no entity hydration. Returning a {@code List} is fine — even at 100k+ rows
+   * the result is a few MiB of short strings.
    */
   @Query(
       "SELECT f.filePath FROM FileMetadata f "
@@ -175,12 +173,12 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
    * stranded asset (e.g. an old vipsthumbnail OOM that produced two of three sizes before
    * markFailed promoted the row to DONE-with-gaps).
    *
-   * <p>Excludes assets that already have a {@code QUEUED}/{@code PROCESSING} job — repeat clicks
-   * of the endpoint don't double-enqueue.
+   * <p>Excludes assets that already have a {@code QUEUED}/{@code PROCESSING} job — repeat clicks of
+   * the endpoint don't double-enqueue.
    *
-   * <p>Returns IDs only (projection); the worker re-fetches the full entity inside its own TX.
-   * Cap is applied at the SQL layer so a misconfigured caller can't load tens of thousands of
-   * rows into the api pod's heap.
+   * <p>Returns IDs only (projection); the worker re-fetches the full entity inside its own TX. Cap
+   * is applied at the SQL layer so a misconfigured caller can't load tens of thousands of rows into
+   * the api pod's heap.
    */
   @Query(
       value =
@@ -200,17 +198,17 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   /**
    * Video-typed DONE rows that never produced a web-playable MP4. The transcode failure path in
    * {@code FileProcessingService} only logs a warning — the job still completes DONE with
-   * thumbnails and EXIF — so these rows are invisible unless you go looking for a null
-   * {@code transcoded_video_path}.
+   * thumbnails and EXIF — so these rows are invisible unless you go looking for a null {@code
+   * transcoded_video_path}.
    *
    * <p>Introduced after a run where every 10-bit HDR clip failed to encode: x264's {@code main}
    * profile is 8-bit only and the command specified no {@code -pix_fmt}, so ffmpeg picked
    * yuv420p10le to match the source and the encoder refused it. 26 assets were stranded before
    * anyone noticed.
    *
-   * <p>Self-correcting: a successful re-encode populates {@code transcoded_video_path}, which
-   * drops the row out of this set. Same {@code NOT EXISTS} guard as the thumbnail sweep so repeat
-   * calls don't double-enqueue, and the same SQL-level cap.
+   * <p>Self-correcting: a successful re-encode populates {@code transcoded_video_path}, which drops
+   * the row out of this set. Same {@code NOT EXISTS} guard as the thumbnail sweep so repeat calls
+   * don't double-enqueue, and the same SQL-level cap.
    */
   @Query(
       value =
@@ -236,9 +234,9 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
    * and no derivative carries it, so retention-purged rows can never be fixed and are excluded
    * rather than enqueued and failed.
    *
-   * <p>Self-shrinking — the worker always writes a source (including {@code NONE} when the file
-   * has no readable timestamp), so a row leaves this set after one pass. Same {@code NOT EXISTS}
-   * guard and SQL-level cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
+   * <p>Self-shrinking — the worker always writes a source (including {@code NONE} when the file has
+   * no readable timestamp), so a row leaves this set after one pass. Same {@code NOT EXISTS} guard
+   * and SQL-level cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
    */
   @Query(
       value =

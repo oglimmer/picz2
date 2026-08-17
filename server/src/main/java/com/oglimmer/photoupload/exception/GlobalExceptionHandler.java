@@ -34,8 +34,7 @@ public class GlobalExceptionHandler {
     log.info("Resource gone: {}", ex.getMessage());
 
     ErrorResponse error =
-        ErrorResponse.of(
-            HttpStatus.GONE.value(), "Gone", ex.getMessage(), request.getRequestURI());
+        ErrorResponse.of(HttpStatus.GONE.value(), "Gone", ex.getMessage(), request.getRequestURI());
 
     return ResponseEntity.status(HttpStatus.GONE).body(error);
   }

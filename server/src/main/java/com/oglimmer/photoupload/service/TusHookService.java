@@ -33,15 +33,14 @@ import org.springframework.stereotype.Service;
  *   <li><b>D28</b> — pre-create rejects 503 with {@code Retry-After} when the {@code
  *       processing_jobs} backlog is above the configured threshold; tusd never starts buffering
  *       bytes for a doomed upload.
- *   <li><b>D30</b> — pre-create rejects 409 when the supplied {@code contentId} already maps to
- *       a row for the same user.
+ *   <li><b>D30</b> — pre-create rejects 409 when the supplied {@code contentId} already maps to a
+ *       row for the same user.
  * </ul>
  *
  * <p>Every method returns a {@link TusHookResponse}. The controller wraps this in HTTP 200 + JSON
  * body — tusd JSON-decodes the body, and {@code HTTPResponse.StatusCode} inside it is what tusd
- * surfaces to the actual client. Returning a non-2xx HTTP status or an empty body would make
- * tusd log "failed to parse hook response" and propagate 500 to the client — that was the R1
- * deploy bug.
+ * surfaces to the actual client. Returning a non-2xx HTTP status or an empty body would make tusd
+ * log "failed to parse hook response" and propagate 500 to the client — that was the R1 deploy bug.
  *
  * <p>post-finish is intentionally written to never reject: any error after tusd itself succeeded
  * leaves at most an orphan {@code originals/...} object that the operator orphan-detection
@@ -186,8 +185,8 @@ public class TusHookService {
   /**
    * Returns the S3 object key tusd actually wrote to. Prefers {@code Storage.Key} from the hook
    * payload — that's tusd's source of truth and is unaffected by the {@code <objectName>+
-   * <multipartUploadId>} format of {@code Upload.ID}. Falls back to the splitting heuristic
-   * only if {@code Storage} is missing (older tusd, or a hook event we don't fully understand).
+   * <multipartUploadId>} format of {@code Upload.ID}. Falls back to the splitting heuristic only if
+   * {@code Storage} is missing (older tusd, or a hook event we don't fully understand).
    */
   private static String resolveTusKey(TusHookRequest.TusUpload upload) {
     if (upload.storage() != null) {
@@ -227,8 +226,7 @@ public class TusHookService {
     }
     String username = authValue.substring(0, colon);
     String password = authValue.substring(colon + 1);
-    authenticationManager.authenticate(
-        new UsernamePasswordAuthenticationToken(username, password));
+    authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(username, password));
     return userRepository
         .findByEmail(username)
         .orElseThrow(() -> new BadCredentialsException("user not found: " + username));

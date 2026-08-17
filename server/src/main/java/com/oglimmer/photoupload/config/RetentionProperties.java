@@ -36,24 +36,27 @@ public class RetentionProperties {
 
   /**
    * Phase 5 follow-up — incomplete TUS uploads under the {@code tus-uploads/} prefix that have been
-   * sitting longer than this are eligible for deletion. tusd 2.x removed its in-process
-   * {@code -expire-after} flag and the platform-side MinIO is single-drive (lifecycle API
-   * unsupported), so this server-side sweep is the only GC mechanism for abandoned TUS uploads.
-   * Same nightly CronJob as the originals sweep; runs as a second pass after originals.
+   * sitting longer than this are eligible for deletion. tusd 2.x removed its in-process {@code
+   * -expire-after} flag and the platform-side MinIO is single-drive (lifecycle API unsupported), so
+   * this server-side sweep is the only GC mechanism for abandoned TUS uploads. Same nightly CronJob
+   * as the originals sweep; runs as a second pass after originals.
    */
   private int tusUploadDays = 7;
 
   /**
-   * Phase 5 follow-up — orphan-detection grace window. An {@code originals/} key whose
-   * {@code LastModified} is older than this *and* has no {@code file_metadata.file_path} row
-   * pointing at it is treated as an orphan and deleted. The grace covers two race windows:
+   * Phase 5 follow-up — orphan-detection grace window. An {@code originals/} key whose {@code
+   * LastModified} is older than this *and* has no {@code file_metadata.file_path} row pointing at
+   * it is treated as an orphan and deleted. The grace covers two race windows:
+   *
    * <ul>
-   *   <li>TUS post-finish hook between {@code S3 COPY} and {@code file_metadata INSERT}
-   *       (sub-second normally, ~1s worst-case observed).</li>
-   *   <li>Multipart upload between {@code S3 PUT} and the row-insert TX commit (same shape).</li>
+   *   <li>TUS post-finish hook between {@code S3 COPY} and {@code file_metadata INSERT} (sub-second
+   *       normally, ~1s worst-case observed).
+   *   <li>Multipart upload between {@code S3 PUT} and the row-insert TX commit (same shape).
    * </ul>
+   *
    * Default is hours rather than days so a real orphan from a crashed hook doesn't sit around
-   * occupying storage for a week, but it's wide enough that no in-flight upload can be misclassified.
+   * occupying storage for a week, but it's wide enough that no in-flight upload can be
+   * misclassified.
    */
   private int orphanGraceHours = 24;
 }

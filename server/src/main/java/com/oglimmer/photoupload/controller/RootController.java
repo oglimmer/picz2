@@ -2,11 +2,10 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.health.actuate.endpoint.HealthDescriptor;
 import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 

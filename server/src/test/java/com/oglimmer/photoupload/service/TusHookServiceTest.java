@@ -71,8 +71,7 @@ class TusHookServiceTest {
 
   @Test
   void preCreateRejectsBadCredentials() {
-    when(authenticationManager.authenticate(any()))
-        .thenThrow(new BadCredentialsException("nope"));
+    when(authenticationManager.authenticate(any())).thenThrow(new BadCredentialsException("nope"));
 
     TusHookResponse resp =
         service.handlePreCreate(preCreate(meta(Map.of("auth", "alice@example.com:wrong"))));
@@ -177,7 +176,8 @@ class TusHookServiceTest {
 
     assertFalse(resp.rejectUpload());
     verify(fileStorageService, times(1))
-        .registerTusUpload(any(), anyLong(), anyString(), anyString(), anyLong(), anyString(), anyString());
+        .registerTusUpload(
+            any(), anyLong(), anyString(), anyString(), anyLong(), anyString(), anyString());
   }
 
   @Test
@@ -188,8 +188,7 @@ class TusHookServiceTest {
 
     FileMetadata existing = new FileMetadata();
     existing.setId(55L);
-    when(metadataRepository.findByContentIdAndUserId("fresh", 42L))
-        .thenReturn(List.of(existing));
+    when(metadataRepository.findByContentIdAndUserId("fresh", 42L)).thenReturn(List.of(existing));
 
     TusHookResponse resp =
         service.handlePostFinish(
@@ -209,8 +208,7 @@ class TusHookServiceTest {
 
   @Test
   void postFinishSwallowsAuthFailure() {
-    when(authenticationManager.authenticate(any()))
-        .thenThrow(new BadCredentialsException("nope"));
+    when(authenticationManager.authenticate(any())).thenThrow(new BadCredentialsException("nope"));
 
     TusHookResponse resp =
         service.handlePostFinish(

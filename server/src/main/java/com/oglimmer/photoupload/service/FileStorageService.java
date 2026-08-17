@@ -1,10 +1,8 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
@@ -53,6 +51,7 @@ import java.util.UUID;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -263,9 +262,7 @@ public class FileStorageService {
     // stream with a non-resettable file descriptor, so a second open can deliver fewer bytes
     // than file.getSize() declares — the AWS SDK then throws IllegalStateException.
     Path tempFile =
-        this.fileStorageLocation
-            .resolve(".multipart-tmp")
-            .resolve("." + newFilename + ".tmp");
+        this.fileStorageLocation.resolve(".multipart-tmp").resolve("." + newFilename + ".tmp");
     try (InputStream in = file.getInputStream()) {
       Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
     }
@@ -383,24 +380,24 @@ public class FileStorageService {
 
   /**
    * Phase 5 — TUS resumable upload landing path. Bytes are already in MinIO at {@code tusS3Key}
-   * (where tusd put them as a multipart upload). We rename them server-side to the canonical
-   * {@code originals/{stored_filename}} convention via S3 COPY+DELETE — see D24/D25 — then
-   * insert the {@code file_metadata} row and enqueue a PROCESS job in the same TX, exactly like
-   * {@link #storeFile}.
+   * (where tusd put them as a multipart upload). We rename them server-side to the canonical {@code
+   * originals/{stored_filename}} convention via S3 COPY+DELETE — see D24/D25 — then insert the
+   * {@code file_metadata} row and enqueue a PROCESS job in the same TX, exactly like {@link
+   * #storeFile}.
    *
    * <p>The hook controller is the only caller. The user has already been authenticated upstream
    * from {@code Upload-Metadata.auth}; we accept it as a plain {@link User} argument rather than
    * pulling it from {@link com.oglimmer.photoupload.security.UserContext} (no Spring Security
    * context exists for tusd→api hook calls).
    *
-   * <p>Idempotency: a duplicate {@code contentId} for the same user causes pre-create to reject
-   * 409 before tusd ever begins the upload, so this method ordinarily runs at most once per
-   * upload. If post-finish fires twice (network retry), the caller short-circuits on the
-   * existing row before invoking us — see {@code TusHookService.handlePostFinish}.
+   * <p>Idempotency: a duplicate {@code contentId} for the same user causes pre-create to reject 409
+   * before tusd ever begins the upload, so this method ordinarily runs at most once per upload. If
+   * post-finish fires twice (network retry), the caller short-circuits on the existing row before
+   * invoking us — see {@code TusHookService.handlePostFinish}.
    *
    * <p>The COPY is server-side in MinIO (no JVM bytes); the cleanup of {@code tusS3Key} and its
-   * companion {@code .info} object is best-effort — a stale tus-uploads/{uuid} object is mopped
-   * up by tusd's own {@code -expire-after} sweep.
+   * companion {@code .info} object is best-effort — a stale tus-uploads/{uuid} object is mopped up
+   * by tusd's own {@code -expire-after} sweep.
    */
   public FileInfo registerTusUpload(
       User currentUser,
@@ -475,8 +472,7 @@ public class FileStorageService {
     try {
       storage.deleteKeys(java.util.List.of(tusS3Key, tusS3Key + ".info"));
     } catch (Exception e) {
-      log.warn(
-          "TUS cleanup failed for {} ({}); orphan job will mop up", tusS3Key, e.toString());
+      log.warn("TUS cleanup failed for {} ({}); orphan job will mop up", tusS3Key, e.toString());
     }
 
     log.info(
@@ -743,24 +739,24 @@ public class FileStorageService {
   }
 
   /**
-   * Best-effort storage cleanup for every file in an album. Used by
-   * {@link AlbumService#deleteAlbum(Long)} so a 5000-photo album doesn't fan out into 25 000
-   * synchronous S3 calls per request. Behaviour matches the per-file path:
+   * Best-effort storage cleanup for every file in an album. Used by {@link
+   * AlbumService#deleteAlbum(Long)} so a 5000-photo album doesn't fan out into 25 000 synchronous
+   * S3 calls per request. Behaviour matches the per-file path:
    *
    * <ul>
    *   <li>Files whose {@code file_path} is also referenced by rows in another album are skipped
-   *       entirely (cross-album dedupe via {@code duplicateAlbum} shares all five storage paths
-   *       as a unit).
-   *   <li>S3-backed paths are batched via {@link ObjectStorageService#deleteKeys(Collection)}
-   *       (1000 keys per call).
-   *   <li>Local paths are deleted via {@link Files#deleteIfExists(java.nio.file.Path)} +
-   *       {@link LocalFileCleanupService}, swallowing IO errors so a missing file does not
-   *       abort the whole album.
+   *       entirely (cross-album dedupe via {@code duplicateAlbum} shares all five storage paths as
+   *       a unit).
+   *   <li>S3-backed paths are batched via {@link ObjectStorageService#deleteKeys(Collection)} (1000
+   *       keys per call).
+   *   <li>Local paths are deleted via {@link Files#deleteIfExists(java.nio.file.Path)} + {@link
+   *       LocalFileCleanupService}, swallowing IO errors so a missing file does not abort the whole
+   *       album.
    * </ul>
    *
    * <p>Does NOT touch the database — caller is responsible for removing the metadata rows after
-   * this returns. Any S3 keys we fail to delete here will be picked up by
-   * {@link #purgeOrphanedS3Objects(boolean)} on its next run.
+   * this returns. Any S3 keys we fail to delete here will be picked up by {@link
+   * #purgeOrphanedS3Objects(boolean)} on its next run.
    */
   public void bulkDeleteAlbumStorage(Long albumId, List<FileMetadata> files) {
     if (files == null || files.isEmpty()) {
@@ -1294,10 +1290,10 @@ public class FileStorageService {
   }
 
   /**
-   * Pick the best available derivative when the original is gone. Preference order:
-   * large → medium → thumbnail (for images, plus same fallback for video stills); transcoded video
-   * is preferred over the image still for videos. Returns null if the row truly has no usable
-   * derivative — caller should 410.
+   * Pick the best available derivative when the original is gone. Preference order: large → medium
+   * → thumbnail (for images, plus same fallback for video stills); transcoded video is preferred
+   * over the image still for videos. Returns null if the row truly has no usable derivative —
+   * caller should 410.
    */
   private String pickLargestDerivative(FileMetadata metadata) {
     boolean isVideo = metadata.getMimeType() != null && metadata.getMimeType().startsWith("video/");
@@ -1388,13 +1384,13 @@ public class FileStorageService {
 
   /**
    * Enqueue a rotate-90-CCW job for the given asset (Phase 4.5, D17). The actual ImageMagick work
-   * runs on the worker pod via {@link FileProcessingService#rotateAndReprocess(Long)} — the api
-   * pod no longer has the thumbnailer beans. Returns immediately so the controller can answer
-   * 202 Accepted; the UI polls {@code GET /api/assets/{id}/status} until DONE.
+   * runs on the worker pod via {@link FileProcessingService#rotateAndReprocess(Long)} — the api pod
+   * no longer has the thumbnailer beans. Returns immediately so the controller can answer 202
+   * Accepted; the UI polls {@code GET /api/assets/{id}/status} until DONE.
    *
    * <p>Same-TX guarantee: the {@code FileMetadata} status flip and the {@code processing_jobs} row
-   * insert commit together, so the dispatcher never sees a queued job for an asset whose row
-   * still says DONE (which would race the gallery's read-after-rotate).
+   * insert commit together, so the dispatcher never sees a queued job for an asset whose row still
+   * says DONE (which would race the gallery's read-after-rotate).
    */
   public void rotateImageLeft(Long fileId) {
     User currentUser = userContext.getCurrentUser();
@@ -1455,9 +1451,9 @@ public class FileStorageService {
    * stranded by an old processing failure or a vips-output gap that got past the markFailed
    * happy-path.
    *
-   * <p>Single API-side TX: status flip + job insert per row, so a partial crash leaves no row in
-   * an "I claimed it but never queued" state. Repository query already excludes assets with an
-   * active job, so re-running the endpoint converges idempotently.
+   * <p>Single API-side TX: status flip + job insert per row, so a partial crash leaves no row in an
+   * "I claimed it but never queued" state. Repository query already excludes assets with an active
+   * job, so re-running the endpoint converges idempotently.
    *
    * <p>{@code maxRows} caps the batch size — caller pages by re-invoking. Default upstream is 500
    * which keeps any single tick of the worker's drain loop bounded too.

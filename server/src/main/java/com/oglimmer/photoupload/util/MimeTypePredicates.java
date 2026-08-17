@@ -2,9 +2,9 @@
 package com.oglimmer.photoupload.util;
 
 /**
- * Pure mime-type classifiers used by both api and worker profiles. Lives outside
- * {@code ThumbnailService} so the api pod can decide image-vs-video without pulling
- * Vips/Heic/Ffmpeg beans into the context (those are worker-only).
+ * Pure mime-type classifiers used by both api and worker profiles. Lives outside {@code
+ * ThumbnailService} so the api pod can decide image-vs-video without pulling Vips/Heic/Ffmpeg beans
+ * into the context (those are worker-only).
  */
 public final class MimeTypePredicates {
 

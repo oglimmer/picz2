@@ -69,8 +69,7 @@ public class FileProcessingService {
     String storedFilename = metadata.getStoredFilename();
     String mimeType = metadata.getMimeType();
     String extension = getFileExtension(storedFilename);
-    boolean s3Backed =
-        objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
+    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
 
     Path workdir = null;
     Path currentFile;
@@ -79,7 +78,9 @@ public class FileProcessingService {
         // Per-job scratch dir on the PVC. Wiped in the finally block so we never accumulate.
         workdir =
             Files.createDirectories(
-                fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+                fileStorageLocation
+                    .resolve(PROCESSING_TMP)
+                    .resolve(String.valueOf(fileMetadataId)));
         currentFile = workdir.resolve(storedFilename);
         objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
       } else {
@@ -131,7 +132,8 @@ public class FileProcessingService {
           try {
             metadata.setFileSize(Files.size(convertedLocation));
           } catch (IOException sizeError) {
-            log.warn("Could not stat converted JPEG {}: {}", convertedLocation, sizeError.toString());
+            log.warn(
+                "Could not stat converted JPEG {}: {}", convertedLocation, sizeError.toString());
           }
         } else {
           log.error(
@@ -146,8 +148,7 @@ public class FileProcessingService {
         if (thumbnails[0] == null && thumbnails[1] == null && thumbnails[2] == null) {
           // All sizes failed — bail out so we don't mark the asset DONE with no derivatives.
           // The catch block below routes this through markFailed.
-          throw new StorageException(
-              "Thumbnail generation produced no output for " + originalName);
+          throw new StorageException("Thumbnail generation produced no output for " + originalName);
         }
         if (thumbnails[0] != null) {
           metadata.setThumbnailPath(
@@ -244,12 +245,12 @@ public class FileProcessingService {
    * PROCESSING, do all heavy work locally on the worker pod, then commit the result in one short
    * TX. Bytes flow: download original from S3 → ImageMagick rotate-90-CCW → PUT same key →
    * regenerate all derivatives → PUT derivative keys (overwrite). Metadata flips: {@code rotation}
-   * += 90 mod 360, swap {@code width}/{@code height}, regen {@code publicToken} (so the gallery
-   * URL changes and the browser cache misses), update {@code fileSize}.
+   * += 90 mod 360, swap {@code width}/{@code height}, regen {@code publicToken} (so the gallery URL
+   * changes and the browser cache misses), update {@code fileSize}.
    *
-   * <p>Pre-conditions enforced by the api pod before enqueue: image MIME type and S3-backed
-   * {@code filePath}. We re-check defensively here so a stale or hand-crafted job row fails with a
-   * clear error instead of corrupting state.
+   * <p>Pre-conditions enforced by the api pod before enqueue: image MIME type and S3-backed {@code
+   * filePath}. We re-check defensively here so a stale or hand-crafted job row fails with a clear
+   * error instead of corrupting state.
    */
   public void rotateAndReprocess(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
@@ -330,8 +331,7 @@ public class FileProcessingService {
         try {
           metadata.setFileSize(Files.size(localOriginal));
         } catch (IOException sizeError) {
-          log.warn(
-              "Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
+          log.warn("Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
         }
       }
 
@@ -397,17 +397,17 @@ public class FileProcessingService {
   }
 
   /**
-   * Phase 4.5 follow-up — regenerate the three image derivatives (thumbnail / medium / large)
-   * for an asset that's missing one or more, or whose derivatives the operator wants rebuilt
-   * (e.g. after a vips upgrade). Same mechanics as {@link #rotateAndReprocess(Long)} minus the
-   * rotate step: lease into PROCESSING, pick the best S3-backed source via
-   * {@link #pickRotationSource(FileMetadata)} (works on retention-purged assets too), regenerate
-   * locally, PUT each derivative to its deterministic key, refresh {@code publicToken} so viewer
-   * caches miss, transition back to DONE.
+   * Phase 4.5 follow-up — regenerate the three image derivatives (thumbnail / medium / large) for
+   * an asset that's missing one or more, or whose derivatives the operator wants rebuilt (e.g.
+   * after a vips upgrade). Same mechanics as {@link #rotateAndReprocess(Long)} minus the rotate
+   * step: lease into PROCESSING, pick the best S3-backed source via {@link
+   * #pickRotationSource(FileMetadata)} (works on retention-purged assets too), regenerate locally,
+   * PUT each derivative to its deterministic key, refresh {@code publicToken} so viewer caches
+   * miss, transition back to DONE.
    *
-   * <p>Does <em>not</em> touch {@code rotation}, {@code width}/{@code height}, {@code fileSize},
-   * or the original-key bytes. The original is never written back even when present — we read,
-   * we generate, that's it.
+   * <p>Does <em>not</em> touch {@code rotation}, {@code width}/{@code height}, {@code fileSize}, or
+   * the original-key bytes. The original is never written back even when present — we read, we
+   * generate, that's it.
    */
   public void regenerateThumbnails(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
@@ -579,7 +579,9 @@ public class FileProcessingService {
       if (s3Backed) {
         workdir =
             Files.createDirectories(
-                fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+                fileStorageLocation
+                    .resolve(PROCESSING_TMP)
+                    .resolve(String.valueOf(fileMetadataId)));
         currentFile = workdir.resolve(metadata.getStoredFilename());
         objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
       } else {
@@ -621,8 +623,8 @@ public class FileProcessingService {
   }
 
   /**
-   * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file
-   * to S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
+   * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file to
+   * S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
    * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
    * fall back to storing the derivative on the PVC and returning its relative path.
    */
@@ -641,9 +643,9 @@ public class FileProcessingService {
   }
 
   /**
-   * Pick the best S3-backed source for a rotation. Original first; if retention has nulled
-   * {@code file_path} we step down through the derivative ladder. Returns null if no S3-backed
-   * source exists at all (api-side guard should have rejected before enqueue, but defensive).
+   * Pick the best S3-backed source for a rotation. Original first; if retention has nulled {@code
+   * file_path} we step down through the derivative ladder. Returns null if no S3-backed source
+   * exists at all (api-side guard should have rejected before enqueue, but defensive).
    */
   private String pickRotationSource(FileMetadata metadata) {
     if (StoragePaths.isS3Key(metadata.getFilePath())) {

@@ -2,14 +2,13 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.AssetProcessingStatusResponse;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,18 +39,17 @@ public class AssetStatusController {
   }
 
   /**
-   * Phase 5 follow-up — resolve the server-side asset id from the client's contentId. TUS
-   * PATCH responses don't carry the asset id (only TUS protocol headers), so iOS needs this
-   * lookup to start {@code ProcessingStatusPoller} for a freshly-uploaded TUS file.
+   * Phase 5 follow-up — resolve the server-side asset id from the client's contentId. TUS PATCH
+   * responses don't carry the asset id (only TUS protocol headers), so iOS needs this lookup to
+   * start {@code ProcessingStatusPoller} for a freshly-uploaded TUS file.
    *
-   * <p>Scoped to {@code (albumId, contentId, currentUser)} so the same source asset uploaded
-   * to two albums resolves deterministically. Returns the same shape as {@link
-   * #getStatus(Long)} so the caller can immediately use the result for polling without a
-   * second round-trip.
+   * <p>Scoped to {@code (albumId, contentId, currentUser)} so the same source asset uploaded to two
+   * albums resolves deterministically. Returns the same shape as {@link #getStatus(Long)} so the
+   * caller can immediately use the result for polling without a second round-trip.
    *
-   * <p>404 means the row hasn't appeared yet — most likely the post-finish hook is still
-   * running (the race documented in the bug-fix notes for Phase 5b). Caller is expected to
-   * retry briefly with backoff.
+   * <p>404 means the row hasn't appeared yet — most likely the post-finish hook is still running
+   * (the race documented in the bug-fix notes for Phase 5b). Caller is expected to retry briefly
+   * with backoff.
    */
   @GetMapping("/by-content")
   @Transactional(readOnly = true)

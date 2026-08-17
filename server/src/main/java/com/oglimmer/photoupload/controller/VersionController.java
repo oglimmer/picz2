@@ -2,12 +2,11 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.model.ApiResponse;
 import com.oglimmer.photoupload.model.VersionInfo;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.boot.info.GitProperties;
+import org.springframework.context.annotation.Profile;
 import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

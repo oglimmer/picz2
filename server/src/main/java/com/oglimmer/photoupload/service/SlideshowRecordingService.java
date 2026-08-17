@@ -1,10 +1,8 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.SlideshowRecording;
@@ -31,6 +29,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -64,16 +63,15 @@ public class SlideshowRecordingService {
       // (until the helm chart drops the PVC mount).
       Files.createDirectories(recordingsDir);
       Files.createDirectories(uploadDir.resolve(AUDIO_TMP));
-      log.info(
-          "Recordings directory: {} (S3 mode: {})", recordingsDir, objectStorage.isPresent());
+      log.info("Recordings directory: {} (S3 mode: {})", recordingsDir, objectStorage.isPresent());
     } catch (Exception ex) {
       throw new RuntimeException("Could not create recordings directory!", ex);
     }
   }
 
   /**
-   * Resolved on demand — keeping it stateless makes unit tests work without invoking
-   * {@link #init()} via Spring's {@code @PostConstruct} machinery.
+   * Resolved on demand — keeping it stateless makes unit tests work without invoking {@link
+   * #init()} via Spring's {@code @PostConstruct} machinery.
    */
   private Path uploadDir() {
     return Paths.get(fileStorageProperties.getUploadDir()).toAbsolutePath().normalize();

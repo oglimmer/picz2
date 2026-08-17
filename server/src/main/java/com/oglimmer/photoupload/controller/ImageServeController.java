@@ -2,8 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import org.springframework.context.annotation.Profile;
-
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
@@ -11,6 +9,7 @@ import com.oglimmer.photoupload.service.FileStorageService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -99,7 +98,8 @@ public class ImageServeController {
         .cacheControl(CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
         .eTag(fileInfo.getChecksum())
         .lastModified(fileInfo.getUploadedAt())
-        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
         .body(resource);
   }
 
@@ -119,7 +119,8 @@ public class ImageServeController {
     ResponseEntity.BodyBuilder builder =
         ResponseEntity.ok()
             .contentType(mediaType)
-            .cacheControl(CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
+            .cacheControl(
+                CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
             .eTag(fileInfo.getChecksum())
             .lastModified(fileInfo.getUploadedAt())
             .header(

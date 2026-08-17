@@ -21,11 +21,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  */
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
-    properties = {
-      "app.apns.enabled=false",
-      "app.mail.enabled=false",
-      "spring.mail.host=localhost"
-    })
+    properties = {"app.apns.enabled=false", "app.mail.enabled=false", "spring.mail.host=localhost"})
 @ActiveProfiles("api")
 @Testcontainers
 @EnabledIfSystemProperty(

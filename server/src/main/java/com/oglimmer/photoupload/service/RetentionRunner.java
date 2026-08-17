@@ -40,8 +40,7 @@ public class RetentionRunner implements CommandLineRunner {
       // Third pass — orphan-detection over originals/. Catches keys left behind when the TUS
       // post-finish hook or multipart insert TX crashed after the bytes were already in MinIO.
       RetentionService.Result orphans = retentionService.runOriginalsOrphanCleanup();
-      exitCode =
-          Math.min(originals.failed() + tusCleanup.failed() + orphans.failed(), 125);
+      exitCode = Math.min(originals.failed() + tusCleanup.failed() + orphans.failed(), 125);
     } catch (Exception e) {
       log.error("Retention sweep aborted with an unhandled exception", e);
       exitCode = 1;

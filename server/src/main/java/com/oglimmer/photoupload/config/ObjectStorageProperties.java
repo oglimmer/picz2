@@ -56,8 +56,8 @@ public class ObjectStorageProperties {
   private int apiCallAttemptTimeoutSeconds = 30;
 
   /**
-   * Total wall-clock budget for a single S3 API call including SDK-internal retries. Kept at 2×
-   * the attempt timeout so one retry is possible before giving up.
+   * Total wall-clock budget for a single S3 API call including SDK-internal retries. Kept at 2× the
+   * attempt timeout so one retry is possible before giving up.
    */
   private int apiCallTimeoutSeconds = 60;
 }

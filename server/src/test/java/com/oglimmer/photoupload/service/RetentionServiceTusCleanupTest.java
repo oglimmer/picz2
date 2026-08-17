@@ -50,7 +50,8 @@ class RetentionServiceTusCleanupTest {
   void emptyPrefixIsNoOp() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class))).thenReturn(List.of());
+    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
+        .thenReturn(List.of());
 
     RetentionService.Result result = service.runTusCleanup();
 
@@ -96,9 +97,9 @@ class RetentionServiceTusCleanupTest {
   void respectsMaxRowsCap() {
     when(properties.getMaxRowsPerRun()).thenReturn(2);
     when(properties.isDryRun()).thenReturn(false);
-    List<String> tenKeys =
-        IntStream.range(0, 10).mapToObj(i -> "tus-uploads/key" + i).toList();
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class))).thenReturn(tenKeys);
+    List<String> tenKeys = IntStream.range(0, 10).mapToObj(i -> "tus-uploads/key" + i).toList();
+    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
+        .thenReturn(tenKeys);
 
     RetentionService.Result result = service.runTusCleanup();
 

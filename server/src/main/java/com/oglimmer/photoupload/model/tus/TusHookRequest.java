@@ -7,14 +7,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * tusd v2 HTTP hook payload. Field names are PascalCase on the wire (tusd convention) so we map
- * via {@link JsonProperty} and let Java keep its camelCase. {@link JsonIgnoreProperties} keeps us
+ * tusd v2 HTTP hook payload. Field names are PascalCase on the wire (tusd convention) so we map via
+ * {@link JsonProperty} and let Java keep its camelCase. {@link JsonIgnoreProperties} keeps us
  * forward-compatible with new fields tusd may add (e.g. {@code Storage}, {@code IsFinal}).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TusHookRequest(
-    @JsonProperty("Type") String type,
-    @JsonProperty("Event") TusEvent event) {
+    @JsonProperty("Type") String type, @JsonProperty("Event") TusEvent event) {
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record TusEvent(

@@ -28,8 +28,8 @@ public class JobLeaseService {
    * Atomically claim the next leaseable job for {@code workerId}. The native query uses {@code
    * SELECT ... FOR UPDATE SKIP LOCKED} so concurrent workers never race for the same row.
    *
-   * @return the leased job (already in PROCESSING with attempts incremented) or {@code null} if
-   *     the queue is empty.
+   * @return the leased job (already in PROCESSING with attempts incremented) or {@code null} if the
+   *     queue is empty.
    */
   @Transactional
   public ProcessingJob leaseNext(String workerId, int leaseSeconds) {
@@ -76,7 +76,11 @@ public class JobLeaseService {
     if (exhausted) {
       job.setStatus(JobStatus.DEAD_LETTER);
       job.setFinishedAt(Instant.now());
-      log.error("Job {} (asset {}) → DEAD_LETTER after {} attempts", jobId, job.getAssetId(), job.getAttempts());
+      log.error(
+          "Job {} (asset {}) → DEAD_LETTER after {} attempts",
+          jobId,
+          job.getAssetId(),
+          job.getAttempts());
     } else {
       // Return to QUEUED so the dispatcher picks it up on the next poll for retry.
       // FAILED was previously used here but findNextLeaseableId only selects QUEUED rows,
@@ -85,7 +89,10 @@ public class JobLeaseService {
       job.setFinishedAt(null);
       log.warn(
           "Job {} (asset {}) failed on attempt {}/{} → re-queued for retry",
-          jobId, job.getAssetId(), job.getAttempts(), job.getMaxAttempts());
+          jobId,
+          job.getAssetId(),
+          job.getAttempts(),
+          job.getMaxAttempts());
     }
     job.setLeasedUntil(null);
     job.setLeasedBy(null);
