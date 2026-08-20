@@ -1,7 +1,7 @@
 <template>
   <div
     class="album-gallery"
-    :class="{ 'presentation-mode': presentationMode }"
+    :class="{ 'presentation-mode': presentationMode, 'map-mode': mapMode }"
   >
     <!-- Full-page overlay while album deletion is in progress -->
     <div
@@ -507,7 +507,7 @@
         >Filter by tag:</label>
         <select
           id="tag-filter"
-          v-model="selectedTag"
+          v-model="filterSelection"
           aria-label="Filter by tag"
         >
           <option value="">
@@ -519,6 +519,12 @@
             :value="tag.name"
           >
             {{ tag.name }}
+          </option>
+          <option
+            v-if="mapFilterAvailable"
+            :value="MAP_FILTER_VALUE"
+          >
+            🗺️ Map
           </option>
         </select>
       </div>
@@ -633,6 +639,14 @@
         </p>
       </div>
     </div>
+
+    <!-- Map filter: replaces the grid entirely. Fed the whole album, not `displayedFiles`,
+         because the map is an alternative to tag filtering rather than a layer on top of it. -->
+    <PhotoMap
+      v-else-if="mapMode"
+      :files="files"
+      @open="openLightbox"
+    />
 
     <div
       v-else-if="files.length === 0"
@@ -829,6 +843,8 @@ import EditableTitle from '../components/EditableTitle.vue'
 import BulkTagBar from '../components/BulkTagBar.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
 import PresentationGroupDialog from '../components/PresentationGroupDialog.vue'
+import PhotoMap from '../components/PhotoMap.vue'
+import { useCapabilities } from '../composables/useCapabilities'
 
 export default {
   name: 'GalleryView',
@@ -838,7 +854,8 @@ export default {
     EditableTitle,
     BulkTagBar,
     PresentationGroupHeader,
-    PresentationGroupDialog
+    PresentationGroupDialog,
+    PhotoMap
   },
   props: {
     albumId: {
@@ -970,6 +987,53 @@ export default {
         const key = f.originalName || f.filename
         return (nameCounts.get(key) || 0) > 1
       })
+    })
+
+    // --- Map filter -------------------------------------------------------------------
+    // The map is a *view*, not a tag, but it lives in the tag dropdown because that is where
+    // people already go to change what the gallery shows. It is deliberately kept out of
+    // `selectedTag`: that value feeds audio recordings, presentation groups and analytics, and
+    // a sentinel string leaking into any of those would be a silent data bug.
+    const mapMode = ref(false)
+    const mapsEnabled = ref(false)
+    const { ensureLoaded: ensureCapabilities } = useCapabilities()
+
+    ensureCapabilities()
+      .then(caps => { mapsEnabled.value = Boolean(caps.maps?.enabled) })
+      .catch(() => { mapsEnabled.value = false })
+
+    // Offering the map for an album with no located photos would open an empty world map.
+    const hasLocatedFiles = computed(() =>
+      files.value.some(f => typeof f.gpsLatitude === 'number' && typeof f.gpsLongitude === 'number')
+    )
+
+    const mapFilterAvailable = computed(() =>
+      !props.presentationMode && mapsEnabled.value && hasLocatedFiles.value
+    )
+
+    // Single <select> over two pieces of state. MAP_FILTER_VALUE cannot collide with a real tag
+    // name because tag names never contain a space or the surrounding markers.
+    const MAP_FILTER_VALUE = '__map__'
+    const filterSelection = computed({
+      get() {
+        return mapMode.value ? MAP_FILTER_VALUE : selectedTag.value
+      },
+      set(value) {
+        if (value === MAP_FILTER_VALUE) {
+          mapMode.value = true
+          // Clear the tag too: one dropdown means one active filter, and leaving a tag set
+          // would silently hide pins for photos outside it with nothing on screen saying so.
+          selectedTag.value = ''
+          return
+        }
+        mapMode.value = false
+        selectedTag.value = value
+      }
+    })
+
+    // An album can lose its located photos (last one deleted) while the map is open.
+    watch(mapFilterAvailable, available => {
+      if (!available) mapMode.value = false
     })
 
     // Presentation image groups — sections derived from the group markers of the selected tag.
@@ -2187,6 +2251,10 @@ export default {
       loadingFiles,
       formattedTotalSize,
       selectedTag,
+      mapMode,
+      mapFilterAvailable,
+      filterSelection,
+      MAP_FILTER_VALUE,
       tagsUsedInAlbum,
       availableTags,
       enabledAlbumTags,

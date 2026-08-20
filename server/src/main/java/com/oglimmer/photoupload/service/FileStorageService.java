@@ -1570,4 +1570,39 @@ public class FileStorageService {
     log.info("Capture-date sweep: enqueued {} jobs", ids.size());
     return ids.size();
   }
+
+  /**
+   * Enqueues an {@code EXTRACT_GPS} job per asset that was never inspected for a capture location
+   * ({@code gps_source IS NULL}) — the backfill for everything uploaded before the map filter
+   * existed. Mirrors {@link #enqueueCaptureDateReextract}: metadata-only work, capped per call,
+   * idempotent because the worker always stamps a source.
+   *
+   * @return how many jobs were enqueued; re-invoke until this returns 0
+   */
+  public int enqueueGpsExtract(int maxRows) {
+    int safeMax = Math.max(1, Math.min(maxRows, 5000));
+    List<Long> ids = metadataRepository.findMissingGpsIds(safeMax);
+    if (ids.isEmpty()) {
+      log.info("GPS sweep: no eligible assets");
+      return 0;
+    }
+    log.info("GPS sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          for (Long id : ids) {
+            FileMetadata locked =
+                metadataRepository
+                    .findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
+            locked.setProcessingStatus(ProcessingStatus.QUEUED);
+            locked.setProcessingAttempts(0);
+            locked.setProcessingError(null);
+            locked.setProcessingCompletedAt(null);
+            metadataRepository.save(locked);
+            jobEnqueueService.enqueue(id, JobType.EXTRACT_GPS);
+          }
+        });
+    log.info("GPS sweep: enqueued {} jobs", ids.size());
+    return ids.size();
+  }
 }

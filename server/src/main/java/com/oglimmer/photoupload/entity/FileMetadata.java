@@ -83,6 +83,21 @@ public class FileMetadata {
   @Column(name = "exif_date_source", length = 32)
   private CaptureDateSource exifDateSource;
 
+  @Column(name = "gps_latitude")
+  private Double gpsLatitude;
+
+  @Column(name = "gps_longitude")
+  private Double gpsLongitude;
+
+  /**
+   * Which tag the coordinates came from. Null means the asset was never inspected for a location —
+   * the EXTRACT_GPS sweep selects exactly these rows. A written {@code NONE} means the original was
+   * read and carried no location, which keeps the sweep from re-visiting it every pass.
+   */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "gps_source", length = 32)
+  private GpsSource gpsSource;
+
   @Column(name = "rotation", nullable = false)
   private Integer rotation = 0;
 

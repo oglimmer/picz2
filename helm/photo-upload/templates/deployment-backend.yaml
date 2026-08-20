@@ -111,6 +111,23 @@ spec:
               name: {{ include "photo-upload.fullname" . }}-secret
               key: objectStorage.secretKey
         {{- end }}
+        {{- if .Values.appleMaps.enabled }}
+        # MapKit JS credentials for the gallery's map filter. Api pod only — the worker has no
+        # HTTP surface that mints tokens. Leaving these unset disables the feature cleanly.
+        - name: APPLE_MAPS_TEAM_ID
+          value: {{ required "appleMaps.teamId is required when appleMaps.enabled" .Values.appleMaps.teamId | quote }}
+        - name: APPLE_MAPS_KEY_ID
+          value: {{ required "appleMaps.keyId is required when appleMaps.enabled" .Values.appleMaps.keyId | quote }}
+        - name: APPLE_MAPS_ORIGIN
+          value: {{ .Values.appleMaps.origin | quote }}
+        - name: APPLE_MAPS_TTL_SECONDS
+          value: {{ .Values.appleMaps.ttlSeconds | default 1800 | quote }}
+        - name: APPLE_MAPS_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: appleMaps.privateKey
+        {{- end }}
         {{- if .Values.tus.enabled }}
         # TUS resumable uploads (Phase 5). The hook controller validates the path-secret
         # against TUS_HOOK_SECRET; advertised gates whether /api/capabilities reports

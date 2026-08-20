@@ -102,3 +102,7 @@ frontend/dist/
 frontend/public/build-info.json
 
 gitleaks-report.json
+
+# MapKit / APNs signing keys dropped in the repo root while wiring up a key.
+# The APNs key under server/src/main/resources is tracked deliberately; stray ones are not.
+/AuthKey_*.p8

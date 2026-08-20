@@ -104,6 +104,19 @@ capture-date:
   # lack the tag (older cameras, editor-stripped files). Videos never use it — QuickTime carries
   # its own offset. Set to UTC to reproduce the pre-fix behaviour.
   fallback-zone: "${CAPTURE_DATE_FALLBACK_ZONE:Europe/Berlin}"
+maps:
+  apple:
+    # MapKit JS credentials for the gallery's map filter. All three come from the Apple Developer
+    # portal ("Maps IDs" / "MapKit JS" key); private-key is the body of the AuthKey_XXXX.p8 file.
+    # Leave unset to disable — /api/capabilities then reports maps.enabled=false and the UI hides
+    # the filter, which is the normal state for local dev.
+    team-id: "${APPLE_MAPS_TEAM_ID:}"
+    key-id: "${APPLE_MAPS_KEY_ID:}"
+    private-key: "${APPLE_MAPS_PRIVATE_KEY:}"
+    # Restricts the minted token to this web origin (scheme + host, no trailing slash). Optional,
+    # but without it a token copied out of the browser works on any site.
+    origin: "${APPLE_MAPS_ORIGIN:}"
+    ttl-seconds: "${APPLE_MAPS_TTL_SECONDS:1800}"
 jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"

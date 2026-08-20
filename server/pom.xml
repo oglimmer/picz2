@@ -49,6 +49,15 @@
       <version>2.19.0</version>
     </dependency>
 
+    <!-- ES256 JWT signing for MapKit JS tokens. Apple only accepts ES256 for these, and the
+         JDK's raw SHA256withECDSA emits DER signatures where JWS requires fixed-width R||S —
+         nimbus handles that conversion. Not managed by the Spring Boot BOM, hence the version. -->
+    <dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>nimbus-jose-jwt</artifactId>
+      <version>10.4</version>
+    </dependency>
+
     <!-- Pushy for Apple Push Notifications -->
     <dependency>
       <groupId>com.eatthepath</groupId>

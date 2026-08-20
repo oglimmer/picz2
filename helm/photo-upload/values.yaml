@@ -249,6 +249,25 @@ objectStorage:
 #   * tus.enabled       — manifests rendered + api-side hook controller wired.
 #   * tus.advertised    — what /api/capabilities reports to clients. R1 ships enabled=true,
 #                         advertised=false; R2 flips advertised=true.
+# Apple Maps (MapKit JS) for the gallery's map filter. Disabled by default: without an Apple
+# Developer account there is no key to sign tokens with, and /api/capabilities then reports
+# maps.enabled=false so the UI hides the filter entirely.
+appleMaps:
+  enabled: false
+  # Apple Developer Team ID (10 chars) — the token's `iss`.
+  teamId: ""
+  # Key ID of the MapKit JS key created in the Apple Developer portal (10 chars).
+  keyId: ""
+  # Body of the downloaded AuthKey_XXXX.p8 file, PEM armour and all. MUST be overridden via
+  # --set-file appleMaps.privateKey=AuthKey_XXXX.p8 or sealed secrets — never commit a real key.
+  privateKey: ""
+  # Web origin tokens are restricted to (scheme + host, no trailing slash). Strongly recommended:
+  # without it a token copied out of the browser works on any site.
+  origin: "https://picz2.oglimmer.com"
+  # Token lifetime in seconds. Apple caps these at 7 days; short is better, the page just asks
+  # for another one.
+  ttlSeconds: 1800
+
 tus:
   enabled: true
   advertised: false

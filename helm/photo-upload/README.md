@@ -170,6 +170,55 @@ Two-flag rollout: `enabled` controls whether tusd + the api hook are *deployed*;
 | `tus.hookSecret`     | Path-secret embedded in the tusd → api hook URL — **must** be overridden                 | `""`                   |
 | `tus.replicas`       | tusd replicas (stateless once `info.json` is in S3)                                      | `1`                    |
 
+### Apple Maps (map filter)
+
+The gallery's "🗺️ Map" filter draws pins from each asset's capture location using Apple MapKit JS. MapKit refuses to initialise without a short-lived ES256 JWT, which the api pod mints from an Apple Developer key — so the feature is **off** until you supply one. With `appleMaps.enabled=false`, `/api/capabilities` reports `maps.enabled=false` and the frontend hides the filter entirely; nothing else changes.
+
+Getting the credentials (Apple Developer account required):
+
+1. developer.apple.com → Certificates, Identifiers & Profiles → **Identifiers** → register a **Maps ID**.
+2. **Keys** → create a key with **MapKit JS** enabled, tick the Maps ID → download `AuthKey_XXXXXXXXXX.p8` (**one download only**).
+3. Team ID is top-right in the portal; Key ID is on the key's detail page.
+
+Install with the key read straight off disk, so it never lands in a values file:
+
+```bash
+helm upgrade --install photo-upload ./helm/photo-upload \
+  --set appleMaps.enabled=true \
+  --set appleMaps.teamId=ABCDE12345 \
+  --set appleMaps.keyId=FGHIJ67890 \
+  --set appleMaps.origin=https://picz2.oglimmer.com \
+  --set-file appleMaps.privateKey=AuthKey_FGHIJ67890.p8
+```
+
+| Parameter                | Description                                                                                  | Default                          |
+| ------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------- |
+| `appleMaps.enabled`      | Mint MapKit tokens and advertise the map filter                                              | `false`                          |
+| `appleMaps.teamId`       | Apple Developer Team ID — the token's `iss`                                                  | `""`                             |
+| `appleMaps.keyId`        | MapKit JS Key ID — the token header's `kid`                                                  | `""`                             |
+| `appleMaps.privateKey`   | Body of the `.p8` file — **must** be overridden, ideally with `--set-file`                   | `""`                             |
+| `appleMaps.origin`       | Origin the token is pinned to; blank omits the claim (a leaked token then works anywhere)    | `https://picz2.oglimmer.com`     |
+| `appleMaps.ttlSeconds`   | Token lifetime; MapKit re-fetches on its own as expiry nears                                 | `1800`                           |
+
+Verify after deploy:
+
+```bash
+curl -s https://picz2.oglimmer.com/api/capabilities | jq .maps      # {"enabled": true}
+curl -s https://picz2.oglimmer.com/api/maps/token | cut -c1-40      # a JWT, not an error string
+```
+
+A bad `.p8` does **not** fail the boot: the api pod logs `Apple Maps private key could not be parsed` and reports `maps.enabled=false`, because the rest of the gallery has no reason to go down over a map.
+
+**Backfill.** Only assets processed after this feature shipped carry coordinates. Existing rows need a one-off sweep, which reads metadata only — no transcodes, no thumbnail regeneration:
+
+```bash
+# Repeat until "enqueued": 0
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  'https://picz2.oglimmer.com/api/admin/extract-gps?maxRows=500'
+```
+
+Assets whose original was already deleted by the retention sweep are skipped and can never be backfilled — the coordinates live only in the original, and no derivative carries them.
+
 ### Retention CronJob
 
 Nightly sweep at the configured `schedule`. Three independent passes: aged-original purge, abandoned-TUS-upload cleanup, originals/ orphan detection. Each obeys the same `dryRun` and `maxRowsPerRun` knobs.

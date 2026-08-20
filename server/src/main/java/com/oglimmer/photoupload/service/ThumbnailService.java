@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.FileStorageProperties.Thumbnailer;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.model.CaptureDate;
+import com.oglimmer.photoupload.model.GpsCoordinates;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -157,6 +158,10 @@ public class ThumbnailService {
 
   public CaptureDate extractVideoCreationDate(Path videoFile) {
     return ffmpegService.extractVideoCreationDate(videoFile);
+  }
+
+  public GpsCoordinates extractVideoLocation(Path videoFile) {
+    return ffmpegService.extractVideoLocation(videoFile);
   }
 
   /** Rotate an image 90 degrees counterclockwise via ImageMagick. */
