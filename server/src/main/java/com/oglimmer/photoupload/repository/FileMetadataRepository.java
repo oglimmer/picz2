@@ -253,4 +253,33 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
               + "LIMIT :maxRows",
       nativeQuery = true)
   List<Long> findStaleCaptureDateIds(@Param("maxRows") int maxRows);
+
+  /**
+   * DONE image/video rows that were never inspected for a capture location ({@code gps_source IS
+   * NULL}) — i.e. everything uploaded before the map filter existed. Used by the {@code
+   * EXTRACT_GPS} admin endpoint.
+   *
+   * <p>Requires {@code file_path}: coordinates live in the original's EXIF GPS IFD or QuickTime
+   * location atom and no derivative carries either, so retention-purged rows can never be
+   * backfilled and are excluded rather than enqueued and failed.
+   *
+   * <p>Self-shrinking — the worker always writes a source (including {@code NONE} for files with no
+   * location), so a row leaves this set after one pass. Same {@code NOT EXISTS} guard and SQL-level
+   * cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
+   */
+  @Query(
+      value =
+          "SELECT fm.id FROM file_metadata fm "
+              + "WHERE fm.processing_status = 'DONE' "
+              + "AND fm.gps_source IS NULL "
+              + "AND fm.file_path IS NOT NULL "
+              + "AND (fm.mime_type LIKE 'image/%' OR fm.mime_type LIKE 'video/%') "
+              + "AND NOT EXISTS ("
+              + "  SELECT 1 FROM processing_jobs pj "
+              + "  WHERE pj.asset_id = fm.id AND pj.status IN ('QUEUED', 'PROCESSING')"
+              + ") "
+              + "ORDER BY fm.id ASC "
+              + "LIMIT :maxRows",
+      nativeQuery = true)
+  List<Long> findMissingGpsIds(@Param("maxRows") int maxRows);
 }

@@ -17,5 +17,12 @@ public enum JobType {
    * while videos got a true instant — the two clocks sheared photos and videos apart in EXIF sort
    * order. Requires the original ({@code file_path}), so retention-purged rows are not eligible.
    */
-  EXTRACT_CAPTURE_DATE
+  EXTRACT_CAPTURE_DATE,
+  /**
+   * Read an asset's capture location from the original and nothing else. Backfills every row that
+   * predates the map filter, which had nowhere to store coordinates. Requires the original ({@code
+   * file_path}) — the EXIF GPS IFD and the QuickTime location atom exist only there — so
+   * retention-purged rows are not eligible.
+   */
+  EXTRACT_GPS
 }

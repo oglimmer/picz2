@@ -125,6 +125,32 @@ public class AdminController {
   }
 
   /**
+   * Reads the capture location of assets that were never inspected for one — every row uploaded
+   * before the map filter existed. Worker-side cost is one GET plus one metadata read per asset; no
+   * derivatives are touched.
+   *
+   * <p>Idempotent: each pass stamps {@code gps_source} (including {@code NONE} for files with no
+   * location), which drops the row out of the eligible set. Caller pages by re-invoking until
+   * {@code enqueued == 0}. Retention-purged assets are skipped — coordinates live only in the
+   * original, so for those the location is gone for good.
+   */
+  @PostMapping("/extract-gps")
+  public ResponseEntity<AdminOperationResponse> extractGps(
+      @RequestParam(value = "maxRows", required = false, defaultValue = "500") int maxRows) {
+    int enqueued = fileStorageService.enqueueGpsExtract(maxRows);
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message(
+                enqueued == 0
+                    ? "No eligible assets — nothing to enqueue"
+                    : "Enqueued " + enqueued + " GPS extract job(s)")
+            .stats(java.util.Map.of("enqueued", enqueued, "maxRows", maxRows))
+            .build();
+    return ResponseEntity.ok(response);
+  }
+
+  /**
    * Lists processing jobs that have exhausted their retry budget. Surfaces the original asset id
    * and last error so an operator can decide whether to delete the asset, fix the underlying issue,
    * or re-enqueue the job (re-enqueue UI is a future follow-up).

@@ -40,6 +40,7 @@ export function useCapabilities(): CapabilitiesComposable {
         const fallback: Capabilities = {
           tus: { enabled: false, endpoint: "/files/", version: "1.0.0", maxSize: 0 },
           multipart: { enabled: true, endpoint: "/api/upload" },
+          maps: { enabled: false },
         };
         cached.value = fallback;
         return fallback;

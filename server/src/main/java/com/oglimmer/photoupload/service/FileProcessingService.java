@@ -7,6 +7,7 @@ import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.exception.StorageException;
 import com.oglimmer.photoupload.model.CaptureDate;
+import com.oglimmer.photoupload.model.GpsCoordinates;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
@@ -38,6 +39,7 @@ public class FileProcessingService {
   private final FileMetadataRepository metadataRepository;
   private final ThumbnailService thumbnailService;
   private final CaptureDateExtractor captureDateExtractor;
+  private final GpsExtractor gpsExtractor;
   private final PlatformTransactionManager transactionManager;
   // Optional: present iff storage.s3.enabled=true. When present, originals are read from MinIO
   // into a per-job temp dir, derivatives are produced locally and PUT back to S3, and the temp
@@ -219,6 +221,14 @@ public class FileProcessingService {
       if (captureDate.isPresent()) {
         metadata.setExifDateTimeOriginal(captureDate.instant());
       }
+
+      // 5) Capture location (EXIF GPS IFD / QuickTime location atom), for the map filter.
+      // Read here and not later: this is the last point at which the original is guaranteed to be
+      // on local disk, and retention eventually deletes it for good.
+      GpsCoordinates gps = gpsExtractor.extract(currentFile, mimeType);
+      metadata.setGpsSource(gps.source());
+      metadata.setGpsLatitude(gps.latitude());
+      metadata.setGpsLongitude(gps.longitude());
 
       // Persist all updates in one short transaction
       metadata.setProcessingStatus(ProcessingStatus.DONE);
@@ -614,6 +624,99 @@ public class FileProcessingService {
       markFailed(tx, fileMetadataId, e);
     } catch (Exception e) {
       log.error("Unexpected error re-extracting capture date for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } finally {
+      if (workdir != null) {
+        deleteRecursive(workdir);
+      }
+    }
+  }
+
+  /**
+   * Reads the capture location of an already-processed asset and nothing else.
+   *
+   * <p>Backfill for every row that predates the map feature. Same shape and the same reasoning as
+   * {@link #reextractCaptureDate}: metadata only, no derivative is touched, because re-running
+   * {@code PROCESS} would redo transcodes that already succeeded.
+   *
+   * <p>Reads the original only. Coordinates live in the EXIF GPS IFD or the QuickTime location atom
+   * and no derivative carries either, so retention-purged rows ({@code file_path} null) can never
+   * be backfilled — the api-side query excludes them and this method fails loudly if one slips
+   * through.
+   */
+  public void reextractGps(Long fileMetadataId) {
+    TransactionTemplate tx = new TransactionTemplate(transactionManager);
+    FileMetadata metadata =
+        tx.execute(
+            status -> {
+              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+              if (found == null) {
+                return null;
+              }
+              found.setProcessingStatus(ProcessingStatus.PROCESSING);
+              found.setProcessingAttempts(
+                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+              found.setProcessingError(null);
+              return metadataRepository.save(found);
+            });
+    if (metadata == null) {
+      log.warn("reextractGps: metadata id {} not found (deleted?)", fileMetadataId);
+      return;
+    }
+
+    String originalName = metadata.getOriginalName();
+    String mimeType = metadata.getMimeType();
+    Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+    if (metadata.getFilePath() == null) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Cannot extract GPS for asset "
+                  + fileMetadataId
+                  + ": original is gone (retention-purged)"));
+      return;
+    }
+    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
+
+    Path workdir = null;
+    try {
+      Path currentFile;
+      if (s3Backed) {
+        workdir =
+            Files.createDirectories(
+                fileStorageLocation
+                    .resolve(PROCESSING_TMP)
+                    .resolve(String.valueOf(fileMetadataId)));
+        currentFile = workdir.resolve(metadata.getStoredFilename());
+        objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
+      } else {
+        currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
+      }
+
+      GpsCoordinates gps = gpsExtractor.extract(currentFile, mimeType);
+      // A NONE result is written, not skipped: it is what takes the row out of the sweep's
+      // eligible set, so repeat runs converge instead of re-reading every location-less asset.
+      metadata.setGpsSource(gps.source());
+      metadata.setGpsLatitude(gps.latitude());
+      metadata.setGpsLongitude(gps.longitude());
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
+      final FileMetadata toSave = metadata;
+      tx.executeWithoutResult(status -> metadataRepository.save(toSave));
+      log.info(
+          "🌍 GPS for asset {} ({}): {}/{} (source={})",
+          fileMetadataId,
+          originalName,
+          gps.latitude(),
+          gps.longitude(),
+          gps.source());
+    } catch (IOException e) {
+      log.error("I/O error extracting GPS for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } catch (Exception e) {
+      log.error("Unexpected error extracting GPS for {}", originalName, e);
       markFailed(tx, fileMetadataId, e);
     } finally {
       if (workdir != null) {

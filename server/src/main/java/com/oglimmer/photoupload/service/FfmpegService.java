@@ -3,7 +3,9 @@ package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.CaptureDateSource;
+import com.oglimmer.photoupload.entity.GpsSource;
 import com.oglimmer.photoupload.model.CaptureDate;
+import com.oglimmer.photoupload.model.GpsCoordinates;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -34,6 +36,18 @@ public class FfmpegService {
   private static final long PROBE_TIMEOUT_SECONDS = 30;
   private static final String TAG_CREATION_TIME = "creation_time";
   private static final String TAG_QUICKTIME_CREATIONDATE = "com.apple.quicktime.creationdate";
+  private static final String TAG_QUICKTIME_LOCATION = "com.apple.quicktime.location.ISO6709";
+  private static final String TAG_LOCATION = "location";
+
+  /**
+   * The ISO 6709 form every phone actually writes into the QuickTime location atom: signed decimal
+   * degrees, latitude then longitude, with an optional altitude and a trailing solidus — e.g.
+   * {@code +48.1372+011.5756+509.000/}. The spec also allows degrees-minutes-seconds packing
+   * ({@code +4808.23+01134.53/}), which no camera in this pipeline emits; such values fail the
+   * match and are logged rather than silently misplaced by two degrees.
+   */
+  private static final java.util.regex.Pattern ISO6709 =
+      java.util.regex.Pattern.compile("^([+-]\\d{1,2}(?:\\.\\d+)?)([+-]\\d{1,3}(?:\\.\\d+)?)");
 
   public boolean transcodeVideo(Path originalFile, Path outputPath) {
     File outputFile = outputPath.toFile();
@@ -187,6 +201,82 @@ public class FfmpegService {
       log.debug(
           "Could not read video metadata from {}: {}", videoFile.getFileName(), e.getMessage());
       return CaptureDate.none();
+    }
+  }
+
+  /**
+   * Reads where a video was shot from its container tags.
+   *
+   * <p>Apple writes {@code com.apple.quicktime.location.ISO6709}; Android and most other writers
+   * use the plain {@code location} tag in the same format, so both are tried. One ffprobe call,
+   * same {@code format_tags} section the capture-date probe reads — kept separate rather than
+   * merged so a location failure can never cost us a capture date.
+   *
+   * @return the coordinates, or {@link GpsCoordinates#none()} if the container carries no usable
+   *     location
+   */
+  public GpsCoordinates extractVideoLocation(Path videoFile) {
+    List<String> cmd =
+        List.of(
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format_tags",
+            "-of",
+            "default=noprint_wrappers=1",
+            videoFile.toAbsolutePath().toString());
+
+    try {
+      ProcessRunner.Result r = ProcessRunner.run(cmd, PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      if (!r.success()) {
+        log.debug("ffprobe returned no format tags for {}", videoFile.getFileName());
+        return GpsCoordinates.none();
+      }
+      Map<String, String> tags = parseFormatTags(r.output());
+      String raw = tags.get(TAG_QUICKTIME_LOCATION);
+      if (raw == null || raw.isBlank()) {
+        raw = tags.get(TAG_LOCATION);
+      }
+      GpsCoordinates coordinates = parseIso6709(raw);
+      if (coordinates.isPresent()) {
+        log.info(
+            "🌍 video location '{}' → {}/{} for {}",
+            raw,
+            coordinates.latitude(),
+            coordinates.longitude(),
+            videoFile.getFileName());
+      }
+      return coordinates;
+    } catch (IOException e) {
+      log.debug(
+          "Could not read video location from {}: {}", videoFile.getFileName(), e.getMessage());
+      return GpsCoordinates.none();
+    }
+  }
+
+  /**
+   * Parses an ISO 6709 location string into signed decimal degrees. Returns {@link
+   * GpsCoordinates#none()} for absent, unrecognised, or out-of-range values — range and null-island
+   * checks live in {@link GpsCoordinates#of}.
+   */
+  static GpsCoordinates parseIso6709(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return GpsCoordinates.none();
+    }
+    java.util.regex.Matcher matcher = ISO6709.matcher(raw.trim());
+    if (!matcher.find()) {
+      log.debug("Unrecognised ISO 6709 location '{}'", raw);
+      return GpsCoordinates.none();
+    }
+    try {
+      return GpsCoordinates.of(
+          Double.parseDouble(matcher.group(1)),
+          Double.parseDouble(matcher.group(2)),
+          GpsSource.QUICKTIME_ISO6709);
+    } catch (NumberFormatException e) {
+      log.debug("Unparseable ISO 6709 location '{}'", raw);
+      return GpsCoordinates.none();
     }
   }
 

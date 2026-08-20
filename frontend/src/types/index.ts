@@ -34,6 +34,10 @@ export interface AlbumFile {
   // False once the original has been purged by the retention CronJob (Phase 6 / Gap 4-finish).
   // Derivatives (thumb/medium/large/transcoded) keep serving; rotation/download-original do not.
   originalAvailable?: boolean;
+  // Capture location in signed decimal degrees (WGS 84), absent when the file carries none.
+  // Same reference frame MapKit JS expects, so these go straight into an annotation.
+  gpsLatitude?: number | null;
+  gpsLongitude?: number | null;
 }
 
 export interface Tag {
@@ -136,6 +140,13 @@ export interface PlaybackTimelineEntry extends ImageTimingEntry {
 export interface Capabilities {
   tus: TusCapability;
   multipart: MultipartCapability;
+  maps: MapsCapability;
+}
+
+// Whether the server can mint MapKit JS tokens. False when maps.apple.* is unset, in which
+// case the gallery hides the map filter instead of offering a map that would never load.
+export interface MapsCapability {
+  enabled: boolean;
 }
 
 export interface TusCapability {

@@ -31,6 +31,14 @@ public class FileInfo {
   private ProcessingStatus processingStatus;
 
   /**
+   * Capture location in signed decimal degrees (WGS 84), or null when the asset carries none. Fed
+   * straight to MapKit JS by the gallery's map filter, which uses the same reference frame.
+   */
+  private Double gpsLatitude;
+
+  private Double gpsLongitude;
+
+  /**
    * False when the original was purged from object storage by the retention CronJob (Phase 6 / Gap
    * 4-finish). Used by the UI to hide rotate/download-original actions; the gallery itself keeps
    * working from derivatives.

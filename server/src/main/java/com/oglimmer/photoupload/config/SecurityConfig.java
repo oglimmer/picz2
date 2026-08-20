@@ -56,6 +56,9 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/capabilities")
                     .permitAll()
+                    // Public share links show the map too, so their visitors need a MapKit token.
+                    .requestMatchers(HttpMethod.GET, "/api/maps/token")
+                    .permitAll()
                     // tusd→api hook callbacks. The path-secret in the URL is the auth boundary
                     // (validated constant-time inside TusHookController); Spring Security just
                     // needs to let the request through. Cluster-internal only — never on Ingress.

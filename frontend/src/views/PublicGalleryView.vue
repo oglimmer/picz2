@@ -1,5 +1,8 @@
 <template>
-  <div class="album-gallery presentation-mode">
+  <div
+    class="album-gallery presentation-mode"
+    :class="{ 'map-mode': mapMode }"
+  >
     <div class="gallery-header">
       <div class="gallery-nav">
         <h2>{{ album?.name || 'Loading...' }}</h2>
@@ -14,17 +17,17 @@
 
     <!-- Presentation mode filter -->
     <div
-      v-if="tagsUsedInAlbum.length > 1 || recordings.length > 0"
+      v-if="tagsUsedInAlbum.length > 1 || recordings.length > 0 || mapFilterAvailable"
       class="controls presentation-controls"
     >
       <div
-        v-if="tagsUsedInAlbum.length > 1"
+        v-if="tagsUsedInAlbum.length > 1 || mapFilterAvailable"
         class="filter-controls"
       >
         <label for="tag-filter-presentation">Filter by tag:</label>
         <select
           id="tag-filter-presentation"
-          v-model="selectedTag"
+          v-model="filterSelection"
         >
           <option value="">
             Select a filter!
@@ -35,6 +38,12 @@
             :value="tag.name"
           >
             {{ tag.name }} ({{ tag.count }}){{ hasRecordings(tag.name) ? ' 🎵' : '' }}
+          </option>
+          <option
+            v-if="mapFilterAvailable"
+            :value="MAP_FILTER_VALUE"
+          >
+            🗺️ Map
           </option>
         </select>
         <span
@@ -82,6 +91,14 @@
         </p>
       </div>
     </div>
+
+    <!-- Map filter: replaces the grid. Fed every file in the album, since the map is an
+         alternative to tag filtering rather than something layered on top of it. -->
+    <PhotoMap
+      v-else-if="mapMode"
+      :files="allFilesUnfiltered"
+      @open="openImage"
+    />
 
     <!-- Empty state when no filter selected (only show if multiple tags available) -->
     <div
@@ -202,6 +219,8 @@ import Lightbox from '../components/Lightbox.vue'
 import CookieConsent from '../components/CookieConsent.vue'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
+import PhotoMap from '../components/PhotoMap.vue'
+import { useCapabilities } from '../composables/useCapabilities'
 
 export default {
   name: 'PublicGalleryView',
@@ -209,7 +228,8 @@ export default {
     Lightbox,
     CookieConsent,
     SubscriptionDialog,
-    PresentationGroupHeader
+    PresentationGroupHeader,
+    PhotoMap
   },
   props: {
     shareToken: {
@@ -282,6 +302,46 @@ export default {
       return allFilesUnfiltered.value.filter(file =>
         file.tags && file.tags.includes(selectedTag.value)
       )
+    })
+
+    // --- Map filter -------------------------------------------------------------------
+    // Same shape as the logged-in gallery: the map is a view, offered from the tag dropdown,
+    // held apart from `selectedTag` so it can never leak into recordings or analytics events.
+    const MAP_FILTER_VALUE = '__map__'
+    const mapMode = ref(false)
+    const mapsEnabled = ref(false)
+    const { ensureLoaded: ensureCapabilities } = useCapabilities()
+
+    ensureCapabilities()
+      .then(caps => { mapsEnabled.value = Boolean(caps.maps?.enabled) })
+      .catch(() => { mapsEnabled.value = false })
+
+    const hasLocatedFiles = computed(() =>
+      allFilesUnfiltered.value.some(
+        f => typeof f.gpsLatitude === 'number' && typeof f.gpsLongitude === 'number'
+      )
+    )
+
+    const mapFilterAvailable = computed(() => mapsEnabled.value && hasLocatedFiles.value)
+
+    const filterSelection = computed({
+      get() {
+        return mapMode.value ? MAP_FILTER_VALUE : selectedTag.value
+      },
+      set(value) {
+        if (value === MAP_FILTER_VALUE) {
+          mapMode.value = true
+          // One dropdown, one active filter — see the same setter in GalleryView.
+          selectedTag.value = ''
+          return
+        }
+        mapMode.value = false
+        selectedTag.value = value
+      }
+    })
+
+    watch(mapFilterAvailable, available => {
+      if (!available) mapMode.value = false
     })
 
     const presentationSections = computed(() =>
@@ -558,6 +618,11 @@ export default {
       lightboxGroupContext,
       loadingFiles,
       selectedTag,
+      allFilesUnfiltered,
+      mapMode,
+      mapFilterAvailable,
+      filterSelection,
+      MAP_FILTER_VALUE,
       tagsUsedInAlbum,
       selectedFile,
       isPlaying,

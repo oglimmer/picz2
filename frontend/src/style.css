@@ -781,6 +781,14 @@ body.landing-page .version-info { display: none; }
   padding-bottom: var(--sp-12);
 }
 
+/* The map already sizes itself to the space left on screen (PhotoMap.measureHeight), so the page
+   must not *also* reserve a screenful: `min-height: 100vh` plus the app footer below it guaranteed
+   a permanent scrollbar, and the padding left a band of dead background under the map. */
+.album-gallery.map-mode {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
 .gallery-header-minimal {
   background: rgba(250,247,242,.95);
   border-bottom: 1px solid var(--c-border);
