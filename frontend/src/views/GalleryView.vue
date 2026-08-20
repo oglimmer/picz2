@@ -645,7 +645,11 @@
     <PhotoMap
       v-else-if="mapMode"
       :files="files"
+      :saved-view="albumMapViewValue"
+      :can-edit-view="true"
       @open="openLightbox"
+      @save-view="handleSaveMapView"
+      @clear-view="handleClearMapView"
     />
 
     <div
@@ -837,6 +841,7 @@ import { useAnalytics } from '../composables/useAnalytics'
 import { useUpload } from '../composables/useUpload'
 import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { formatBytes } from '../utils/format'
+import { albumMapView } from '../types'
 import GalleryItem from '../components/GalleryItem.vue'
 import Lightbox from '../components/Lightbox.vue'
 import EditableTitle from '../components/EditableTitle.vue'
@@ -872,7 +877,7 @@ export default {
     const { isLoggedIn, logout } = useAuth()
     const { apiUrl, fetchWithAuth } = useApi()
     const { uploadFile } = useUpload()
-    const { currentAlbum, loadAlbumById, updateAlbum, deleteAlbum } = useAlbums()
+    const { currentAlbum, loadAlbumById, updateAlbum, saveMapView, deleteAlbum } = useAlbums()
     const {
       files,
       loadingFiles,
@@ -939,6 +944,32 @@ export default {
 
     const isDeletingAlbum = ref(false)
     const album = computed(() => currentAlbum.value)
+    const albumMapViewValue = computed(() => albumMapView(album.value))
+
+    /**
+     * Stores whatever the map is currently showing as the album's default view. Reachable only
+     * from the map's own "Save this view" button, so the input is always a framing the owner is
+     * looking at right now.
+     */
+    async function handleSaveMapView(view) {
+      if (!album.value) return
+      try {
+        await saveMapView(album.value.id, view)
+        success('Map view saved — the map now opens here for everyone')
+      } catch (err) {
+        error(err.message || 'Could not save the map view')
+      }
+    }
+
+    async function handleClearMapView() {
+      if (!album.value) return
+      try {
+        await saveMapView(album.value.id, null)
+        success('Map view reset — the map fits all photos again')
+      } catch (err) {
+        error(err.message || 'Could not reset the map view')
+      }
+    }
     const albumSize = ref(localStorage.getItem('galleryGridSize') || 'small')
     watch(albumSize, v => localStorage.setItem('galleryGridSize', v))
 
@@ -2255,6 +2286,9 @@ export default {
       mapFilterAvailable,
       filterSelection,
       MAP_FILTER_VALUE,
+      albumMapViewValue,
+      handleSaveMapView,
+      handleClearMapView,
       tagsUsedInAlbum,
       availableTags,
       enabledAlbumTags,

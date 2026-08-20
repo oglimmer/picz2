@@ -58,6 +58,24 @@ public class Album {
   @Column(name = "analytics_paused", nullable = false)
   private boolean analyticsPaused = false;
 
+  /**
+   * Saved view for the map filter, as MapKit's CoordinateRegion: a centre plus a span in degrees
+   * (the span is the zoom — smaller means closer in). All four are set together or all four are
+   * null; null means the map frames every pin instead. See {@link
+   * com.oglimmer.photoupload.model.MapView} for the validated form.
+   */
+  @Column(name = "map_center_lat")
+  private Double mapCenterLat;
+
+  @Column(name = "map_center_lng")
+  private Double mapCenterLng;
+
+  @Column(name = "map_span_lat")
+  private Double mapSpanLat;
+
+  @Column(name = "map_span_lng")
+  private Double mapSpanLng;
+
   @OneToMany(mappedBy = "album", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
   private List<FileMetadata> files = new ArrayList<>();
 
