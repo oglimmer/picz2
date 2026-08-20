@@ -6,7 +6,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -14,6 +16,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Profile(Profiles.API)
@@ -74,9 +77,34 @@ public class SecurityConfig {
                     .permitAll()
                     .anyRequest()
                     .authenticated())
-        .httpBasic(basic -> basic.realmName("PhotoUpload"));
+        .httpBasic(basic -> basic.authenticationEntryPoint(silentBasicEntryPoint()));
 
     return http.build();
+  }
+
+  /**
+   * Answers unauthenticated requests with a 401 the browser will not act on.
+   *
+   * <p>Spring's default entry point sends {@code WWW-Authenticate: Basic realm="PhotoUpload"},
+   * which is a standing instruction to the browser to prompt for credentials — and Chrome obeys it
+   * even for {@code fetch()} calls made by page JavaScript. This SPA builds its own Basic header
+   * from localStorage (see {@code useAuth.verifyCredentials}), so the native dialog is pure
+   * interference: a visitor whose saved password had gone stale got a credentials prompt on a
+   * <em>public</em> share link, over a background request they never asked for, and the app did not
+   * mount until they dismissed it.
+   *
+   * <p>The scheme name is deliberately misspelt rather than dropped: RFC 7235 requires a challenge
+   * on a 401, and no browser recognises {@code xBasic}, so the header stays present and inert.
+   * Every client we ship sends its credentials up front and reads the status code, so none of them
+   * depended on being challenged.
+   */
+  // Package-private so SecurityConfigTest can assert the challenge directly, without standing up a
+  // servlet context just to read one header.
+  AuthenticationEntryPoint silentBasicEntryPoint() {
+    return (request, response, authException) -> {
+      response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "xBasic realm=\"PhotoUpload\"");
+      response.sendError(HttpStatus.UNAUTHORIZED.value(), "Unauthorized");
+    };
   }
 
   @Bean
