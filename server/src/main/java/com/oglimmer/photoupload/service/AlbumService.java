@@ -12,6 +12,7 @@ import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.mapper.AlbumMapper;
 import com.oglimmer.photoupload.model.AlbumInfo;
+import com.oglimmer.photoupload.model.MapView;
 import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
@@ -120,6 +121,35 @@ public class AlbumService {
     album.setUpdatedAt(Instant.now());
 
     log.info("Updated album: {} for user: {}", album.getName(), currentUser.getEmail());
+    return convertToAlbumInfo(album);
+  }
+
+  /**
+   * Stores (or clears) the album's default map view.
+   *
+   * <p>Pass null to clear, which puts the map back to framing every pin. A {@code view} that failed
+   * {@link MapView#of} validation arrives here as null too, and clearing is the right answer for
+   * garbage input: the alternative is persisting a region the owner cannot pan out of.
+   */
+  @Transactional
+  public AlbumInfo updateMapView(Long albumId, MapView view) {
+    User currentUser = userContext.getCurrentUser();
+    Album album =
+        albumRepository
+            .findByUserAndId(currentUser, albumId)
+            .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
+
+    album.setMapCenterLat(view == null ? null : view.centerLat());
+    album.setMapCenterLng(view == null ? null : view.centerLng());
+    album.setMapSpanLat(view == null ? null : view.spanLat());
+    album.setMapSpanLng(view == null ? null : view.spanLng());
+    album.setUpdatedAt(Instant.now());
+
+    log.info(
+        "{} map view for album {} (user {})",
+        view == null ? "Cleared" : "Saved",
+        album.getName(),
+        currentUser.getEmail());
     return convertToAlbumInfo(album);
   }
 
@@ -316,6 +346,12 @@ public class AlbumService {
     info.setId(album.getId());
     info.setName(album.getName());
     info.setShareToken(album.getShareToken());
+    // The saved map view ships to share-link visitors too — it is how the owner framed the album,
+    // and they are the ones the framing is for. It reveals nothing the pins do not already.
+    info.setMapCenterLat(album.getMapCenterLat());
+    info.setMapCenterLng(album.getMapCenterLng());
+    info.setMapSpanLat(album.getMapSpanLat());
+    info.setMapSpanLng(album.getMapSpanLng());
 
     return info;
   }
@@ -460,6 +496,10 @@ public class AlbumService {
     info.setUpdatedAt(album.getUpdatedAt());
     info.setDisplayOrder(album.getDisplayOrder());
     info.setShareToken(album.getShareToken());
+    info.setMapCenterLat(album.getMapCenterLat());
+    info.setMapCenterLng(album.getMapCenterLng());
+    info.setMapSpanLat(album.getMapSpanLat());
+    info.setMapSpanLng(album.getMapSpanLng());
 
     // Get files in this album (use user-scoped query)
     List<FileMetadata> files =

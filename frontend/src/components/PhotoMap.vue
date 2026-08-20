@@ -42,6 +42,29 @@
         Loading map…
       </div>
 
+      <!-- Setting the album's default view: drag and zoom the map to the framing you want, then
+           press save. No coordinate entry, because the map itself is the better input. -->
+      <div
+        v-if="canEditView && !loading && !error"
+        class="map-view-controls"
+      >
+        <button
+          class="map-view-btn"
+          title="Open the map at exactly this position and zoom for everyone viewing this album"
+          @click="saveCurrentView"
+        >
+          📍 Save this view
+        </button>
+        <button
+          v-if="savedView"
+          class="map-view-btn map-view-btn--ghost"
+          title="Go back to fitting every pin on screen"
+          @click="$emit('clear-view')"
+        >
+          Reset
+        </button>
+      </div>
+
       <div
         v-if="selectedFiles.length > 0"
         class="map-selection"
@@ -78,19 +101,51 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AlbumFile } from '@/types'
+import type { AlbumFile, MapView } from '@/types'
 import { useApi } from '@/composables/useApi'
-import { ensureMapKit, type MapKitMap } from '@/composables/useMapKit'
+import {
+  ensureMapKit,
+  type MapKit,
+  type MapKitAnnotation,
+  type MapKitMap
+} from '@/composables/useMapKit'
 
 interface Props {
   files: AlbumFile[]
+  /** The album's saved viewport, or null to frame every pin. */
+  savedView?: MapView | null
+  /** Whether to offer the save/reset controls — the album owner, not a share-link visitor. */
+  canEditView?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  savedView: null,
+  canEditView: false
+})
 
-defineEmits<{
+const emit = defineEmits<{
   open: [file: AlbumFile]
+  'save-view': [view: MapView]
+  'clear-view': []
 }>()
+
+/**
+ * Hands the map's current viewport to the parent to persist.
+ *
+ * <p>Reads it off the live map rather than tracking pans ourselves: MapKit already maintains
+ * `region` through drags, pinches, double-taps and its own showItems animation, and any shadow
+ * copy we kept would only be a chance to disagree with what the owner is looking at.
+ */
+function saveCurrentView(): void {
+  if (!map) return
+  const { center, span } = map.region
+  emit('save-view', {
+    centerLat: center.latitude,
+    centerLng: center.longitude,
+    spanLat: span.latitudeDelta,
+    spanLng: span.longitudeDelta
+  })
+}
 
 const { getImageUrl } = useApi()
 
@@ -168,6 +223,9 @@ function measureHeight(): void {
 }
 
 let map: MapKitMap | null = null
+let mapkitRef: MapKit | null = null
+// The pins currently on the map, kept so "Reset" can re-fit to them without a full rebuild.
+let currentAnnotations: MapKitAnnotation[] = []
 // Guards against two builds overlapping: `buildMap` awaits a network round-trip, and a second
 // change (album reload, filter flip) during that await would otherwise leave an orphaned map
 // instance attached to the element and never destroyed.
@@ -258,11 +316,9 @@ async function buildMap(): Promise<void> {
     })
 
     map.addAnnotations(annotations)
-    // Frame every pin rather than guessing a centre and zoom: an album can span one park or
-    // three continents, and both should open readable.
-    map.showItems(annotations, {
-      padding: new mapkit.Padding({ top: 48, right: 48, bottom: 48, left: 48 })
-    })
+    mapkitRef = mapkit
+    currentAnnotations = annotations
+    applyInitialRegion(mapkit, annotations)
   } catch (err) {
     if (token !== buildToken) return
     error.value = err instanceof Error ? err.message : 'Unknown error'
@@ -272,11 +328,40 @@ async function buildMap(): Promise<void> {
   }
 }
 
+/**
+ * Positions a freshly built map: the album's saved view if it has one, otherwise a frame around
+ * every pin.
+ *
+ * <p>Auto-fit is the better default — an album can span one park or three continents and both
+ * should open readable — but it is only ever a guess at what the album is *about*. A trip whose
+ * photos are all in Toronto except three from the airport layover fits to include the layover and
+ * opens showing mostly water. The saved view is the owner overriding that guess, so it wins
+ * outright rather than being merged with the pin bounds.
+ */
+function applyInitialRegion(mapkit: MapKit, annotations: MapKitAnnotation[]): void {
+  if (!map) return
+
+  const view = props.savedView
+  if (view) {
+    map.region = new mapkit.CoordinateRegion(
+      new mapkit.Coordinate(view.centerLat, view.centerLng),
+      new mapkit.CoordinateSpan(view.spanLat, view.spanLng)
+    )
+    return
+  }
+
+  map.showItems(annotations, {
+    padding: new mapkit.Padding({ top: 48, right: 48, bottom: 48, left: 48 })
+  })
+}
+
 function destroyMap(): void {
   if (map) {
     map.destroy()
     map = null
   }
+  mapkitRef = null
+  currentAnnotations = []
 }
 
 watch(
@@ -286,6 +371,21 @@ watch(
     void buildMap()
   },
   { immediate: true }
+)
+
+/**
+ * Re-frames when the saved view is added or removed under us — the owner pressing save or reset.
+ *
+ * <p>Deliberately not a rebuild: the pins have not changed, and tearing the map down would flash
+ * the tiles and close whatever pin the owner had open. After a save the region we re-apply is the
+ * one already on screen, so that case is a visual no-op; after a reset it re-fits to the pins.
+ */
+watch(
+  () => props.savedView,
+  () => {
+    if (!map || !mapkitRef) return
+    applyInitialRegion(mapkitRef, currentAnnotations)
+  }
 )
 
 // iOS reports the new viewport a beat after the rotation event fires, so re-measure late.
@@ -339,6 +439,43 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
   font-size: 0.85rem;
+}
+
+/* Top-left, clear of MapKit's own furniture: the loading pill is centred, the map-type toggle
+   sits top-right, and the zoom/compass controls bottom-right. */
+.map-view-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.map-view-btn {
+  padding: 7px 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.82);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.map-view-btn:hover {
+  background: rgba(20, 20, 20, 0.95);
+}
+
+.map-view-btn--ghost {
+  background: rgba(255, 255, 255, 0.9);
+  color: #222;
+  font-weight: 500;
+}
+
+.map-view-btn--ghost:hover {
+  background: #fff;
 }
 
 .map-message {

@@ -12,6 +12,8 @@ import com.oglimmer.photoupload.model.AnalyticsStatsResponse;
 import com.oglimmer.photoupload.model.BulkTagResponse;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
+import com.oglimmer.photoupload.model.MapView;
+import com.oglimmer.photoupload.model.MapViewRequest;
 import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.ReorderRequest;
 import com.oglimmer.photoupload.model.ReorderResponse;
@@ -198,6 +200,38 @@ public class AlbumController {
       @PathVariable Long id, @RequestBody AlbumRequest albumRequest) {
     AlbumInfo album =
         albumService.updateAlbum(id, albumRequest.getName(), albumRequest.getDescription());
+
+    AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  /**
+   * Saves the album's default map view — where the map filter opens.
+   *
+   * <p>The body is a straight copy of MapKit's {@code map.region} after the owner has panned and
+   * zoomed to the framing they want, so the UI needs no coordinate entry: move the map, press save.
+   */
+  @PutMapping("/{id}/map-view")
+  public ResponseEntity<AlbumResponse> setMapView(
+      @PathVariable Long id, @RequestBody MapViewRequest request) {
+    MapView view =
+        MapView.of(
+            request.getCenterLat(),
+            request.getCenterLng(),
+            request.getSpanLat(),
+            request.getSpanLng());
+    AlbumInfo album = albumService.updateMapView(id, view);
+
+    AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  /** Clears the saved view, putting the map back to framing every pin in the album. */
+  @DeleteMapping("/{id}/map-view")
+  public ResponseEntity<AlbumResponse> clearMapView(@PathVariable Long id) {
+    AlbumInfo album = albumService.updateMapView(id, null);
 
     AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
 

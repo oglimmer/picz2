@@ -97,6 +97,7 @@
     <PhotoMap
       v-else-if="mapMode"
       :files="allFilesUnfiltered"
+      :saved-view="albumMapViewValue"
       @open="openImage"
     />
 
@@ -215,6 +216,7 @@ import { useNotifications } from '../composables/useNotifications'
 import { useAnalytics } from '../composables/useAnalytics'
 import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { isVideo } from '../utils/format'
+import { albumMapView } from '../types'
 import Lightbox from '../components/Lightbox.vue'
 import CookieConsent from '../components/CookieConsent.vue'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
@@ -252,6 +254,9 @@ export default {
     shareToken.value = props.shareToken
 
     const album = ref(null)
+    // The owner's saved framing for the map filter, if they set one. Read-only here: a share-link
+    // visitor can pan and zoom all they like, but nothing they do is persisted.
+    const albumMapViewValue = computed(() => albumMapView(album.value))
     const allFilesUnfiltered = ref([])
     const loadingFiles = ref(false)
     const selectedTag = ref('')
@@ -613,6 +618,7 @@ export default {
 
     return {
       album,
+      albumMapViewValue,
       files,
       presentationSections,
       lightboxGroupContext,

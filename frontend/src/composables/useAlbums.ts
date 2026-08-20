@@ -1,6 +1,6 @@
 import { ref, type Ref } from "vue";
 import { useApi } from "./useApi";
-import type { Album } from "@/types";
+import type { Album, MapView } from "@/types";
 
 export interface AlbumsComposable {
   albums: Ref<Album[]>;
@@ -15,6 +15,7 @@ export interface AlbumsComposable {
   createAlbum: (name: string, description?: string) => Promise<Album | null>;
   deleteAlbum: (albumId: number) => Promise<void>;
   updateAlbum: (albumId: number, updates: Partial<Album>) => Promise<void>;
+  saveMapView: (albumId: number, view: MapView | null) => Promise<void>;
   duplicateAlbum: (albumId: number) => Promise<Album | null>;
 }
 
@@ -199,6 +200,53 @@ export function useAlbums(): AlbumsComposable {
     }
   }
 
+  /**
+   * Save the album's default map view, or clear it by passing null.
+   *
+   * <p>Separate from `updateAlbum` because that endpoint is name-and-description only, and a
+   * PUT there carrying map fields would round-trip the name — enough to trip the duplicate-name
+   * check on a rename that had not been saved yet.
+   *
+   * <p>The local album is patched from the server's response rather than from the value we sent:
+   * the server clamps out-of-range spans, so echoing our own input back could leave the UI
+   * claiming a view that was not stored.
+   */
+  async function saveMapView(
+    albumId: number,
+    view: MapView | null,
+  ): Promise<void> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/map-view`,
+      view
+        ? {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(view),
+          }
+        : { method: "DELETE" },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Could not save the map view");
+    }
+
+    const patch: Partial<Album> = {
+      mapCenterLat: data.album?.mapCenterLat ?? null,
+      mapCenterLng: data.album?.mapCenterLng ?? null,
+      mapSpanLat: data.album?.mapSpanLat ?? null,
+      mapSpanLng: data.album?.mapSpanLng ?? null,
+    };
+
+    if (currentAlbum.value && currentAlbum.value.id === albumId) {
+      currentAlbum.value = { ...currentAlbum.value, ...patch };
+    }
+    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
+    if (albumIndex !== -1) {
+      albums.value[albumIndex] = { ...albums.value[albumIndex], ...patch };
+    }
+  }
+
   async function duplicateAlbum(albumId: number): Promise<Album | null> {
     try {
       const response = await fetchWithAuth(
@@ -237,6 +285,7 @@ export function useAlbums(): AlbumsComposable {
     createAlbum,
     deleteAlbum,
     updateAlbum,
+    saveMapView,
     duplicateAlbum,
   };
 }

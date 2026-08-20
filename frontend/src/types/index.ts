@@ -1,3 +1,15 @@
+/**
+ * A saved map viewport — MapKit's CoordinateRegion, centre plus a span in degrees. The span is the
+ * zoom: smaller shows less ground. Stored per album so the map filter opens where the owner framed
+ * it instead of auto-fitting every pin.
+ */
+export interface MapView {
+  centerLat: number;
+  centerLng: number;
+  spanLat: number;
+  spanLng: number;
+}
+
 export interface Album {
   id: number;
   name: string;
@@ -6,6 +18,30 @@ export interface Album {
   coverFileId?: number;
   coverImageToken?: string;
   shareToken?: string;
+  // Flat on the wire (see AlbumInfo on the server); all four present or all four absent.
+  mapCenterLat?: number | null;
+  mapCenterLng?: number | null;
+  mapSpanLat?: number | null;
+  mapSpanLng?: number | null;
+}
+
+/** Reads an album's saved view, or null when it has none (any missing field disqualifies it). */
+export function albumMapView(album: Album | null | undefined): MapView | null {
+  if (
+    !album ||
+    typeof album.mapCenterLat !== "number" ||
+    typeof album.mapCenterLng !== "number" ||
+    typeof album.mapSpanLat !== "number" ||
+    typeof album.mapSpanLng !== "number"
+  ) {
+    return null;
+  }
+  return {
+    centerLat: album.mapCenterLat,
+    centerLng: album.mapCenterLng,
+    spanLat: album.mapSpanLat,
+    spanLng: album.mapSpanLng,
+  };
 }
 
 export type ProcessingStatus =

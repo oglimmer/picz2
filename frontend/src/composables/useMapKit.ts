@@ -23,7 +23,23 @@ export interface MapKitAnnotation {
   memberAnnotations?: MapKitAnnotation[];
 }
 
+export interface MapKitCoordinateSpan {
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
+
+/**
+ * MapKit's viewport: where the map is centred and how much ground it covers. There is no integer
+ * zoom in MapKit JS — the span is the zoom, and this is the only representation you can both read
+ * back after a pan and write to restore one, which is why albums store it verbatim.
+ */
+export interface MapKitCoordinateRegion {
+  center: MapKitCoordinate;
+  span: MapKitCoordinateSpan;
+}
+
 export interface MapKitMap {
+  region: MapKitCoordinateRegion;
   addAnnotations(annotations: MapKitAnnotation[]): void;
   removeAnnotations(annotations: MapKitAnnotation[]): void;
   showItems(items: MapKitAnnotation[], options?: { padding?: unknown }): void;
@@ -36,6 +52,14 @@ export interface MapKit {
   init(options: { authorizationCallback: (done: (token: string) => void) => void }): void;
   Map: new (element: HTMLElement, options?: Record<string, unknown>) => MapKitMap;
   Coordinate: new (latitude: number, longitude: number) => MapKitCoordinate;
+  CoordinateSpan: new (
+    latitudeDelta: number,
+    longitudeDelta: number,
+  ) => MapKitCoordinateSpan;
+  CoordinateRegion: new (
+    center: MapKitCoordinate,
+    span: MapKitCoordinateSpan,
+  ) => MapKitCoordinateRegion;
   MarkerAnnotation: new (
     coordinate: MapKitCoordinate,
     options?: Record<string, unknown>,
