@@ -119,6 +119,23 @@ maps:
     # but without it a token copied out of the browser works on any site.
     origin: "${APPLE_MAPS_ORIGIN:}"
     ttl-seconds: "${APPLE_MAPS_TTL_SECONDS:1800}"
+  geocode:
+    # Server-side reverse geocoding for the gallery's "by day & region" headings. Uses the same
+    # Apple credentials as above; these settings only govern how hard we lean on Apple's quota.
+    # Every limit below degrades to "no place name" (the UI shows coordinates), never to an error.
+    enabled: "${GEOCODE_ENABLED:true}"
+    base-url: "${GEOCODE_BASE_URL:https://maps-api.apple.com}"
+    # A cached name this close to the asked-for point is reused instead of asking again. Photo
+    # regions are 2 km across, so a few hundred metres describes the same place.
+    reuse-radius-meters: "${GEOCODE_REUSE_RADIUS_METERS:300}"
+    max-points-per-request: "${GEOCODE_MAX_POINTS_PER_REQUEST:60}"
+    negative-ttl-days: "${GEOCODE_NEGATIVE_TTL_DAYS:7}"
+    max-lookups-per-minute: "${GEOCODE_MAX_LOOKUPS_PER_MINUTE:120}"
+    max-concurrent-lookups: "${GEOCODE_MAX_CONCURRENT_LOOKUPS:4}"
+    max-requests-per-minute-per-client: "${GEOCODE_MAX_REQUESTS_PER_MINUTE_PER_CLIENT:60}"
+    request-timeout-seconds: "${GEOCODE_REQUEST_TIMEOUT_SECONDS:5}"
+    default-language: "${GEOCODE_DEFAULT_LANGUAGE:en}"
+    memory-cache-size: "${GEOCODE_MEMORY_CACHE_SIZE:20000}"
 jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"

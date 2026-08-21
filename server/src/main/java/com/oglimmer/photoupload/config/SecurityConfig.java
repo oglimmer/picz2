@@ -62,6 +62,10 @@ public class SecurityConfig {
                     // Public share links show the map too, so their visitors need a MapKit token.
                     .requestMatchers(HttpMethod.GET, "/api/maps/token")
                     .permitAll()
+                    // Same reason: a public gallery grouped by region needs place names. The
+                    // endpoint is cache-first and rate-limited in GeocodeController itself.
+                    .requestMatchers(HttpMethod.GET, "/api/geocode/reverse")
+                    .permitAll()
                     // tusd→api hook callbacks. The path-secret in the URL is the auth boundary
                     // (validated constant-time inside TusHookController); Spring Security just
                     // needs to let the request through. Cluster-internal only — never on Ingress.

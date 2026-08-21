@@ -183,6 +183,12 @@ export interface Capabilities {
 // case the gallery hides the map filter instead of offering a map that would never load.
 export interface MapsCapability {
   enabled: boolean;
+  /**
+   * Whether the server can turn coordinates into place names (`/api/geocode/reverse`). Needs the
+   * same Apple credentials plus `maps.geocode.enabled`; false means region headings stay as
+   * coordinates and the UI never calls the endpoint.
+   */
+  geocoding: boolean;
 }
 
 export interface TusCapability {

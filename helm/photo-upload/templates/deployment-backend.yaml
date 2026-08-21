@@ -127,6 +127,18 @@ spec:
             secretKeyRef:
               name: {{ include "photo-upload.fullname" . }}-secret
               key: appleMaps.privateKey
+        # Server-side reverse geocoding (place names on the "by day & region" headings). Same
+        # credentials; these only cap how often the cache misses through to Apple.
+        - name: GEOCODE_ENABLED
+          value: {{ .Values.appleMaps.geocode.enabled | default false | quote }}
+        - name: GEOCODE_REUSE_RADIUS_METERS
+          value: {{ .Values.appleMaps.geocode.reuseRadiusMeters | default 300 | quote }}
+        - name: GEOCODE_MAX_LOOKUPS_PER_MINUTE
+          value: {{ .Values.appleMaps.geocode.maxLookupsPerMinute | default 120 | quote }}
+        - name: GEOCODE_MAX_REQUESTS_PER_MINUTE_PER_CLIENT
+          value: {{ .Values.appleMaps.geocode.maxRequestsPerMinutePerClient | default 60 | quote }}
+        - name: GEOCODE_DEFAULT_LANGUAGE
+          value: {{ .Values.appleMaps.geocode.defaultLanguage | default "en" | quote }}
         {{- end }}
         {{- if .Values.tus.enabled }}
         # TUS resumable uploads (Phase 5). The hook controller validates the path-secret
@@ -151,6 +163,12 @@ spec:
         # no DB or disk indicators) so a slow database or Longhorn hiccup can't starve them.
         # Startup still hits the full /actuator/health so the pod isn't marked ready until
         # the DB and mail servers are reachable.
+        # Boot budget = initialDelay + period × failureThreshold. Spring Boot's startup is
+        # CPU-bound, and the api pod requests only 100m, so on a busy node it boots on whatever
+        # CFS shares are left over — measured between 100 s (quiet node) and past 340 s (node at
+        # 96%). The old 30 × 10 s = 310 s budget sat inside that spread, which turned a loaded
+        # node into a restart loop of a perfectly healthy image. Kept generous on purpose: a slow
+        # boot is a scheduling problem, and killing the pod does not make the node less busy.
         startupProbe:
           httpGet:
             path: /actuator/health
@@ -158,7 +176,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 5
-          failureThreshold: 30
+          failureThreshold: {{ .Values.backend.startupProbe.failureThreshold | default 60 }}
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness

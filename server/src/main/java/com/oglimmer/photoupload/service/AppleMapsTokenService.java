@@ -45,6 +45,8 @@ public class AppleMapsTokenService {
   private ECPrivateKey signingKey;
   private volatile String cachedToken;
   private volatile Instant cachedUntil = Instant.EPOCH;
+  private volatile String cachedServerToken;
+  private volatile Instant cachedServerUntil = Instant.EPOCH;
 
   /**
    * Parses the configured key once at startup so a malformed {@code .p8} is a boot-time log line
@@ -109,14 +111,49 @@ public class AppleMapsTokenService {
     }
   }
 
+  /**
+   * Returns a token for the Apple Maps <em>Server</em> API (the REST endpoint the backend calls to
+   * reverse-geocode a coordinate), minting a new one when the cached token is close to expiring.
+   *
+   * <p>Deliberately a second token rather than a reuse of {@link #token()}: the browser token
+   * carries an {@code origin} claim, and a server-to-server request sends no {@code Origin} header,
+   * so Apple rejects it. This one omits the claim, never leaves the pod, and is exchanged by {@code
+   * AppleMapsGeocodeClient} for a short-lived access token.
+   *
+   * @throws IllegalStateException if Apple Maps is not configured
+   */
+  public String serverToken() {
+    if (signingKey == null) {
+      throw new IllegalStateException("Apple Maps is not configured");
+    }
+    String current = cachedServerToken;
+    if (current != null && Instant.now().isBefore(cachedServerUntil)) {
+      return current;
+    }
+    synchronized (this) {
+      if (cachedServerToken != null && Instant.now().isBefore(cachedServerUntil)) {
+        return cachedServerToken;
+      }
+      Instant now = Instant.now();
+      Instant expiry = now.plusSeconds(properties.getTtlSeconds());
+      cachedServerToken = mint(now, expiry, false);
+      cachedServerUntil = expiry.minusSeconds(REFRESH_MARGIN_SECONDS);
+      return cachedServerToken;
+    }
+  }
+
   private String mint(Instant issuedAt, Instant expiry) {
+    return mint(issuedAt, expiry, true);
+  }
+
+  private String mint(Instant issuedAt, Instant expiry, boolean withOrigin) {
     try {
       JWTClaimsSet.Builder claims =
           new JWTClaimsSet.Builder()
               .issuer(properties.getTeamId())
               .issueTime(Date.from(issuedAt))
               .expirationTime(Date.from(expiry));
-      if (!properties.getOrigin().isBlank()) {
+      if (withOrigin && !properties.getOrigin().isBlank()) {
         // Apple rejects the token when the page's origin does not match this claim, which is what
         // stops a copied token from being usable on someone else's site.
         claims.claim("origin", properties.getOrigin());

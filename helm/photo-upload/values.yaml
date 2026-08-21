@@ -19,6 +19,12 @@ backend:
     type: ClusterIP
     port: 8080
 
+  # How long the pod may take to answer /actuator/health before the kubelet restarts it, as
+  # 10 s periods after a 10 s delay. 60 ⇒ ten minutes. See the note on startupProbe in
+  # deployment-backend.yaml: this is a ceiling for the worst node, not a target.
+  startupProbe:
+    failureThreshold: 60
+
   resources:
     # R2 slim: api pod no longer runs ImageMagick / ffmpeg / vips. Heavy work moved to the worker
     # pod (Phase 4e). Steady-state api footprint is just heap + Tomcat NIO + S3 SDK direct buffers.
@@ -267,6 +273,21 @@ appleMaps:
   # Token lifetime in seconds. Apple caps these at 7 days; short is better, the page just asks
   # for another one.
   ttlSeconds: 1800
+  # Server-side reverse geocoding: names the regions in the gallery's "by day & region" view by
+  # calling the Apple Maps Server API, through a shared cache in the database. Only reached when
+  # appleMaps.enabled is true; every limit below degrades to "show coordinates", never to an error.
+  geocode:
+    enabled: true
+    # A cached name this close to the asked-for point is reused instead of asking Apple again.
+    # Photo regions are 2 km across, so a few hundred metres is the same place.
+    reuseRadiusMeters: 300
+    # Ceiling on calls that actually reach Apple, per pod. The cache absorbs normal browsing;
+    # this is what protects the daily quota from a bug or a scripted caller.
+    maxLookupsPerMinute: 120
+    # Requests one client IP may make per minute against /api/geocode/reverse.
+    maxRequestsPerMinutePerClient: 60
+    # Language used when a caller asks for one we do not cache (en, de, fr, es, it).
+    defaultLanguage: "en"
 
 tus:
   enabled: true
