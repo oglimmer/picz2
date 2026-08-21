@@ -1304,6 +1304,105 @@ body.landing-page .version-info { display: none; }
   backdrop-filter: blur(8px);
 }
 
+/* === BACK TO TOP === */
+
+.back-to-top-btn {
+  position: fixed;
+  right: var(--sp-6);
+  bottom: calc(var(--sp-6) + env(safe-area-inset-bottom, 0px));
+  z-index: 250;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--c-surface);
+  color: var(--c-accent);
+  cursor: pointer;
+  box-shadow: var(--sh-md);
+  transition: background var(--t-fast), color var(--t-fast),
+              transform var(--t-fast), box-shadow var(--t-fast);
+}
+/* Ring and arrow share one grid cell, so they stack instead of sitting side by side. */
+.back-to-top-btn > * { grid-area: 1 / 1; }
+
+.back-to-top-ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg); /* start the arc at 12 o'clock */
+  fill: none;
+  stroke-width: 2;
+}
+.back-to-top-ring-track { stroke: var(--c-border); }
+.back-to-top-ring-progress {
+  stroke: var(--c-accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--t-fast) linear;
+}
+
+.back-to-top-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.back-to-top-btn:hover {
+  background: var(--c-accent);
+  color: #fff;
+  box-shadow: var(--sh-lg);
+  transform: translateY(-2px);
+}
+.back-to-top-btn:hover .back-to-top-ring-track { stroke: rgba(255,255,255,.35); }
+.back-to-top-btn:hover .back-to-top-ring-progress { stroke: #fff; }
+.back-to-top-btn:active { transform: translateY(0); }
+.back-to-top-btn:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 3px;
+}
+
+/* The header only takes focus programmatically, so it needs no visible ring. */
+.gallery-header:focus { outline: none; }
+
+/* Fade and lift on the way in, so it doesn't pop mid-scroll. */
+.back-to-top-enter-active,
+.back-to-top-leave-active { transition: opacity var(--t-mid), transform var(--t-mid); }
+.back-to-top-enter-from,
+.back-to-top-leave-to { opacity: 0; transform: translateY(12px) scale(.85); }
+
+/* Touch devices: bigger tap target, clear of the home bar, no sticky hover state. */
+@media (hover: none) {
+  .back-to-top-btn {
+    width: 52px;
+    height: 52px;
+    right: var(--sp-4);
+    bottom: calc(var(--sp-8) + env(safe-area-inset-bottom, 0px));
+  }
+  .back-to-top-icon { width: 22px; height: 22px; }
+  .back-to-top-btn:hover {
+    background: var(--c-surface);
+    color: var(--c-accent);
+    box-shadow: var(--sh-md);
+    transform: none;
+  }
+  .back-to-top-btn:hover .back-to-top-ring-track { stroke: var(--c-border); }
+  .back-to-top-btn:hover .back-to-top-ring-progress { stroke: var(--c-accent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .back-to-top-btn,
+  .back-to-top-ring-progress,
+  .back-to-top-enter-active,
+  .back-to-top-leave-active { transition: none; }
+  .back-to-top-btn:hover,
+  .back-to-top-btn:active { transform: none; }
+}
+
 .divider { color: var(--c-border-2); user-select: none; font-size: .875rem; }
 
 /* === PROFILE PAGE === */

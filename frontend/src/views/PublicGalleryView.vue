@@ -3,7 +3,11 @@
     class="album-gallery presentation-mode"
     :class="{ 'map-mode': mapMode }"
   >
-    <div class="gallery-header">
+    <div
+      ref="galleryTop"
+      class="gallery-header"
+      tabindex="-1"
+    >
       <div class="gallery-nav">
         <h2>{{ album?.name || 'Loading...' }}</h2>
         <button
@@ -182,15 +186,45 @@
       />
     </div>
 
-    <!-- Back to top button -->
-    <button
-      v-if="showBackToTop"
-      class="back-to-top-btn"
-      title="Back to top"
-      @click="scrollToTop"
-    >
-      ↑
-    </button>
+    <!-- Back to top: floating button whose ring shows how far the page is scrolled -->
+    <Transition name="back-to-top">
+      <button
+        v-show="showBackToTop"
+        type="button"
+        class="back-to-top-btn"
+        :aria-label="`Back to top — ${scrollProgress}% of the page scrolled`"
+        title="Back to top"
+        @click="scrollToTop"
+      >
+        <svg
+          class="back-to-top-ring"
+          viewBox="0 0 44 44"
+          aria-hidden="true"
+        >
+          <circle
+            class="back-to-top-ring-track"
+            cx="22"
+            cy="22"
+            r="20"
+          />
+          <circle
+            class="back-to-top-ring-progress"
+            cx="22"
+            cy="22"
+            r="20"
+            :stroke-dasharray="RING_CIRCUMFERENCE"
+            :stroke-dashoffset="ringOffset"
+          />
+        </svg>
+        <svg
+          class="back-to-top-icon"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </button>
+    </Transition>
 
     <!-- Cookie Consent Banner -->
     <CookieConsent @consent="handleConsent" />
@@ -295,6 +329,12 @@ export default {
     const isPaused = ref(false)
     const controlsVisible = ref(true)
     const showBackToTop = ref(false)
+    const scrollProgress = ref(0)
+    const galleryTop = ref(null)
+    // r=20 inside the button's 44x44 viewBox; the ring is drawn by shrinking
+    // a dash offset from a full circumference down to zero.
+    const RING_CIRCUMFERENCE = 2 * Math.PI * 20
+    const ringOffset = computed(() => RING_CIRCUMFERENCE * (1 - scrollProgress.value / 100))
 
     // Subscription dialog
     const showSubscriptionDialog = ref(false)
@@ -416,20 +456,46 @@ export default {
       }
     })
 
+    // Scroll fires far more often than the browser can paint, so a burst of
+    // events collapses into one measurement per animation frame.
+    let scrollTicking = false
+
+    function measureScroll() {
+      scrollTicking = false
+      const y = window.scrollY
+      const scrollable = document.documentElement.scrollHeight - window.innerHeight
+      showBackToTop.value = y > 400
+      scrollProgress.value = scrollable > 0
+        ? Math.min(100, Math.max(0, Math.round((y / scrollable) * 100)))
+        : 0
+    }
+
     function handleScroll() {
-      showBackToTop.value = window.scrollY > 400
+      if (scrollTicking) return
+      scrollTicking = true
+      requestAnimationFrame(measureScroll)
     }
 
     function scrollToTop() {
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      // Honour the OS "reduce motion" setting: a long smooth scroll can trigger
+      // motion sickness, so those users get an instant jump instead.
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' })
+      // Move focus as well as the viewport, otherwise the next Tab press
+      // continues from the bottom of the page the user just left.
+      galleryTop.value?.focus({ preventScroll: true })
     }
 
     onUnmounted(() => {
       window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', handleScroll)
     })
 
     onMounted(async () => {
       window.addEventListener('scroll', handleScroll, { passive: true })
+      // Page height changes as images load and when the device rotates.
+      window.addEventListener('resize', handleScroll, { passive: true })
+      measureScroll()
       await loadAlbumInfo()
       await loadAlbumFiles()
       await loadPublicGroups(props.shareToken)
@@ -653,7 +719,11 @@ export default {
       handleStopPlayback,
       handleConsent,
       showBackToTop,
-      scrollToTop
+      scrollToTop,
+      scrollProgress,
+      ringOffset,
+      RING_CIRCUMFERENCE,
+      galleryTop
     }
   }
 }
