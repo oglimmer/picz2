@@ -1,6 +1,6 @@
 {
   "name": "photo-upload-frontend",
-  "version": "1.0.34",
+  "version": "1.0.34-SNAPSHOT",
   "type": "module",
   "scripts": {
     "predev": "node scripts/generate-build-info.js",
