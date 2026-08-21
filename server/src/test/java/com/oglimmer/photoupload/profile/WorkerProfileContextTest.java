@@ -57,6 +57,10 @@ class WorkerProfileContextTest {
     assertThat(context.containsBean("uploadBackpressureFilter")).isFalse();
     assertThat(context.containsBean("deviceTokenService")).isFalse();
     assertThat(context.containsBean("albumSubscriptionNotificationService")).isFalse();
+    // Reverse geocoding is api-only: the worker has no HTTP surface that needs a place name.
+    assertThat(context.containsBean("geocodeController")).isFalse();
+    assertThat(context.containsBean("reverseGeocodeService")).isFalse();
+    assertThat(context.containsBean("appleMapsGeocodeClient")).isFalse();
   }
 
   @Test

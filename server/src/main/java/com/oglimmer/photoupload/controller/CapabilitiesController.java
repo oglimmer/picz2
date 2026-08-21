@@ -4,6 +4,7 @@ package com.oglimmer.photoupload.controller;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.config.TusProperties;
 import com.oglimmer.photoupload.service.AppleMapsTokenService;
+import com.oglimmer.photoupload.service.ReverseGeocodeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,6 +22,7 @@ public class CapabilitiesController {
 
   private final TusProperties tusProperties;
   private final AppleMapsTokenService appleMapsTokenService;
+  private final ReverseGeocodeService reverseGeocodeService;
 
   @GetMapping("/api/capabilities")
   public Capabilities get() {
@@ -31,7 +33,7 @@ public class CapabilitiesController {
             tusProperties.getVersion(),
             tusProperties.getMaxSize()),
         new MultipartCapability(true, "/api/upload"),
-        new MapsCapability(appleMapsTokenService.isEnabled()));
+        new MapsCapability(appleMapsTokenService.isEnabled(), reverseGeocodeService.isEnabled()));
   }
 
   public record Capabilities(
@@ -45,6 +47,10 @@ public class CapabilitiesController {
    * Whether the gallery's map filter can work. False when {@code maps.apple.*} is unset or the
    * private key failed to parse — the UI then hides the filter rather than offering a map that
    * would never load.
+   *
+   * <p>{@code geocoding} says whether {@code /api/geocode/reverse} can name a coordinate. It needs
+   * the same Apple credentials plus {@code maps.geocode.enabled}, and when it is false the region
+   * headings show coordinates and the UI does not call the endpoint at all.
    */
-  public record MapsCapability(boolean enabled) {}
+  public record MapsCapability(boolean enabled, boolean geocoding) {}
 }

@@ -19,8 +19,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * future change that drops a {@code @Profile(API)} or wires worker-only types into the api graph
  * (without {@code Optional<>}) fails here.
  */
+// MOCK, not NONE: SecurityConfig's filter chain asks for a CorsConfigurationSource, which only
+// exists once the WebMvc infrastructure is loaded. With NONE the context failed to start at all,
+// so this guard could never actually check a bean — it reported a CORS error instead.
 @SpringBootTest(
-    webEnvironment = SpringBootTest.WebEnvironment.NONE,
+    webEnvironment = SpringBootTest.WebEnvironment.MOCK,
     properties = {"app.apns.enabled=false", "app.mail.enabled=false", "spring.mail.host=localhost"})
 @ActiveProfiles("api")
 @Testcontainers
@@ -46,6 +49,12 @@ class ApiProfileContextTest {
     assertThat(context.containsBean("uploadBackpressureFilter")).isTrue();
     assertThat(context.containsBean("deviceTokenService")).isTrue();
     assertThat(context.containsBean("albumSubscriptionNotificationService")).isTrue();
+    // Reverse geocoding (D38). Also the guard that caught what a compile cannot: this graph once
+    // asked for a RestClient.Builder bean that Boot 4 only ships in a starter we don't depend on,
+    // and the api pod refused to boot.
+    assertThat(context.containsBean("geocodeController")).isTrue();
+    assertThat(context.containsBean("reverseGeocodeService")).isTrue();
+    assertThat(context.containsBean("appleMapsGeocodeClient")).isTrue();
   }
 
   @Test

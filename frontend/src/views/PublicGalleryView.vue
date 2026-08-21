@@ -21,7 +21,7 @@
 
     <!-- Presentation mode filter -->
     <div
-      v-if="tagsUsedInAlbum.length > 1 || recordings.length > 0 || mapFilterAvailable"
+      v-if="tagsUsedInAlbum.length > 1 || recordings.length > 0 || mapFilterAvailable || dayRegionAvailable"
       class="controls presentation-controls"
     >
       <div
@@ -55,6 +55,18 @@
           class="audio-available-indicator"
         >AUDIO AVAILABLE</span>
       </div>
+      <label
+        v-if="dayRegionAvailable && !isPlaying"
+        class="day-region-toggle"
+        :class="{ 'day-region-toggle--active': dayRegionGrouping }"
+        title="Group these photos by the day they were taken, then by places within 2 km of each other"
+      >
+        <input
+          v-model="dayRegionGrouping"
+          type="checkbox"
+        >
+        <span>📅 By day &amp; region</span>
+      </label>
       <div
         v-if="!isPlaying"
         class="recording-controls"
@@ -104,6 +116,64 @@
       :saved-view="albumMapViewValue"
       @open="openImage"
     />
+
+    <!-- By day & region: day sections, each cut into places at most 2 km across. Only reachable
+         with a tag selected, so it never stands in for the "pick a tag" prompt below. -->
+    <div
+      v-else-if="dayRegionActive"
+      class="day-groups"
+    >
+      <section
+        v-for="day in dayRegionGroups"
+        :key="day.key"
+        class="day-group"
+      >
+        <header class="day-group-header">
+          <h2 class="day-group-title">
+            {{ formatDayLabel(day) }}
+          </h2>
+          <span class="day-group-count">{{ day.count }} {{ day.count === 1 ? 'photo' : 'photos' }}</span>
+        </header>
+
+        <div
+          v-for="cluster in day.clusters"
+          :key="cluster.key"
+          class="region-group"
+        >
+          <div class="region-header">
+            <span class="region-name">
+              {{ cluster.located ? '📍' : '❓' }} {{ regionLabel(cluster.center) }}
+            </span>
+            <span class="region-meta">
+              {{ cluster.files.length }} {{ cluster.files.length === 1 ? 'photo' : 'photos' }}<template
+                v-if="cluster.located && cluster.spreadMeters > 0"
+              > · within {{ formatDistance(cluster.spreadMeters) }}</template>
+            </span>
+          </div>
+          <div class="gallery presentation-gallery">
+            <div
+              v-for="file in cluster.files"
+              :key="file.id"
+              class="gallery-item"
+              @click="openImage(file)"
+            >
+              <div class="image-container">
+                <LazyImage
+                  :src="getThumbnailUrl(file)"
+                  :alt="file.originalName"
+                />
+                <div
+                  v-if="isVideoFile(file)"
+                  class="video-play-overlay"
+                >
+                  <span class="play-icon">▶</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <!-- Empty state when no filter selected (only show if multiple tags available) -->
     <div
@@ -249,6 +319,8 @@ import { useNotifications } from '../composables/useNotifications'
 import { useAnalytics } from '../composables/useAnalytics'
 import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { isVideo } from '../utils/format'
+import { groupByDayAndRegion, formatDayLabel, formatDistance, DEFAULT_REGION_RADIUS_METERS } from '../utils/dayRegionGrouping'
+import { useRegionNames } from '../composables/useRegionNames'
 import { albumMapView } from '../types'
 import Lightbox from '../components/Lightbox.vue'
 import LazyImage from '../components/LazyImage.vue'
@@ -389,6 +461,33 @@ export default {
     watch(mapFilterAvailable, available => {
       if (!available) mapMode.value = false
     })
+
+    // --- By day & region --------------------------------------------------------------------
+    // The same second reading of the album the owner gets: day sections, each cut into places at
+    // most 2 km across (see utils/dayRegionGrouping.ts). Off during playback, where the recorded
+    // slideshow drives the order and a re-shelved grid behind the lightbox would fight it.
+    // Off on every visit, never remembered — same as the logged-in gallery.
+    const dayRegionGrouping = ref(false)
+
+    // Only once a tag is chosen: this groups the filtered set, it is not a way to open the whole
+    // album past the filter prompt. Matches the logged-in gallery.
+    const dayRegionAvailable = computed(
+      () => Boolean(selectedTag.value) && !mapMode.value && files.value.length > 0
+    )
+
+    const dayRegionActive = computed(() =>
+      dayRegionGrouping.value && dayRegionAvailable.value && !isPlaying.value
+    )
+
+    const dayRegionGroups = computed(() =>
+      dayRegionActive.value
+        ? groupByDayAndRegion(files.value, DEFAULT_REGION_RADIUS_METERS)
+        : []
+    )
+
+    // Place names for the region headings; coordinates stand in until one arrives, and stay
+    // for good when the server has no Apple Maps key.
+    const { regionLabel } = useRegionNames()
 
     const presentationSections = computed(() =>
       buildSections(files.value, selectedTag.value)
@@ -694,6 +793,13 @@ export default {
       allFilesUnfiltered,
       mapMode,
       mapFilterAvailable,
+      dayRegionGrouping,
+      dayRegionAvailable,
+      dayRegionActive,
+      dayRegionGroups,
+      regionLabel,
+      formatDayLabel,
+      formatDistance,
       filterSelection,
       MAP_FILTER_VALUE,
       tagsUsedInAlbum,

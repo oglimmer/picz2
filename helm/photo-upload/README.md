@@ -203,9 +203,49 @@ helm upgrade --install photo-upload ./helm/photo-upload \
 Verify after deploy:
 
 ```bash
-curl -s https://picz2.oglimmer.com/api/capabilities | jq .maps      # {"enabled": true}
+curl -s https://picz2.oglimmer.com/api/capabilities | jq .maps      # {"enabled": true, "geocoding": true}
 curl -s https://picz2.oglimmer.com/api/maps/token | cut -c1-40      # a JWT, not an error string
 ```
+
+### Reverse geocoding (place names on "by day & region")
+
+The gallery's "📅 By day & region" grouping labels each region with a place name. The api pod
+resolves those through the **Apple Maps Server API**, behind its own cache, at
+`GET /api/geocode/reverse?loc=50.047,8.574&loc=…&lang=de`. It rides on `appleMaps.*` — same key,
+same Team ID — and does nothing at all when `appleMaps.enabled=false`; the headings then show
+coordinates.
+
+A lookup stops at the first of four layers that answers: an in-memory map, the exact
+`geocode_cache` row (V38, shared by every pod and surviving restarts), the nearest cached point
+within `reuseRadiusMeters`, and finally Apple. Only the last one costs quota, and it is
+single-flighted, so twenty visitors opening the same album at once produce one call.
+
+| Parameter                                        | Description                                                                        | Default |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------- | ------- |
+| `appleMaps.geocode.enabled`                      | Resolve place names at all; false ⇒ `maps.geocoding=false` and coordinates are shown | `true`  |
+| `appleMaps.geocode.reuseRadiusMeters`            | A cached name this close is reused rather than asking Apple again                    | `300`   |
+| `appleMaps.geocode.maxLookupsPerMinute`          | Pod-wide ceiling on calls that actually reach Apple — the quota guard                | `120`   |
+| `appleMaps.geocode.maxRequestsPerMinutePerClient`| Per-IP ceiling on the endpoint itself (it is unauthenticated, like the map token)    | `60`    |
+| `appleMaps.geocode.defaultLanguage`              | Language used when the caller asks for one we do not cache (en, de, fr, es, it)      | `en`    |
+
+Every limit degrades to "no place name", never to an error, so a throttled or misconfigured
+install shows coordinates instead of breaking the gallery.
+
+```bash
+# Should answer with a name; run it twice — the second is a cache hit and returns instantly.
+curl -s 'https://picz2.oglimmer.com/api/geocode/reverse?loc=50.047,8.574&lang=de' | jq .
+
+# How well the cache is doing, and how much quota is actually being spent:
+curl -s https://picz2.oglimmer.com/actuator/prometheus | grep geocode_
+```
+
+Names are labelled town-first ("Banff"), falling back to a named area ("Banff National Park"), a
+district, then `"State, Country"`. When the rule changes, `ReverseGeocodeService.LABEL_VERSION` is
+bumped and every row below it re-resolves as people browse — no cleanup script, no cache flush.
+
+`geocode_cache_total{layer="memory|database|nearby"}` counts the questions answered without Apple;
+`geocode_lookup_total{result="resolved|empty|throttled"}` counts the ones that were not. In steady
+state the lookup counter should be nearly flat.
 
 A bad `.p8` does **not** fail the boot: the api pod logs `Apple Maps private key could not be parsed` and reports `maps.enabled=false`, because the rest of the gallery has no reason to go down over a map.
 

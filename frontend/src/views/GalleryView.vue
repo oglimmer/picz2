@@ -529,6 +529,19 @@
         </select>
       </div>
 
+      <label
+        v-if="dayRegionAvailable"
+        class="day-region-toggle"
+        :class="{ 'day-region-toggle--active': dayRegionGrouping }"
+        title="Group these photos by the day they were taken, then by places within 2 km of each other"
+      >
+        <input
+          v-model="dayRegionGrouping"
+          type="checkbox"
+        >
+        <span>📅 By day &amp; region</span>
+      </label>
+
       <div class="grid-size-picker">
         <button
           v-for="size in ['small', 'medium', 'large']"
@@ -731,6 +744,72 @@
       </section>
     </div>
 
+    <!-- By day & region: one section per calendar day, one sub-section per place. The regions
+         come from a complete-linkage clustering, so every photo in a region is within 2 km of
+         every other one in it, not merely of its neighbour (see utils/dayRegionGrouping.ts). -->
+    <div
+      v-else-if="dayRegionActive"
+      class="day-groups"
+    >
+      <section
+        v-for="day in dayRegionGroups"
+        :key="day.key"
+        class="day-group"
+      >
+        <header class="day-group-header">
+          <h2 class="day-group-title">
+            {{ formatDayLabel(day) }}
+          </h2>
+          <span class="day-group-count">{{ day.count }} {{ day.count === 1 ? 'photo' : 'photos' }}</span>
+        </header>
+
+        <div
+          v-for="cluster in day.clusters"
+          :key="cluster.key"
+          class="region-group"
+        >
+          <div class="region-header">
+            <span class="region-name">
+              {{ cluster.located ? '📍' : '❓' }} {{ regionLabel(cluster.center) }}
+            </span>
+            <span class="region-meta">
+              {{ cluster.files.length }} {{ cluster.files.length === 1 ? 'photo' : 'photos' }}<template
+                v-if="cluster.located && cluster.spreadMeters > 0"
+              > · within {{ formatDistance(cluster.spreadMeters) }}</template>
+            </span>
+          </div>
+          <div
+            class="gallery"
+            :class="`gallery--${albumSize}`"
+          >
+            <GalleryItem
+              v-for="file in cluster.files"
+              :key="`${file.id}:${file.publicToken}`"
+              :file="file"
+              :available-tags="enabledAlbumTags"
+              :is-draggable="false"
+              :show-drag-handle="false"
+              :show-file-info="isLoggedIn"
+              :selectable="isLoggedIn"
+              :selected="reorderModeActive ? selectedForReorder.has(file.id) : duplicateFilterActive ? selectedForDeletion.has(file.id) : selectedFileIds.has(file.id)"
+              :selection-active="selectionActive || duplicateFilterActive || reorderModeActive"
+              :bulk-select="duplicateFilterActive || reorderModeActive"
+              :select-variant="reorderModeActive ? 'reorder' : 'delete'"
+              :move-target="reorderModeActive && selectedForReorder.size > 0 && !selectedForReorder.has(file.id)"
+              @click="openLightbox"
+              @delete="handleDeleteFile"
+              @rotate="handleRotateImage"
+              @add-tag="handleAddTag"
+              @remove-tag="handleRemoveTag"
+              @filter-tag="filterByTagName"
+              @toggle-select="(fileId, shiftKey) => handleToggleSelect(fileId, albumIndexOf(fileId), shiftKey)"
+              @move-here="handleMoveSelectedAfter"
+            />
+          </div>
+        </div>
+      </section>
+    </div>
+
     <!-- Gallery -->
     <div
       v-else
@@ -841,6 +920,8 @@ import { useAnalytics } from '../composables/useAnalytics'
 import { useUpload } from '../composables/useUpload'
 import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { formatBytes } from '../utils/format'
+import { groupByDayAndRegion, formatDayLabel, formatDistance, DEFAULT_REGION_RADIUS_METERS } from '../utils/dayRegionGrouping'
+import { useRegionNames } from '../composables/useRegionNames'
 import { albumMapView } from '../types'
 import GalleryItem from '../components/GalleryItem.vue'
 import Lightbox from '../components/Lightbox.vue'
@@ -1066,6 +1147,47 @@ export default {
     watch(mapFilterAvailable, available => {
       if (!available) mapMode.value = false
     })
+
+    // --- By day & region --------------------------------------------------------------------
+    // A second way to read the same photos: day sections, each cut into places. Kept as its own
+    // flag rather than another entry in the tag dropdown, because it is orthogonal — it re-shelves
+    // whatever the tag filter already selected instead of replacing the selection.
+    // Always starts off, and is deliberately not remembered across visits: the plain grid is what
+    // the gallery is, and a setting from some earlier session silently re-shelving it is a worse
+    // surprise than one click.
+    const dayRegionGrouping = ref(false)
+
+    // Grouping is a second reading of one filtered set, not a way to browse the whole album: day
+    // sections over every photo an album holds are as long as the album and say nothing. So the
+    // toggle only appears once a tag is chosen, and it groups exactly what that tag selected.
+    const dayRegionAvailable = computed(
+      () => !props.presentationMode && !mapMode.value && Boolean(selectedTag.value)
+    )
+
+    const dayRegionActive = computed(() => dayRegionAvailable.value && dayRegionGrouping.value)
+
+    const dayRegionGroups = computed(() =>
+      dayRegionActive.value
+        ? groupByDayAndRegion(displayedFiles.value, DEFAULT_REGION_RADIUS_METERS)
+        : []
+    )
+
+    // Place names for the region headings, reverse-geocoded through MapKit when the server has
+    // Apple Maps configured; the coordinates stand in until (or unless) a name arrives.
+    const { regionLabel } = useRegionNames()
+
+    // Shift-select ranges are indices into the full album, and the grouped view hands out files
+    // in section order, so the index has to be looked up rather than read off the loop.
+    const albumIndexById = computed(() => {
+      const map = new Map()
+      files.value.forEach((file, index) => map.set(file.id, index))
+      return map
+    })
+
+    function albumIndexOf(fileId) {
+      const index = albumIndexById.value.get(fileId)
+      return index === undefined ? -1 : index
+    }
 
     // Presentation image groups — sections derived from the group markers of the selected tag.
     const presentationSections = computed(() =>
@@ -1659,7 +1781,9 @@ export default {
         return
       }
       const ids = new Set(selectedFileIds.value)
-      if (shiftKey && lastSelectedIndex.value !== null) {
+      // index < 0 means the caller could not place the file in the album (a stale grouped
+      // section, say). Range-selecting from an unknown anchor would grab the wrong photos.
+      if (shiftKey && lastSelectedIndex.value !== null && index >= 0) {
         const lo = Math.min(lastSelectedIndex.value, index)
         const hi = Math.max(lastSelectedIndex.value, index)
         for (let i = lo; i <= hi; i++) {
@@ -2284,6 +2408,14 @@ export default {
       selectedTag,
       mapMode,
       mapFilterAvailable,
+      dayRegionGrouping,
+      dayRegionAvailable,
+      dayRegionActive,
+      dayRegionGroups,
+      regionLabel,
+      formatDayLabel,
+      formatDistance,
+      albumIndexOf,
       filterSelection,
       MAP_FILTER_VALUE,
       albumMapViewValue,
