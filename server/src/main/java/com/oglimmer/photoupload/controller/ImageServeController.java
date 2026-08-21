@@ -7,6 +7,7 @@ import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
+import java.time.Instant;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.WebRequest;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
@@ -47,7 +49,9 @@ public class ImageServeController {
 
   @GetMapping("/{token}")
   public ResponseEntity<?> downloadFileByToken(
-      @PathVariable String token, @RequestParam(value = "size", required = false) String size) {
+      @PathVariable String token,
+      @RequestParam(value = "size", required = false) String size,
+      WebRequest webRequest) {
     try {
       FileServeInfo fileInfo = fileStorageService.getFileServeInfoByPublicToken(token, size);
 
@@ -63,6 +67,17 @@ public class ImageServeController {
             .build();
       }
 
+      // Answer conditional GETs *before* touching disk or MinIO. This is not just an
+      // optimisation: Spring's HttpEntityMethodProcessor short-circuits an ETag match to 304
+      // and returns without ever invoking the message converter, so a ResponseInputStream
+      // opened here would never be closed and its pooled MinIO connection never returned. The
+      // Apache pool is finite (see ObjectStorageConfig), so a browser reload — which
+      // revalidates every cached thumbnail at once — used to bleed the pool dry and leave
+      // subsequent image requests blocking in connection acquisition.
+      if (isNotModified(webRequest, fileInfo)) {
+        return null; // webRequest already set 304 + validators on the response
+      }
+
       if (fileInfo.getStorageKey() != null) {
         return serveFromObjectStorage(fileInfo);
       }
@@ -73,6 +88,19 @@ public class ImageServeController {
       log.error("Error downloading file by token", e);
       throw new RuntimeException("Error downloading file: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Delegates If-None-Match / If-Modified-Since evaluation to Spring. Returns true when the
+   * caller's cached copy is still valid, in which case the response has already been populated with
+   * 304 and the validators. Returns false otherwise — but note that it stamps {@code ETag} and
+   * {@code Last-Modified} onto the response either way, which is why the builders below no longer
+   * set them (doing so would emit each header twice).
+   */
+  private boolean isNotModified(WebRequest webRequest, FileServeInfo fileInfo) {
+    Instant uploadedAt = fileInfo.getUploadedAt();
+    long lastModified = uploadedAt != null ? uploadedAt.toEpochMilli() : -1L;
+    return webRequest.checkNotModified(fileInfo.getChecksum(), lastModified);
   }
 
   private ResponseEntity<Resource> serveFromDisk(String token, FileServeInfo fileInfo)
@@ -95,9 +123,8 @@ public class ImageServeController {
     MediaType mediaType = parseMediaType(fileInfo.getMimeType());
     return ResponseEntity.ok()
         .contentType(mediaType)
-        .cacheControl(CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
-        .eTag(fileInfo.getChecksum())
-        .lastModified(fileInfo.getUploadedAt())
+        .cacheControl(
+            CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic().immutable())
         .header(
             HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
         .body(resource);
@@ -120,9 +147,9 @@ public class ImageServeController {
         ResponseEntity.ok()
             .contentType(mediaType)
             .cacheControl(
-                CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic())
-            .eTag(fileInfo.getChecksum())
-            .lastModified(fileInfo.getUploadedAt())
+                CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS)
+                    .cachePublic()
+                    .immutable())
             .header(
                 HttpHeaders.CONTENT_DISPOSITION,
                 "inline; filename=\"" + safeFilenameForKey(fileInfo) + "\"");

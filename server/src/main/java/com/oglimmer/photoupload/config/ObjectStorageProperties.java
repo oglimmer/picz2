@@ -60,4 +60,22 @@ public class ObjectStorageProperties {
    * attempt timeout so one retry is possible before giving up.
    */
   private int apiCallTimeoutSeconds = 60;
+
+  /**
+   * Size of the Apache HTTP connection pool the SDK uses to talk to MinIO. The SDK's own default is
+   * 50, which is an invisible ceiling: the api pod serves every thumbnail by streaming it from
+   * MinIO, so a gallery scroll turns straight into concurrent pool checkouts. Sized above {@code
+   * server.tomcat.threads.max} (25) so the servlet container, not this pool, is the thing that
+   * bounds concurrency — a pool smaller than the thread count just moves the queue somewhere with
+   * worse diagnostics.
+   */
+  private int maxConnections = 64;
+
+  /**
+   * How long a caller waits for a pooled connection before failing. The SDK default is 10s and
+   * pool-timeouts are retryable, so an exhausted pool used to surface as a ~30s stall (three 10s
+   * acquisition attempts) rather than an error. 5s fails fast enough to show up in logs and metrics
+   * while still absorbing a normal burst.
+   */
+  private int connectionAcquisitionTimeoutSeconds = 5;
 }

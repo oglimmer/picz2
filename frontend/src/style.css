@@ -2511,6 +2511,52 @@ body.landing-page .version-info { display: none; }
 }
 .gallery-item:hover .image-container img { transform: scale(1.03); }
 
+/* Lazy thumbnail: a shimmering block holds the tile until the bytes arrive, so a fast scroll
+   lands on "these are coming" rather than on empty squares. See LazyImage.vue for why the
+   request itself is withheld during the scroll. */
+.lazy-image {
+  position: absolute;
+  inset: 0;
+}
+.image-container .lazy-image img {
+  opacity: 0;
+  transition: opacity var(--t-mid), transform .45s ease;
+}
+.image-container .lazy-image.is-loaded img { opacity: 1; }
+.lazy-image__skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    var(--c-surface-alt) 30%,
+    #FBF6EF 48%,
+    var(--c-surface-alt) 66%
+  );
+  background-size: 300% 100%;
+  animation: lazy-image-shimmer 1.4s ease-in-out infinite;
+}
+.lazy-image__failed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface-alt);
+  color: var(--c-text-3);
+  font-size: 1.25rem;
+}
+@keyframes lazy-image-shimmer {
+  from { background-position: 150% 0; }
+  to   { background-position: -50% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lazy-image__skeleton {
+    animation: none;
+    background: var(--c-surface-alt);
+  }
+  .image-container .lazy-image img { transition: none; }
+}
+
 .processing-placeholder {
   position: absolute;
   inset: 0;
