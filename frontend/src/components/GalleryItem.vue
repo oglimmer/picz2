@@ -31,12 +31,11 @@
       class="image-container"
       @click="(e) => selectionActive ? $emit('toggle-select', file.id, e.shiftKey) : $emit('click', file)"
     >
-      <img
+      <LazyImage
         v-if="thumbnailReady"
         :src="thumbnailUrl"
         :alt="file.originalName"
-        loading="lazy"
-      >
+      />
       <div
         v-else
         class="processing-placeholder"
@@ -158,6 +157,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import LazyImage from '@/components/LazyImage.vue'
 import { useApi } from '@/composables/useApi'
 import { formatBytes, formatDate, isVideo } from '@/utils/format'
 import type { AlbumFile, Tag } from '@/types'

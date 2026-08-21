@@ -140,11 +140,10 @@
             @click="openImage(file)"
           >
             <div class="image-container">
-              <img
+              <LazyImage
                 :src="getThumbnailUrl(file)"
                 :alt="file.originalName"
-                loading="lazy"
-              >
+              />
               <div
                 v-if="isVideoFile(file)"
                 class="video-play-overlay"
@@ -218,6 +217,7 @@ import { usePresentationGroups } from '../composables/usePresentationGroups'
 import { isVideo } from '../utils/format'
 import { albumMapView } from '../types'
 import Lightbox from '../components/Lightbox.vue'
+import LazyImage from '../components/LazyImage.vue'
 import CookieConsent from '../components/CookieConsent.vue'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
@@ -228,6 +228,7 @@ export default {
   name: 'PublicGalleryView',
   components: {
     Lightbox,
+    LazyImage,
     CookieConsent,
     SubscriptionDialog,
     PresentationGroupHeader,

@@ -56,7 +56,11 @@ public class ObjectStorageConfig {
             S3Configuration.builder()
                 .pathStyleAccessEnabled(properties.isPathStyleAccess())
                 .build())
-        .httpClientBuilder(ApacheHttpClient.builder())
+        .httpClientBuilder(
+            ApacheHttpClient.builder()
+                .maxConnections(properties.getMaxConnections())
+                .connectionAcquisitionTimeout(
+                    Duration.ofSeconds(properties.getConnectionAcquisitionTimeoutSeconds())))
         .overrideConfiguration(apiCallTimeouts())
         // SDK v2.30+ defaults to Flexible Checksums (CRC32) and stops sending Content-MD5 on
         // DeleteObjects. MinIO still requires Content-MD5 for the multi-object delete and 400s

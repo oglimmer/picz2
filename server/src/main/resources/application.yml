@@ -87,6 +87,8 @@ storage:
     presign-seconds: "${STORAGE_S3_PRESIGN_SECONDS:3600}"
     api-call-attempt-timeout-seconds: "${STORAGE_S3_API_CALL_ATTEMPT_TIMEOUT_SECONDS:30}"
     api-call-timeout-seconds: "${STORAGE_S3_API_CALL_TIMEOUT_SECONDS:60}"
+    max-connections: "${STORAGE_S3_MAX_CONNECTIONS:64}"
+    connection-acquisition-timeout-seconds: "${STORAGE_S3_CONNECTION_ACQUISITION_TIMEOUT_SECONDS:5}"
 retention:
   # Phase 6 / Gap 4-finish — nightly CronJob purges originals from MinIO once derivatives are
   # durable and the row is older than this many days. Conservative default per the plan; the
