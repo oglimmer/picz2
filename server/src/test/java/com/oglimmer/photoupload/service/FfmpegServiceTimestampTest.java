@@ -33,6 +33,21 @@ class FfmpegServiceTimestampTest {
   }
 
   @Test
+  void readsTheOffsetApplePutsOnCreationdate() {
+    assertThat(FfmpegService.parseOffsetSeconds("2026-08-17T14:23:11+0200")).isEqualTo(2 * 3600);
+    assertThat(FfmpegService.parseOffsetSeconds("2026-08-17T09:23:11-05:00")).isEqualTo(-5 * 3600);
+  }
+
+  /** A zone-less mvhd value has no local clock to recover, so no offset is invented for it. */
+  @Test
+  void reportsNoOffsetForZonelessOrUnparseableValues() {
+    assertThat(FfmpegService.parseOffsetSeconds("2026-08-17 12:23:11")).isNull();
+    assertThat(FfmpegService.parseOffsetSeconds("2026-08-17T12:23:11.000000Z")).isEqualTo(0);
+    assertThat(FfmpegService.parseOffsetSeconds(null)).isNull();
+    assertThat(FfmpegService.parseOffsetSeconds("nonsense")).isNull();
+  }
+
+  @Test
   void treatsZonelessTimestampAsUtc() {
     assertThat(FfmpegService.parseTimestamp("2026-08-17 12:23:11"))
         .isEqualTo(Instant.parse("2026-08-17T12:23:11Z"));

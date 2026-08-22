@@ -23,7 +23,7 @@ Backend runs as `api` and `worker` pods sharing the same JAR (different `SPRING_
 
 ## Test caveats
 
-- Pre-existing baseline failure: `FileProcessingServiceStatusTest.successfulProcessingTransitionsToDoneAndIncrementsAttempts`. Documented in the plan; not yours to fix. Just don't add *new* failures.
+- The suite is green (199 tests, 0 failures, as of 2026-08-22). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
 - Some IT classes (`ProcessingJobLeaseTest`, `*ProfileContextTest`) are gated by `-Drun.testcontainers=true` because Docker Desktop returns stub responses to docker-java. They run cleanly on a non-Desktop daemon.
 
 ## Single-test syntax

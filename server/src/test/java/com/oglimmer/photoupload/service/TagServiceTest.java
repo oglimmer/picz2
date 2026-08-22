@@ -140,15 +140,18 @@ class TagServiceTest {
     assertTrue(ex.getMessage().contains("exceed 50"));
   }
 
+  /**
+   * {@code updateTag} renames the managed entity and lets the transaction flush it — there is no
+   * explicit {@code save()} to verify, so the rename is asserted on the entity itself.
+   */
   @Test
-  void updateTagSavesNewName() {
+  void updateTagRenamesTheEntity() {
     Tag existing = new Tag();
     existing.setId(1L);
     existing.setName("a");
     existing.setUser(testUser);
     when(tagRepository.findByUserAndId(testUser, 1L)).thenReturn(Optional.of(existing));
     when(tagRepository.existsByUserAndName(testUser, "b")).thenReturn(false);
-    when(tagRepository.save(any(Tag.class))).thenAnswer(inv -> inv.getArgument(0));
 
     // Mock mapper
     TagInfo info = new TagInfo(1L, "b", null);
@@ -156,9 +159,7 @@ class TagServiceTest {
 
     TagInfo updated = tagService.updateTag(1L, "b");
     assertEquals("b", updated.getName());
-    ArgumentCaptor<Tag> captor = ArgumentCaptor.forClass(Tag.class);
-    verify(tagRepository).save(captor.capture());
-    assertEquals("b", captor.getValue().getName());
+    assertEquals("b", existing.getName());
   }
 
   @Test

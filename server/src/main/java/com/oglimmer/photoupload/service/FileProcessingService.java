@@ -220,6 +220,7 @@ public class FileProcessingService {
       metadata.setExifDateSource(captureDate.source());
       if (captureDate.isPresent()) {
         metadata.setExifDateTimeOriginal(captureDate.instant());
+        metadata.setCaptureUtcOffsetSeconds(captureDate.offsetSeconds());
       }
 
       // 5) Capture location (EXIF GPS IFD / QuickTime location atom), for the map filter.
@@ -603,6 +604,12 @@ public class FileProcessingService {
       metadata.setExifDateSource(captureDate.source());
       if (captureDate.isPresent()) {
         metadata.setExifDateTimeOriginal(captureDate.instant());
+        metadata.setCaptureUtcOffsetSeconds(captureDate.offsetSeconds());
+      } else if (previous != null && metadata.getCaptureUtcOffsetSeconds() == null) {
+        // Kept-but-unreadable rows were written by the old extractor, which relabelled the wall
+        // clock as UTC. Offset 0 therefore recovers that wall clock exactly, and stamping it keeps
+        // the row out of the next sweep instead of re-reading it forever.
+        metadata.setCaptureUtcOffsetSeconds(0);
       }
       // A NONE result keeps whatever the old extractor stored: it is at worst offset by a UTC
       // offset, which still beats dropping the only capture date we have. The recorded source

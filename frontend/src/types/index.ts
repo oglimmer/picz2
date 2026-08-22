@@ -62,6 +62,11 @@ export interface AlbumFile {
   mimetype?: string;
   uploadedAt: string;
   exifDateTimeOriginal?: string;
+  // UTC offset in seconds where the shutter fired, absent when the file never carried one.
+  // Added to exifDateTimeOriginal it gives the camera's own wall clock, which is the clock
+  // "group by day" cuts on — the viewer's timezone would shelve a Toronto evening under the
+  // next morning for anyone browsing from Europe.
+  captureUtcOffsetSeconds?: number | null;
   rotation?: number;
   tags: string[];
   order?: number;

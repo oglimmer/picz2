@@ -104,9 +104,13 @@ public class AdminController {
    * in "reorder by EXIF". Worker-side cost is one GET plus one metadata read per asset; no
    * derivatives are touched.
    *
-   * <p>Idempotent: each pass stamps {@code exif_date_source}, which drops the row out of the
-   * eligible set. Caller pages by re-invoking until {@code enqueued == 0}. Retention-purged assets
-   * are skipped — their originals no longer exist.
+   * <p>Also picks up assets that have a capture date but no {@code capture_utc_offset_seconds} —
+   * the offset the gallery needs to cut day sections on the camera's own wall clock instead of the
+   * viewer's timezone (D41). Same one-GET cost, same pass.
+   *
+   * <p>Idempotent: each pass stamps {@code exif_date_source} and, where the file can yield one, the
+   * offset, which drops the row out of the eligible set. Caller pages by re-invoking until {@code
+   * enqueued == 0}. Retention-purged assets are skipped — their originals no longer exist.
    */
   @PostMapping("/reextract-capture-dates")
   public ResponseEntity<AdminOperationResponse> reextractCaptureDates(

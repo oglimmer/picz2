@@ -44,9 +44,12 @@ export interface RegionCluster {
 }
 
 export interface DayGroup {
-  /** Local calendar day, `YYYY-MM-DD`; `"unknown"` when a photo carries no usable date. */
+  /**
+   * Calendar day at the capture location, `YYYY-MM-DD`; `"unknown"` when a photo carries no
+   * usable date. Not the viewer's day: see `dayOf`.
+   */
   key: string;
-  /** Local midnight of that day, or null for the unknown-date group. */
+  /** That day at local midnight (for labelling only), or null for the unknown-date group. */
   date: Date | null;
   clusters: RegionCluster[];
   count: number;
@@ -71,7 +74,7 @@ export function fileLatLng(file: AlbumFile): LatLng | null {
   return { lat: file.gpsLatitude, lng: file.gpsLongitude };
 }
 
-/** When the photo was taken, preferring EXIF over the upload timestamp. */
+/** When the photo was taken, preferring EXIF over the upload timestamp. A true instant. */
 function captureDate(file: AlbumFile): Date | null {
   const raw = file.exifDateTimeOriginal || file.uploadedAt;
   if (!raw) return null;
@@ -79,11 +82,66 @@ function captureDate(file: AlbumFile): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-/** Local `YYYY-MM-DD`; local, not UTC, so an evening photo stays on the evening's date. */
-function dayKey(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+/** The capture offset the server resolved for this file, or null when it never knew one. */
+function fileOffsetSeconds(file: AlbumFile): number | null {
+  const seconds = file.captureUtcOffsetSeconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) ? seconds : null;
+}
+
+/**
+ * The offset that stands in for files carrying none of their own: the one most of this album's
+ * files were shot at.
+ *
+ * A gallery is normally one trip in one place, so a video with only a zone-less mvhd atom, or a
+ * photo whose original was purged before the offset column existed, belongs to the same day
+ * boundaries as its neighbours — far closer than the viewer's timezone, which is what the
+ * remaining `null` case falls back to.
+ */
+function dominantOffsetSeconds(files: AlbumFile[]): number | null {
+  const tally = new Map<number, number>();
+  for (const file of files) {
+    const seconds = fileOffsetSeconds(file);
+    if (seconds === null) continue;
+    tally.set(seconds, (tally.get(seconds) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestCount = 0;
+  for (const [seconds, count] of tally) {
+    if (count > bestCount) {
+      best = seconds;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * The calendar day a file belongs to, as `YYYY-MM-DD` plus a Date at that day's local midnight
+ * for labelling.
+ *
+ * Cut on the wall clock where the shutter fired, never on the viewer's: `exifDateTimeOriginal` is
+ * a true instant, so reading its day in Frankfurt puts a Toronto photo taken at 19:00 into the
+ * next day. Adding the capture offset back and then reading UTC fields gives the camera's own
+ * clock. With no offset anywhere (`fallbackOffsetSeconds` null too) the viewer's timezone is all
+ * that is left, which is the old behaviour and correct for photos taken at home.
+ */
+function dayOf(date: Date, offsetSeconds: number | null): { key: string; date: Date } {
+  let year: number;
+  let month: number;
+  let day: number;
+  if (offsetSeconds === null) {
+    year = date.getFullYear();
+    month = date.getMonth();
+    day = date.getDate();
+  } else {
+    const shifted = new Date(date.getTime() + offsetSeconds * 1000);
+    year = shifted.getUTCFullYear();
+    month = shifted.getUTCMonth();
+    day = shifted.getUTCDate();
+  }
+  const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  // Local midnight of that day: only its Y/M/D are ever read back, by `formatDayLabel`.
+  return { key, date: new Date(year, month, day) };
 }
 
 /**
@@ -261,16 +319,17 @@ export function groupByDayAndRegion(
   radiusMeters: number = DEFAULT_REGION_RADIUS_METERS,
 ): DayGroup[] {
   const days = new Map<string, { date: Date | null; files: AlbumFile[] }>();
+  const fallbackOffsetSeconds = dominantOffsetSeconds(files);
 
   for (const file of files) {
-    const date = captureDate(file);
-    const key = date ? dayKey(date) : "unknown";
+    const instant = captureDate(file);
+    const at = instant
+      ? dayOf(instant, fileOffsetSeconds(file) ?? fallbackOffsetSeconds)
+      : null;
+    const key = at ? at.key : "unknown";
     let day = days.get(key);
     if (!day) {
-      day = {
-        date: date ? new Date(date.getFullYear(), date.getMonth(), date.getDate()) : null,
-        files: [],
-      };
+      day = { date: at ? at.date : null, files: [] };
       days.set(key, day);
     }
     day.files.push(file);

@@ -99,6 +99,34 @@ class CaptureDateExtractorTest {
     assertThat(result.source()).isEqualTo(CaptureDateSource.EXIF_FALLBACK_ZONE);
   }
 
+  /**
+   * The instant alone cannot answer "which day was this taken on" — that needs the camera's wall
+   * clock back, which is the instant plus this offset. Without it the gallery's day sections are
+   * cut in the *viewer's* timezone, so a Toronto evening shows up under the next morning.
+   */
+  @Test
+  void theAppliedOffsetIsReportedSoTheWallClockCanBeRecovered() throws IOException {
+    Path jpeg = writeJpeg("toronto.jpg", "2026:08:17 19:23:11", "-04:00");
+
+    CaptureDate result = extractor("Europe/Berlin").extract(jpeg, "image/jpeg");
+
+    assertThat(result.offsetSeconds()).isEqualTo(-4 * 3600);
+    assertThat(result.instant().plusSeconds(result.offsetSeconds()))
+        .isEqualTo(Instant.parse("2026-08-17T19:23:11Z")); // the wall clock, read as UTC fields
+  }
+
+  /** A fallback-zone offset is still worth recording: undoing it recovers the same wall clock. */
+  @Test
+  void fallbackZoneOffsetIsReportedWithItsDstRule() throws IOException {
+    Path summer = writeJpeg("summer-fallback.jpg", "2026:08:17 14:23:11", null);
+    Path winter = writeJpeg("winter-fallback.jpg", "2026:01:17 14:23:11", null);
+
+    assertThat(extractor("Europe/Berlin").extract(summer, "image/jpeg").offsetSeconds())
+        .isEqualTo(2 * 3600);
+    assertThat(extractor("Europe/Berlin").extract(winter, "image/jpeg").offsetSeconds())
+        .isEqualTo(3600);
+  }
+
   @Test
   void fileWithoutExifYieldsNone() throws IOException {
     Path notAnImage =

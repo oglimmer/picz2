@@ -42,9 +42,12 @@ class FileProcessingServiceStatusTest {
 
   private final List<Snapshot> saves = new ArrayList<>();
 
+  private Path uploadDir;
+
   @BeforeEach
   void setUp(@TempDir Path tempDir) {
     saves.clear();
+    uploadDir = tempDir;
     properties = new FileStorageProperties();
     properties.setUploadDir(tempDir.toString());
     repository = mock(FileMetadataRepository.class);
@@ -94,7 +97,7 @@ class FileProcessingServiceStatusTest {
   void successfulProcessingTransitionsToDoneAndIncrementsAttempts() {
     FileMetadata md = seedMetadata();
     when(repository.findById(11L)).thenReturn(Optional.of(md));
-    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(new Path[3]);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
 
     service.processFile(11L);
 
@@ -108,6 +111,19 @@ class FileProcessingServiceStatusTest {
     assertThat(last.status()).isEqualTo(ProcessingStatus.DONE);
     assertThat(last.completedAt()).isNotNull();
     assertThat(last.error()).isNull();
+  }
+
+  /**
+   * What a successful {@code generateAllThumbnails} returns: one path per size. An array of three
+   * nulls is its "every size failed" signal, and {@code processFile} throws on it rather than
+   * marking an asset DONE with no derivatives — so a run stubbed that way is a *failed* run.
+   */
+  private Path[] generatedThumbnails() {
+    return new Path[] {
+      uploadDir.resolve("photo-stored-thumb.jpg"),
+      uploadDir.resolve("photo-stored-medium.jpg"),
+      uploadDir.resolve("photo-stored-large.jpg"),
+    };
   }
 
   @Test
