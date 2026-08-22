@@ -11,7 +11,7 @@
 
   <groupId>com.oglimmer</groupId>
   <artifactId>photo-upload-server</artifactId>
-  <version>1.0.35</version>
+  <version>1.0.35-SNAPSHOT</version>
   <name>Photo Upload Server</name>
   <description>Spring Boot server for photo and video uploads</description>
 
