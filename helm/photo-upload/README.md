@@ -259,6 +259,25 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 Assets whose original was already deleted by the retention sweep are skipped and can never be backfilled — the coordinates live only in the original, and no derivative carries them.
 
+### Capture-offset backfill (required once, for "by day & region")
+
+The gallery cuts day sections on the wall clock the camera saw, not the viewer's timezone —
+otherwise an album shot in Toronto breaks its days six hours early for anyone browsing from Europe.
+That needs `capture_utc_offset_seconds` (V40), which only assets processed after this feature
+shipped carry. The existing capture-date sweep backfills it, metadata only:
+
+```bash
+# Repeat until "enqueued": 0
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  'https://picz2.oglimmer.com/api/admin/reextract-capture-dates?maxRows=500'
+```
+
+Two kinds of asset never get an offset and do not need one: videos whose only timestamp is the
+zone-less mvhd atom, and assets whose original retention already purged. Both fall back to the
+album's dominant offset, so a trip album still breaks its days in the right place. Until the sweep
+has run, every album falls back that way — day sections are not *wrong*, they are just cut in the
+viewer's timezone as before.
+
 ### Retention CronJob
 
 Nightly sweep at the configured `schedule`. Three independent passes: aged-original purge, abandoned-TUS-upload cleanup, originals/ orphan detection. Each obeys the same `dryRun` and `maxRowsPerRun` knobs.

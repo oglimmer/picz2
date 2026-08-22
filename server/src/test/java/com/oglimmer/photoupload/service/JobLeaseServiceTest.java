@@ -18,7 +18,6 @@ import com.oglimmer.photoupload.repository.ProcessingJobRepository;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 class JobLeaseServiceTest {
 
@@ -71,6 +70,12 @@ class JobLeaseServiceTest {
     assertThat(result).isNull();
   }
 
+  /*
+   * markDone / markFailedOrDeadLetter mutate the entity they loaded inside their own transaction
+   * and let the flush write it — no explicit save() to verify, so the state is asserted on the
+   * job itself, which is the same instance the stubbed findById handed back.
+   */
+
   @Test
   void markDoneClearsLease() {
     ProcessingJob job = newJob(1L, JobStatus.PROCESSING, 1, 3);
@@ -79,27 +84,27 @@ class JobLeaseServiceTest {
 
     service.markDone(1L);
 
-    ArgumentCaptor<ProcessingJob> captor = ArgumentCaptor.forClass(ProcessingJob.class);
-    verify(repository).save(captor.capture());
-    ProcessingJob saved = captor.getValue();
-    assertThat(saved.getStatus()).isEqualTo(JobStatus.DONE);
-    assertThat(saved.getLeasedBy()).isNull();
-    assertThat(saved.getLeasedUntil()).isNull();
-    assertThat(saved.getFinishedAt()).isNotNull();
-    assertThat(saved.getLastError()).isNull();
+    assertThat(job.getStatus()).isEqualTo(JobStatus.DONE);
+    assertThat(job.getLeasedBy()).isNull();
+    assertThat(job.getLeasedUntil()).isNull();
+    assertThat(job.getFinishedAt()).isNotNull();
+    assertThat(job.getLastError()).isNull();
   }
 
+  /**
+   * Back to QUEUED, not FAILED: {@code findNextLeaseableId} only selects QUEUED rows, so a job
+   * parked in FAILED would never be retried — it would sit there until an admin noticed.
+   */
   @Test
-  void markFailedBeforeMaxAttemptsStaysFailed() {
+  void markFailedBeforeMaxAttemptsRequeuesForRetry() {
     ProcessingJob job = newJob(1L, JobStatus.PROCESSING, 1, 3);
     when(repository.findById(1L)).thenReturn(Optional.of(job));
 
     service.markFailedOrDeadLetter(1L, "transient blip");
 
-    ArgumentCaptor<ProcessingJob> captor = ArgumentCaptor.forClass(ProcessingJob.class);
-    verify(repository).save(captor.capture());
-    assertThat(captor.getValue().getStatus()).isEqualTo(JobStatus.FAILED);
-    assertThat(captor.getValue().getLastError()).isEqualTo("transient blip");
+    assertThat(job.getStatus()).isEqualTo(JobStatus.QUEUED);
+    assertThat(job.getFinishedAt()).isNull();
+    assertThat(job.getLastError()).isEqualTo("transient blip");
   }
 
   @Test
@@ -109,9 +114,8 @@ class JobLeaseServiceTest {
 
     service.markFailedOrDeadLetter(1L, "ffmpeg exit 137");
 
-    ArgumentCaptor<ProcessingJob> captor = ArgumentCaptor.forClass(ProcessingJob.class);
-    verify(repository).save(captor.capture());
-    assertThat(captor.getValue().getStatus()).isEqualTo(JobStatus.DEAD_LETTER);
+    assertThat(job.getStatus()).isEqualTo(JobStatus.DEAD_LETTER);
+    assertThat(job.getFinishedAt()).isNotNull();
   }
 
   @Test
@@ -122,9 +126,7 @@ class JobLeaseServiceTest {
     String huge = "x".repeat(8000);
     service.markFailedOrDeadLetter(1L, huge);
 
-    ArgumentCaptor<ProcessingJob> captor = ArgumentCaptor.forClass(ProcessingJob.class);
-    verify(repository).save(captor.capture());
-    assertThat(captor.getValue().getLastError()).hasSize(4000);
+    assertThat(job.getLastError()).hasSize(4000);
   }
 
   private ProcessingJob newJob(Long id, JobStatus status, int attempts, int maxAttempts) {

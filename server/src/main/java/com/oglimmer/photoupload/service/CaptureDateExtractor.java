@@ -11,6 +11,7 @@ import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.nio.file.Path;
 import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Date;
 import java.util.TimeZone;
@@ -86,12 +87,18 @@ public class CaptureDateExtractor {
       if (date == null) {
         return CaptureDate.none();
       }
+      Instant instant = date.toInstant();
+      // The offset actually applied to the wall clock, so the wall clock can be recovered from the
+      // instant later. For a fallback zone that means the zone's offset *at that instant*, DST
+      // included — the same rule metadata-extractor used when it interpreted the string.
+      int offsetSeconds = zone.toZoneId().getRules().getOffset(instant).getTotalSeconds();
       log.info(
-          "📷 EXIF DateTimeOriginal '{}' in {} → {}",
+          "📷 EXIF DateTimeOriginal '{}' in {} → {} (offset {}s)",
           directory.getString(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL),
           zone.getID(),
-          date.toInstant());
-      return CaptureDate.of(date.toInstant(), source);
+          instant,
+          offsetSeconds);
+      return CaptureDate.of(instant, source, offsetSeconds);
     } catch (Exception e) {
       log.debug("Could not read EXIF from {}: {}", imagePath.getFileName(), e.getMessage());
       return CaptureDate.none();

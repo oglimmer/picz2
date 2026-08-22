@@ -174,7 +174,8 @@ public class FfmpegService {
       CaptureDate quicktime =
           CaptureDate.of(
               parseTimestamp(tags.get(TAG_QUICKTIME_CREATIONDATE)),
-              CaptureDateSource.QUICKTIME_LOCAL);
+              CaptureDateSource.QUICKTIME_LOCAL,
+              parseOffsetSeconds(tags.get(TAG_QUICKTIME_CREATIONDATE)));
       if (quicktime.isPresent()) {
         log.info(
             "🎬 {} = {} → {} for {}",
@@ -185,6 +186,8 @@ public class FfmpegService {
         return quicktime;
       }
 
+      // No offset: mvhd is UTC by definition and the container keeps no local clock, so there is
+      // nothing to recover. Consumers fall back rather than being told a wrong offset.
       CaptureDate mvhd =
           CaptureDate.of(parseTimestamp(tags.get(TAG_CREATION_TIME)), CaptureDateSource.MVHD_UTC);
       if (mvhd.isPresent()) {
@@ -298,6 +301,23 @@ public class FfmpegService {
       tags.put(trimmed.substring("TAG:".length(), eq), trimmed.substring(eq + 1).trim());
     }
     return tags;
+  }
+
+  /**
+   * The UTC offset carried by an ffprobe timestamp, in seconds, or null when the value has none
+   * (or does not parse). Apple's {@code creationdate} is a local wall clock plus offset, e.g.
+   * "2026-05-04T19:12:33-0400"; that offset is what puts the video on the right calendar day.
+   */
+  static Integer parseOffsetSeconds(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    String value = raw.trim().replace(' ', 'T').replaceFirst("([+-]\\d{2})(\\d{2})$", "$1:$2");
+    try {
+      return OffsetDateTime.parse(value).getOffset().getTotalSeconds();
+    } catch (DateTimeParseException noOffset) {
+      return null;
+    }
   }
 
   /**

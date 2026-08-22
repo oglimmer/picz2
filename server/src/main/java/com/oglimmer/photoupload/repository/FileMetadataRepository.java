@@ -228,21 +228,31 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
 
   /**
    * DONE image/video rows whose capture date was never re-derived by the timezone-aware extractor
-   * ({@code exif_date_source IS NULL}). Used by the {@code EXTRACT_CAPTURE_DATE} admin endpoint.
+   * ({@code exif_date_source IS NULL}), plus rows that have a date but no capture offset yet — the
+   * ones written before {@code capture_utc_offset_seconds} existed, which "group by day" needs to
+   * put a photo on the day its own camera saw. Used by the {@code EXTRACT_CAPTURE_DATE} admin
+   * endpoint.
    *
    * <p>Requires {@code file_path}: the capture time lives in the original's EXIF/QuickTime atoms
    * and no derivative carries it, so retention-purged rows can never be fixed and are excluded
    * rather than enqueued and failed.
    *
    * <p>Self-shrinking — the worker always writes a source (including {@code NONE} when the file has
-   * no readable timestamp), so a row leaves this set after one pass. Same {@code NOT EXISTS} guard
-   * and SQL-level cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
+   * no readable timestamp), so a row leaves this set after one pass. The offset arm is limited to
+   * the three sources that always yield an offset, so rows that genuinely cannot have one ({@code
+   * MVHD_UTC} videos, {@code NONE}) are never re-swept. Same {@code NOT EXISTS} guard and SQL-level
+   * cap as the other sweeps; page by re-invoking until {@code enqueued == 0}.
    */
   @Query(
       value =
           "SELECT fm.id FROM file_metadata fm "
               + "WHERE fm.processing_status = 'DONE' "
-              + "AND fm.exif_date_source IS NULL "
+              + "AND ("
+              + "  fm.exif_date_source IS NULL "
+              + "  OR (fm.capture_utc_offset_seconds IS NULL "
+              + "      AND fm.exif_date_source IN "
+              + "          ('EXIF_OFFSET_TIME', 'EXIF_FALLBACK_ZONE', 'QUICKTIME_LOCAL'))"
+              + ") "
               + "AND fm.file_path IS NOT NULL "
               + "AND (fm.mime_type LIKE 'image/%' OR fm.mime_type LIKE 'video/%') "
               + "AND NOT EXISTS ("

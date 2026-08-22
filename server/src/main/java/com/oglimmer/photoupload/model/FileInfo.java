@@ -23,6 +23,13 @@ public class FileInfo {
   private String path;
   private Instant uploadedAt;
   private Instant exifDateTimeOriginal;
+  /**
+   * UTC offset in seconds at the capture location, or null when unknown. The gallery adds it to
+   * {@link #exifDateTimeOriginal} to get the wall clock the camera saw, so a day section holds the
+   * photos of that day *there*, not of that day in the viewer's timezone.
+   */
+  private Integer captureUtcOffsetSeconds;
+
   private Integer rotation;
   private Integer displayOrder;
   private List<String> tags = new ArrayList<>();
