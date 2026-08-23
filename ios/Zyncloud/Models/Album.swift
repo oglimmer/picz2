@@ -36,6 +36,15 @@ struct AlbumsResponse: Codable {
     let albums: [Album]
 }
 
+/// Answer to `GET /api/sync/uploaded-content-ids` — the reconciliation that survives a
+/// reinstall, since a contentId is the photo library's own identifier rather than one this app
+/// invented (§5.8).
+struct SyncContentIdsResponse: Codable {
+    let success: Bool
+    let contentIds: [String]
+    let count: Int
+}
+
 struct SyncChecksumsResponse: Codable {
     let success: Bool
     let checksums: [String]

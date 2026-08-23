@@ -86,6 +86,20 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   List<String> findChecksumsByUserAndUploadedAtAfter(
       @Param("userId") Long userId, @Param("uploadedAt") java.time.Instant uploadedAt);
 
+  /**
+   * ContentIds this user has uploaded since {@code uploadedAt}.
+   *
+   * <p>Feeds the client's post-reinstall reconciliation. Checksum reconciliation cannot do this
+   * job: the client matches a returned checksum against its own local checksum→asset map, which is
+   * empty on a fresh install, so it marks nothing. A contentId is the client's own identifier for
+   * the source asset (on iOS, {@code PHAsset.localIdentifier}) and belongs to the photo library
+   * rather than to the app, so it still matches after a reinstall.
+   */
+  @Query(
+      "SELECT f.contentId FROM FileMetadata f WHERE f.album.user.id = :userId AND f.uploadedAt >= :uploadedAt AND f.contentId IS NOT NULL")
+  List<String> findContentIdsByUserAndUploadedAtAfter(
+      @Param("userId") Long userId, @Param("uploadedAt") java.time.Instant uploadedAt);
+
   // ContentId-based duplicate detection (for iOS and other sources that provide unique content IDs)
   @Query(
       "SELECT f FROM FileMetadata f WHERE f.contentId = :contentId AND f.album.user.id = :userId")

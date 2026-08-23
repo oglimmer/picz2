@@ -53,21 +53,23 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
-    func getActiveUploadAssetIds() -> Set<String> {
-        var activeIds = Set<String>()
-        let semaphore = DispatchSemaphore(value: 0)
-        session?.getAllTasks { tasks in
-            for task in tasks {
-                if let desc = task.taskDescription,
-                   let assetId = desc.components(separatedBy: "|").first
-                {
-                    activeIds.insert(assetId)
-                }
-            }
-            semaphore.signal()
+    /// Enumerates the assets that still have a live task in this background session.
+    ///
+    /// Asynchronous on purpose. `getAllTasks` answers on a background queue, and this used to
+    /// bridge that with `DispatchSemaphore.wait(timeout: .now() + 2)` — on the main thread, and
+    /// `SyncCoordinator.start()` called it for *both* uploaders on every activation, so the app
+    /// could freeze for up to four seconds every time it came to the foreground. Two seconds is
+    /// the timeout rather than the expected cost, but re-attaching to a background session after
+    /// a relaunch is genuinely slow, and the launch screen is the worst place to spend it.
+    func getActiveUploadAssetIds(completion: @escaping (Set<String>) -> Void) {
+        guard let session else {
+            completion([])
+            return
         }
-        _ = semaphore.wait(timeout: .now() + 2)
-        return activeIds
+        session.getAllTasks { tasks in
+            // taskDescription format: "assetId|fileURL|…"
+            completion(Set(tasks.compactMap { $0.taskDescription?.components(separatedBy: "|").first }))
+        }
     }
 
     /// - Parameter maxUploadBytes: the server's advertised `tus.maxSize`, or nil when
@@ -107,6 +109,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             let attrs = try fileManager.attributesOfItem(atPath: exp.fileURL.path)
             fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         } catch {
+            discardExport(exp)
             UploadStore.shared.removeFromUploading(asset.localIdentifier)
             completion?(.failure(error))
             return
@@ -121,6 +124,29 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             return
         }
 
+        // Authenticate the upload with a scoped token rather than the account password (§5.9).
+        // A nil token means the server has no token endpoint — an older deployment — and
+        // `performCreate` falls back to the legacy credential value.
+        UploadTokenStore.shared.token(api: api) { [weak self] token in
+            self?.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
+                                tusURL: tusURL, authValue: token, maxUploadBytes: maxUploadBytes,
+                                mayRetryWithFreshToken: token != nil, completion: completion)
+        }
+    }
+
+    /// Sends `POST /files/` and routes the answer. Split out of ``createUpload`` so a 401 can
+    /// mint a new token and run exactly the same request again without recomputing the export.
+    private func performCreate(
+        api: APIClient,
+        asset: PHAsset,
+        exp: Uploader.ExportResult,
+        fileSize: Int64,
+        tusURL: URL,
+        authValue: String?,
+        maxUploadBytes: Int64?,
+        mayRetryWithFreshToken: Bool,
+        completion: ((Result<Void, Error>) -> Void)?
+    ) {
         var request = URLRequest(url: tusURL)
         request.httpMethod = "POST"
         request.applyNetworkPolicy()
@@ -128,7 +154,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         request.setValue(String(fileSize), forHTTPHeaderField: "Upload-Length")
         request.setValue(
             api.tusUploadMetadata(filename: exp.filename, mimeType: exp.mimeType,
-                                  contentId: asset.localIdentifier),
+                                  contentId: asset.localIdentifier, auth: authValue),
             forHTTPHeaderField: "Upload-Metadata"
         )
         api.addBasicAuth(to: &request)
@@ -137,12 +163,14 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
             guard let self else { return }
             if let error {
+                self.discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: error.localizedDescription)
                 UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(error))
                 return
             }
             guard let http = response as? HTTPURLResponse else {
+                self.discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "no response from server")
                 UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(NSError(domain: "TusUploader", code: -1,
@@ -154,6 +182,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 guard let location = http.value(forHTTPHeaderField: "Location"),
                       let uploadURL = self.resolveLocation(location, against: tusURL)
                 else {
+                    self.discardExport(exp)
                     SyncLogger.shared.logUploadFailure(assetId: assetId, error: "missing Location header")
                     UploadStore.shared.removeFromUploading(assetId)
                     completion?(.failure(NSError(domain: "TusUploader", code: -1,
@@ -164,10 +193,25 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             case 409:
                 // Pre-create dedupe — server already has a row for this contentId. Treat as
                 // success so SyncCoordinator stops retrying.
+                self.discardExport(exp)
                 SyncLogger.shared.logUploadDeduped(assetId: assetId)
                 UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
                 self.onTaskFinished?(assetId, .success(serverAssetId: nil))
                 completion?(.success(()))
+            case 401 where mayRetryWithFreshToken:
+                // The token was refused — expired early, or revoked by a password change. Mint a
+                // new one and run the same create again, once. Without this the asset would be
+                // reported as a permanent client error and skipped until the next scan, for what
+                // is really a routine credential rotation.
+                UploadTokenStore.shared.invalidate()
+                UploadTokenStore.shared.token(api: api) { [weak self] fresh in
+                    guard let self else { return }
+                    print("TusUploader: upload token refused, retrying with a fresh one")
+                    self.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
+                                       tusURL: tusURL, authValue: fresh,
+                                       maxUploadBytes: maxUploadBytes,
+                                       mayRetryWithFreshToken: false, completion: completion)
+                }
             case 413:
                 // The local check above did not catch it — capabilities were never fetched, or
                 // the cap was lowered since. Same outcome, same message, limit left unstated
@@ -176,11 +220,15 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                                    limit: maxUploadBytes, completion: completion)
             case 429, 503:
                 let retry = self.parseRetryAfter(from: http) ?? 30
+                // Safe to delete: a deferred asset is re-queued and re-exported from the photo
+                // library when its turn comes round again, not resumed from this file.
+                self.discardExport(exp)
                 SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
                 UploadStore.shared.removeFromUploading(assetId)
                 self.onTaskFinished?(assetId, .backpressure(retry))
                 completion?(.success(()))
             default:
+                self.discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
                 UploadStore.shared.removeFromUploading(assetId)
                 self.onTaskFinished?(assetId, .clientError)
@@ -216,6 +264,17 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         completion?(.success(()))
     }
 
+    /// Deletes the exported copy of an asset that will not be uploaded after all.
+    ///
+    /// Every `createUpload` path that returns without handing the file to a URLSession task has
+    /// to call this. The success path does not: the task owns the file until
+    /// `didCompleteWithError` removes it. Exports are full-size originals — a handful of
+    /// abandoned videos is gigabytes of the user's storage that nothing else will ever reclaim,
+    /// since these live under a UUID in tmp with no other reference to them (§5.6).
+    private func discardExport(_ exp: Uploader.ExportResult) {
+        try? fileManager.removeItem(at: exp.fileURL)
+    }
+
     /// Ends an upload that can never succeed at its current size.
     ///
     /// Deliberately reports `.clientError` and completes the hand-off with `.success`, mirroring
@@ -231,7 +290,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         completion: ((Result<Void, Error>) -> Void)?
     ) {
         let assetId = asset.localIdentifier
-        try? fileManager.removeItem(at: exp.fileURL)
+        discardExport(exp)
         SyncLogger.shared.logUploadSkippedTooLarge(filename: exp.filename, size: size, limit: limit)
         UploadStore.shared.markSkippedTooLarge(
             assetId,
@@ -319,9 +378,24 @@ extension APIClient {
         baseURL.appendingPathComponent("files/")
     }
 
+    /// The legacy `auth` value: the account's own `email:password`.
+    ///
+    /// Only used when the server has no token endpoint (§5.9). tusd persists upload metadata to a
+    /// `.info` object in storage, so this writes the real password to disk — which is exactly why
+    /// ``UploadTokenStore`` exists and why this is the fallback rather than the default.
+    var legacyAuthMetadataValue: String? {
+        guard let username, let password else { return nil }
+        return "\(username):\(password)"
+    }
+
     /// Builds the comma-separated ``Upload-Metadata`` header per the TUS spec. Each value is
     /// base64-encoded; the server decodes when populating ``Event.Upload.MetaData`` for hooks.
-    func tusUploadMetadata(filename: String, mimeType: String, contentId: String, albumId: Int? = nil) -> String {
+    ///
+    /// - Parameter auth: the credential the server's pre-create hook authenticates with — a
+    ///   scoped upload token normally, ``legacyAuthMetadataValue`` against an older server.
+    func tusUploadMetadata(filename: String, mimeType: String, contentId: String,
+                           albumId: Int? = nil, auth: String? = nil) -> String
+    {
         var parts: [(String, String)] = [
             ("filename", filename),
             ("filetype", mimeType),
@@ -330,8 +404,8 @@ extension APIClient {
         if let albumId {
             parts.append(("albumId", String(albumId)))
         }
-        if let username, let password {
-            parts.append(("auth", "\(username):\(password)"))
+        if let auth = auth ?? legacyAuthMetadataValue {
+            parts.append(("auth", auth))
         }
         return parts
             .map { key, value in

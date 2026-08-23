@@ -29,6 +29,7 @@ public class UserService {
   private final UserRepository userRepository;
   private final PasswordEncoder passwordEncoder;
   private final EmailService emailService;
+  private final UploadTokenService uploadTokenService;
 
   @Transactional
   public User createUser(String email, String password) {
@@ -164,8 +165,23 @@ public class UserService {
     user.setPassword(passwordEncoder.encode(newPassword));
     user.setPasswordResetToken(null);
     user.setPasswordResetTokenExpiry(null);
+    revokeUploadTokens(user);
 
     log.info("Password reset successfully for user: {}", user.getEmail());
+  }
+
+  /**
+   * Changing the password has to invalidate outstanding upload tokens (§5.9).
+   *
+   * <p>Otherwise a token minted before the change keeps working, and "I changed my password" would
+   * stop meaning "whatever had my old credentials is locked out" — which is the whole reason anyone
+   * changes a password after a scare. The client simply asks for a new one.
+   */
+  private void revokeUploadTokens(User user) {
+    int revoked = uploadTokenService.revokeAllFor(user.getId());
+    if (revoked > 0) {
+      log.info("Revoked {} upload token(s) for user {}", revoked, user.getEmail());
+    }
   }
 
   private String generateVerificationToken() {
@@ -199,6 +215,7 @@ public class UserService {
 
     // Update to new password
     user.setPassword(passwordEncoder.encode(newPassword));
+    revokeUploadTokens(user);
     log.info("Password changed successfully for user: {}", user.getEmail());
   }
 

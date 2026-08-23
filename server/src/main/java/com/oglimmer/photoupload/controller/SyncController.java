@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.model.SyncChecksumsResponse;
+import com.oglimmer.photoupload.model.SyncContentIdsResponse;
 import com.oglimmer.photoupload.service.SyncService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,5 +32,18 @@ public class SyncController {
     SyncChecksumsResponse response = syncService.getUploadedChecksums(days);
 
     return ResponseEntity.ok(response);
+  }
+
+  /**
+   * Companion to {@code /uploaded-checksums} for clients that send a contentId. See {@link
+   * SyncService#getUploadedContentIds(Integer)} for why both exist.
+   */
+  @GetMapping("/uploaded-content-ids")
+  public ResponseEntity<SyncContentIdsResponse> getUploadedContentIds(
+      @RequestParam(required = true) Integer days) {
+
+    log.info("Fetching uploaded contentIds for last {} days", days);
+
+    return ResponseEntity.ok(syncService.getUploadedContentIds(days));
   }
 }

@@ -17,12 +17,31 @@ final class SyncCoordinator: ObservableObject {
     private var cachedCapabilities: Capabilities?
     private var capabilitiesFetchedAt: Date?
     private let capabilitiesTTL: TimeInterval = 3600  // 1 hour
+    /// Cached rather than rebuilt per access (§5.10).
+    ///
+    /// This was a computed property doing a `KeychainHelper.load()` — a synchronous IPC to
+    /// securityd — on every read, and the upload path reads it several times per asset for a
+    /// value that changes twice in a whole session. `credentialsDidChange` is what makes the
+    /// cache safe: sign-in, sign-out and the legacy-format migration all drop it.
+    private var cachedApi: APIClient?
+    private let apiLock = NSLock()
     private var api: APIClient {
+        apiLock.lock()
+        defer { apiLock.unlock() }
+        if let cachedApi { return cachedApi }
         let credentials = KeychainHelper.shared.load()
-        return APIClient(
+        let client = APIClient(
             username: credentials?.username,
             password: credentials?.password,
         )
+        cachedApi = client
+        return client
+    }
+
+    private func invalidateCachedApi() {
+        apiLock.lock()
+        cachedApi = nil
+        apiLock.unlock()
     }
 
     struct Metrics {
@@ -35,6 +54,8 @@ final class SyncCoordinator: ObservableObject {
         /// backup with a silent hole in it is worse than one that says which files are missing.
         var skippedTooLarge: Int = 0
     }
+
+    private var credentialsObserver: NSObjectProtocol?
 
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
     private var pendingAssets: [PHAsset] = []
@@ -49,6 +70,14 @@ final class SyncCoordinator: ObservableObject {
     private let maxInFlightUploads = 3
 
     private init() {
+        // Drop the cached APIClient whenever the stored credentials change, so a sign-out
+        // cannot leave an authenticated client behind and a sign-in is picked up immediately.
+        credentialsObserver = NotificationCenter.default.addObserver(
+            forName: KeychainHelper.credentialsDidChange, object: nil, queue: nil,
+        ) { [weak self] _ in
+            self?.invalidateCachedApi()
+        }
+
         // Route actual upload completions through the coordinator so we can
         // free a slot, drain the next upload, and re-enqueue 503s with backoff.
         uploader.onTaskFinished = { [weak self] assetId, outcome in
@@ -95,29 +124,52 @@ final class SyncCoordinator: ObservableObject {
         uploader.configureSession()
         tusUploader.configureSession()
 
-        // Clean up stale uploading entries from previous app sessions
-        // But preserve entries that have active URLSession tasks (to prevent duplicate uploads)
-        // across BOTH background sessions — multipart and TUS each have their own.
-        let activeTasks = uploader.getActiveUploadAssetIds()
-            .union(tusUploader.getActiveUploadAssetIds())
-        UploadStore.shared.cleanupStaleUploading(activeTasks: activeTasks)
-
         // Kick off capabilities fetch in the background. Doesn't block sync — drainQueue
         // falls back to the multipart path until the cache fills (or if the fetch fails).
         ensureCapabilitiesLoaded()
 
-        photo.requestAuthorization { status in
-            guard status == .authorized || status == .limited else { return }
+        // Clean up stale uploading entries from previous app sessions, preserving entries that
+        // still have a live URLSession task (otherwise they would be uploaded twice) across
+        // BOTH background sessions — multipart and TUS each have their own.
+        //
+        // The scan runs *inside* the completion rather than after it. Enumerating the sessions
+        // is now asynchronous (§5.2), and the order still matters: a scan that starts before the
+        // cleanup lands sees leftover "uploading" entries from the last launch and skips exactly
+        // the assets that need retrying.
+        activeUploadTaskAssetIds { [weak self] activeTasks in
+            guard let self else { return }
+            UploadStore.shared.cleanupStaleUploading(activeTasks: activeTasks)
 
-            // Check target album from server first
-            self.syncTargetAlbumFromServer { _ in
-                // Only start sync if an album has been selected
-                guard self.settings.selectedAlbumName != nil else { return }
+            photo.requestAuthorization { status in
+                guard status == .authorized || status == .limited else { return }
 
-                // Reconcile with server before scanning
-                self.reconcileWithServer {
-                    self.scheduleInitialScan()
+                // Check target album from server first
+                self.syncTargetAlbumFromServer { _ in
+                    // Only start sync if an album has been selected
+                    guard self.settings.selectedAlbumName != nil else { return }
+
+                    // Reconcile with server before scanning
+                    self.reconcileWithServer {
+                        self.scheduleInitialScan()
+                    }
                 }
+            }
+        }
+    }
+
+    /// Union of the assets still in flight on either background session.
+    ///
+    /// Nested rather than parallel: there are exactly two sessions, both answers are needed
+    /// before the cleanup can run, and a nested pair of callbacks is easier to read than a
+    /// DispatchGroup for two items.
+    private func activeUploadTaskAssetIds(completion: @escaping (Set<String>) -> Void) {
+        uploader.getActiveUploadAssetIds { [weak self] multipartTasks in
+            guard let self else {
+                completion(multipartTasks)
+                return
+            }
+            tusUploader.getActiveUploadAssetIds { tusTasks in
+                completion(multipartTasks.union(tusTasks))
             }
         }
     }
@@ -306,18 +358,42 @@ final class SyncCoordinator: ObservableObject {
 
     // MARK: - Sync Reconciliation
 
+    /// Marks everything the server already has, so the scan does not upload it a second time.
+    ///
+    /// Two sources, run in sequence, because neither covers the other (§5.8):
+    ///
+    /// * **contentIds** — `PHAsset.localIdentifier` values, matched directly. These belong to the
+    ///   photo library rather than to this app, so they still mean something after a reinstall.
+    ///   This is the one that works on a fresh install, where the local checksum map is empty.
+    /// * **checksums** — matched through the local checksum→asset map. Useless on a fresh
+    ///   install, but it is the only thing that recognises rows uploaded before the client
+    ///   started sending a contentId, so it stays.
+    ///
+    /// Either request failing is non-fatal: reconciliation is an optimisation, and server-side
+    /// dedupe is what actually prevents duplicate rows.
     func reconcileWithServer(completion: (() -> Void)? = nil) {
         syncQueue.async {
-            // Fetch checksums from server for last N+1 days
+            // N+1 days: the scan window plus a day of slack, so an asset taken just before the
+            // boundary is not re-uploaded because the two windows disagree about "today".
             let days = self.settings.syncLastDays + 1
-            self.api.fetchUploadedChecksums(days: days) { result in
-                switch result {
-                case let .success(checksums):
-                    print("SyncCoordinator: Reconciled with server, found \(checksums.count) uploaded checksums")
-                    UploadStore.shared.reconcileWithServerChecksums(checksums)
-                    completion?()
+            self.api.fetchUploadedContentIds(days: days) { contentIdResult in
+                switch contentIdResult {
+                case let .success(contentIds):
+                    print("SyncCoordinator: Reconciled with server, found \(contentIds.count) uploaded contentIds")
+                    UploadStore.shared.reconcileWithServerContentIds(contentIds)
                 case let .failure(error):
-                    print("SyncCoordinator: Failed to reconcile with server: \(error)")
+                    // An older server has no such endpoint; the checksum pass below still runs.
+                    print("SyncCoordinator: contentId reconciliation unavailable: \(error)")
+                }
+
+                self.api.fetchUploadedChecksums(days: days) { checksumResult in
+                    switch checksumResult {
+                    case let .success(checksums):
+                        print("SyncCoordinator: Reconciled with server, found \(checksums.count) uploaded checksums")
+                        UploadStore.shared.reconcileWithServerChecksums(checksums)
+                    case let .failure(error):
+                        print("SyncCoordinator: Failed to reconcile with server: \(error)")
+                    }
                     completion?()
                 }
             }

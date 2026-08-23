@@ -7,8 +7,8 @@ import Testing
 /// sharing an identifier, the second orphaning the first's delegate) corrupted exactly this
 /// state: uploads lost the callback that would have cleared their uploading entry.
 ///
-/// Every case gets its own `UserDefaults` suite and removes it afterwards, so the real upload
-/// history is never touched.
+/// Every case gets its own scratch file and removes it afterwards, so the real upload history is
+/// never touched. Migration from the old `UserDefaults` layout has its own cases at the bottom.
 ///
 /// `.serialized` is not optional here. `UploadStore` guards its state with `queue.sync` on a
 /// concurrent `DispatchQueue`; run in parallel, a dozen Swift Testing cases block cooperative
@@ -24,11 +24,23 @@ struct UploadStoreTests {
         _ = store.isUploaded("flush-probe")
     }
 
-    private func withScratchStore(_ body: (UploadStore, UserDefaults) throws -> Void) rethrows {
-        let name = "test.uploadstore.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        try body(UploadStore(defaults: defaults), defaults)
+    private func persistedState(at url: URL) -> UploadStoreState? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(UploadStoreState.self, from: data)
+    }
+
+    private func scratchFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("uploadstore-test-\(UUID().uuidString).json")
+    }
+
+    /// `saveDelay: 0` and `legacyDefaults: nil` — the coalescing window and the UserDefaults
+    /// migration are behaviours in their own right and are tested separately, not left to
+    /// interfere with every other case.
+    private func withScratchStore(_ body: (UploadStore, URL) throws -> Void) rethrows {
+        let url = scratchFileURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try body(UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0), url)
     }
 
     // MARK: - isUploaded
@@ -60,14 +72,16 @@ struct UploadStoreTests {
     // MARK: - markUploaded
 
     @Test func markingUploadedClearsTheUploadingEntry() {
-        withScratchStore { store, defaults in
+        withScratchStore { store, url in
             store.markAsUploading("asset-1")
             store.markUploaded("asset-1")
-            flush(store)
+            store.flushPendingWrites()
 
             #expect(store.isUploaded("asset-1"))
-            let uploading = defaults.stringArray(forKey: "uploads.uploading.ids") ?? []
-            #expect(!uploading.contains("asset-1"))
+            // Asserted against the persisted state rather than the in-memory answer, because
+            // isUploaded is true for "uploading" too — it would pass either way.
+            #expect(persistedState(at: url)?.uploading.contains("asset-1") == false)
+            #expect(persistedState(at: url)?.completed.contains("asset-1") == true)
         }
     }
 
@@ -139,33 +153,36 @@ struct UploadStoreTests {
     // MARK: - Persistence
 
     @Test func stateSurvivesARestart() {
-        let name = "test.uploadstore.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let url = scratchFileURL()
+        defer { try? FileManager.default.removeItem(at: url) }
 
-        let first = UploadStore(defaults: defaults)
+        let first = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0)
         first.markUploaded("done")
         first.markAsUploading("in-flight")
-        flush(first)
 
-        let second = UploadStore(defaults: defaults)
+        first.flushPendingWrites()
+
+        let second = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0)
         #expect(second.isUploaded("done"))
         #expect(second.isUploaded("in-flight"))
     }
 
     @Test func clearRemovesEverything() {
-        withScratchStore { store, defaults in
+        withScratchStore { store, url in
             store.markUploaded("done", checksum: "abc")
             store.markAsUploading("in-flight")
 
             store.clear()
-            flush(store)
+            store.flushPendingWrites()
 
             #expect(!store.isUploaded("done"))
             #expect(!store.isUploaded("in-flight"))
-            #expect(defaults.stringArray(forKey: "uploads.completed.ids") == nil)
-            #expect(defaults.stringArray(forKey: "uploads.uploading.ids") == nil)
-            #expect(defaults.data(forKey: "uploads.checksums") == nil)
+            // The wipe has to reach the file too — clearing only in memory would resurrect the
+            // whole history on the next launch.
+            let persisted = persistedState(at: url)
+            #expect(persisted?.completed.isEmpty == true)
+            #expect(persisted?.uploading.isEmpty == true)
+            #expect(persisted?.checksumToLocalId.isEmpty == true)
         }
     }
 
@@ -289,15 +306,14 @@ struct UploadStoreTests {
     }
 
     @Test func refusalsSurviveARestart() {
-        let name = "test.uploadstore.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let url = scratchFileURL()
+        defer { try? FileManager.default.removeItem(at: url) }
 
-        let first = UploadStore(defaults: defaults)
+        let first = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0)
         first.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
-        flush(first)
+        first.flushPendingWrites()
 
-        let second = UploadStore(defaults: defaults)
+        let second = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0)
         #expect(second.shouldSkipForSize("asset-1", currentLimit: fiveHundredMB))
     }
 
@@ -308,6 +324,125 @@ struct UploadStoreTests {
             store.clear()
             flush(store)
             #expect(!store.shouldSkipForSize("asset-1", currentLimit: fiveHundredMB))
+        }
+    }
+
+    // MARK: - Persistence shape (§5.7)
+
+    /// The point of the rewrite. A burst of completions must cost **one** file write, not one
+    /// per asset — the old store re-serialised the entire upload history every time.
+    @Test func writesAreCoalescedRatherThanOnePerMutation() {
+        let url = scratchFileURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // A delay long enough that the scheduled write cannot have fired during the test.
+        let store = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 60)
+        for i in 0 ..< 50 {
+            store.markUploaded("asset-\(i)")
+        }
+        _ = store.isUploaded("flush-probe") // let the barriers drain
+
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        store.flushPendingWrites()
+        #expect(persistedState(at: url)?.completed.count == 50)
+    }
+
+    @Test func flushingWithNothingPendingIsHarmless() {
+        withScratchStore { store, _ in
+            store.flushPendingWrites()
+            store.flushPendingWrites()
+            #expect(!store.isUploaded("asset-1"))
+        }
+    }
+
+    // MARK: - Migration out of UserDefaults (§5.7)
+
+    private func withLegacyDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
+        let name = "test.uploadstore.legacy.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        try body(defaults)
+    }
+
+    /// An existing install must not wake up believing it has uploaded nothing — that would
+    /// re-upload the user's entire library.
+    @Test func anExistingUserDefaultsHistoryIsAdopted() {
+        withLegacyDefaults { defaults in
+            let url = scratchFileURL()
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            defaults.set(["done-1", "done-2"], forKey: "uploads.completed.ids")
+            defaults.set(try? JSONEncoder().encode(["abc": "done-1"]), forKey: "uploads.checksums")
+
+            let store = UploadStore(fileURL: url, legacyDefaults: defaults, saveDelay: 0)
+            #expect(store.isUploaded("done-1"))
+            #expect(store.isUploaded("done-2"))
+
+            // Written immediately, not on the coalescing timer: the old keys are gone by now, so
+            // a crash before the first scheduled write would lose the history outright.
+            #expect(persistedState(at: url)?.completed.count == 2)
+            #expect(defaults.stringArray(forKey: "uploads.completed.ids") == nil)
+            #expect(defaults.data(forKey: "uploads.checksums") == nil)
+        }
+    }
+
+    /// The migration must not run a second time and resurrect what the user has since cleared.
+    @Test func theFileWinsOverLeftoverLegacyKeys() {
+        withLegacyDefaults { defaults in
+            let url = scratchFileURL()
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            let first = UploadStore(fileURL: url, legacyDefaults: nil, saveDelay: 0)
+            first.markUploaded("from-file")
+            first.flushPendingWrites()
+
+            defaults.set(["stale-legacy-id"], forKey: "uploads.completed.ids")
+            let second = UploadStore(fileURL: url, legacyDefaults: defaults, saveDelay: 0)
+            #expect(second.isUploaded("from-file"))
+            #expect(!second.isUploaded("stale-legacy-id"))
+        }
+    }
+
+    @Test func afreshInstallDoesNotWriteAnEmptyFile() {
+        withLegacyDefaults { defaults in
+            let url = scratchFileURL()
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            _ = UploadStore(fileURL: url, legacyDefaults: defaults, saveDelay: 0)
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    // MARK: - Reconciliation by contentId (§5.8)
+
+    /// The reinstall case, which checksum reconciliation could never handle: the local
+    /// checksum map is empty on a fresh install, but a contentId is the photo library's own
+    /// identifier and still matches after the app has been deleted and installed again.
+    @Test func contentIdReconciliationWorksOnAFreshInstall() {
+        withScratchStore { store, _ in
+            store.reconcileWithServerContentIds(["asset-1", "asset-2"])
+            #expect(store.isUploaded("asset-1"))
+            #expect(store.isUploaded("asset-2"))
+            #expect(!store.isUploaded("asset-3"))
+        }
+    }
+
+    @Test func contentIdReconciliationIgnoresEmptyIds() {
+        withScratchStore { store, _ in
+            // Rows uploaded before the client sent a contentId come back as "" from the server;
+            // adopting that would mark an asset with an empty localIdentifier as uploaded.
+            store.reconcileWithServerContentIds(["", "asset-1"])
+            #expect(!store.isUploaded(""))
+            #expect(store.isUploaded("asset-1"))
+        }
+    }
+
+    @Test func contentIdReconciliationClearsAnUploadingEntry() {
+        withScratchStore { store, _ in
+            store.markAsUploading("asset-1")
+            store.reconcileWithServerContentIds(["asset-1"])
+            store.flushPendingWrites()
+            #expect(store.isUploaded("asset-1"))
         }
     }
 }

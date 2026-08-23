@@ -94,4 +94,42 @@ struct TusUploadMetadataTests {
         #expect(pairs(APIClient(password: "hunter2")
             .tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg", contentId: "id"))["auth"] == nil)
     }
+
+    // MARK: - Which credential travels in the metadata (§5.9)
+
+    /// The scoped token, when there is one. This is the whole point: tusd persists upload
+    /// metadata to a `.info` object in storage, so whatever goes in this header ends up on disk.
+    @Test func aScopedTokenIsUsedWhenSupplied() {
+        let api = APIClient(username: "someone@example.com", password: "hunter2")
+        let header = api.tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg",
+                                           contentId: "id", auth: "zut_abc123")
+
+        #expect(pairs(header)["auth"] == "zut_abc123")
+        #expect(!header.contains(Data("hunter2".utf8).base64EncodedString()))
+    }
+
+    /// The fallback for a server with no token endpoint. Kept deliberately, and deliberately
+    /// second: an app that cannot get a token still has to be able to upload.
+    @Test func credentialsAreTheFallbackWhenNoTokenIsAvailable() {
+        let api = APIClient(username: "someone@example.com", password: "hunter2")
+        let header = api.tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg", contentId: "id")
+
+        #expect(pairs(header)["auth"] == "someone@example.com:hunter2")
+    }
+
+    /// A password containing a colon must survive: the server splits on the *first* colon, so
+    /// "user@x:pa:ss" has to arrive intact rather than being re-escaped here.
+    @Test func aPasswordContainingAColonIsNotMangled() {
+        let api = APIClient(username: "someone@example.com", password: "pa:ss:word")
+        let header = api.tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg", contentId: "id")
+
+        #expect(pairs(header)["auth"] == "someone@example.com:pa:ss:word")
+    }
+
+    @Test func noAuthPairIsSentWhenThereIsNothingToSend() {
+        let api = APIClient()
+        let header = api.tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg", contentId: "id")
+
+        #expect(pairs(header)["auth"] == nil)
+    }
 }

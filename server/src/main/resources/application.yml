@@ -145,6 +145,11 @@ jobs:
   backpressure:
     queue-depth-threshold: "${JOBS_BACKPRESSURE_QUEUE_DEPTH_THRESHOLD:200}"
     refresh-ms: "${JOBS_BACKPRESSURE_REFRESH_MS:1000}"
+upload-tokens:
+  # §5.9 — how long a scoped upload token stays valid. Long enough that a queue of background
+  # uploads finishes on one token; short enough that a token leaked out of a tusd .info object
+  # is worthless by the time anyone finds it. Clients refresh on their own before it lapses.
+  ttl-hours: "${UPLOAD_TOKEN_TTL_HOURS:24}"
 tus:
   # Phase 5 — TUS resumable uploads. Manifests render based on Helm `tus.enabled`; the api pod
   # reads its own `tus.enabled` env var to decide whether to wire TusHookController. The pair

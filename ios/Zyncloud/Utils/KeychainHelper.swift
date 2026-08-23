@@ -4,6 +4,15 @@ import Security
 final class KeychainHelper {
     static let shared = KeychainHelper()
 
+    /// Posted after the stored credentials change — a sign-in, a sign-out, or the legacy-format
+    /// migration rewriting the item.
+    ///
+    /// Exists so callers can cache an authenticated client instead of rebuilding one from the
+    /// keychain on every request (§5.10). A keychain read is a synchronous IPC to securityd; on
+    /// the upload path it was happening several times per asset for a value that changes twice
+    /// in a session. Cache invalidation needs a signal, and this is it.
+    static let credentialsDidChange = Notification.Name("com.oglimmer.photosync.credentialsDidChange")
+
     static let defaultService = "com.oglimmer.photosync"
 
     private let service: String
@@ -42,6 +51,7 @@ final class KeychainHelper {
         let status = SecItemAdd(query as CFDictionary, nil)
         let success = status == errSecSuccess
         print("KeychainHelper: Save credentials - \(success ? "SUCCESS" : "FAILED with status \(status)")")
+        if success { notifyCredentialsChanged() }
         return success
     }
 
@@ -109,5 +119,14 @@ final class KeychainHelper {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+        notifyCredentialsChanged()
+    }
+
+    /// Posted on main so observers can touch UI state without hopping. `delete()` is also called
+    /// from inside `save()`, which posts again on success — a duplicate invalidation is free,
+    /// and the alternative (suppressing it) is a flag that has to stay correct forever.
+    private func notifyCredentialsChanged() {
+        let post = { NotificationCenter.default.post(name: KeychainHelper.credentialsDidChange, object: nil) }
+        if Thread.isMainThread { post() } else { DispatchQueue.main.async(execute: post) }
     }
 }

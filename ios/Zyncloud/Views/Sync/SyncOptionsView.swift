@@ -4,6 +4,13 @@ struct SyncOptionsView: View {
     @EnvironmentObject private var sync: SyncCoordinator
     @StateObject private var viewModel = SyncOptionsViewModel()
     @ObservedObject private var taskLog = BackgroundTaskLog.shared
+    /// Observed directly, not reached through `sync.settings` (§5.5).
+    ///
+    /// `Settings` is an `ObservableObject` held inside another one. Mutating a property of the
+    /// inner object fires *its* objectWillChange, not the coordinator's — so a `$sync.settings.x`
+    /// binding wrote the new value but SwiftUI had no reason to re-render, and the switch could
+    /// visibly snap back. Observing the inner object is what makes the toggles honest.
+    @ObservedObject private var settings = Settings.shared
     @Binding var isLoggedIn: Bool
 
     /// "Never" is a real answer here, and the most important one to read at a glance — so it is
@@ -73,10 +80,10 @@ struct SyncOptionsView: View {
 
                 // Sync Settings Section
                 Section(header: Text("Sync Settings")) {
-                    Toggle("Wi‑Fi Only", isOn: $sync.settings.wifiOnly)
+                    Toggle("Wi‑Fi Only", isOn: $settings.wifiOnly)
 
-                    Stepper(value: $sync.settings.syncLastDays, in: 1 ... 365) {
-                        Text("Sync last \(sync.settings.syncLastDays) days")
+                    Stepper(value: $settings.syncLastDays, in: 1 ... 365) {
+                        Text("Sync last \(settings.syncLastDays) days")
                     }
                 }
 
@@ -89,7 +96,7 @@ struct SyncOptionsView: View {
                     header: Text("Advanced"),
                     footer: Text("Resumable uploads recover from network drops mid-file instead of restarting from zero. Requires server support; falls back to standard uploads automatically when unavailable."),
                 ) {
-                    Toggle("Resumable Uploads (TUS)", isOn: $sync.settings.useTus)
+                    Toggle("Resumable Uploads (TUS)", isOn: $settings.useTus)
                 }
 
                 // Album Selection Section

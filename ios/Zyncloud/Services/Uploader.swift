@@ -52,26 +52,23 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
-    /// Get asset IDs for all active upload tasks in the background URLSession
-    func getActiveUploadAssetIds() -> Set<String> {
-        var activeIds = Set<String>()
-        let semaphore = DispatchSemaphore(value: 0)
-
-        session?.getAllTasks { tasks in
-            for task in tasks {
-                // Extract asset ID from taskDescription (format: "assetId|fileURL|multipartURL|checksum")
-                if let desc = task.taskDescription,
-                   let assetId = desc.components(separatedBy: "|").first
-                {
-                    activeIds.insert(assetId)
-                }
-            }
-            semaphore.signal()
+    /// Enumerates the assets that still have a live task in this background session.
+    ///
+    /// Asynchronous on purpose. `getAllTasks` answers on a background queue, and this used to
+    /// bridge that with `DispatchSemaphore.wait(timeout: .now() + 2)` — on the main thread, and
+    /// `SyncCoordinator.start()` called it for *both* uploaders on every activation, so the app
+    /// could freeze for up to four seconds every time it came to the foreground. Two seconds is
+    /// the timeout rather than the expected cost, but re-attaching to a background session after
+    /// a relaunch is genuinely slow, and the launch screen is the worst place to spend it.
+    func getActiveUploadAssetIds(completion: @escaping (Set<String>) -> Void) {
+        guard let session else {
+            completion([])
+            return
         }
-
-        // Wait for async task enumeration to complete (with timeout)
-        _ = semaphore.wait(timeout: .now() + 2)
-        return activeIds
+        session.getAllTasks { tasks in
+            // taskDescription format: "assetId|fileURL|…"
+            completion(Set(tasks.compactMap { $0.taskDescription?.components(separatedBy: "|").first }))
+        }
     }
 
     struct ExportResult {
@@ -145,6 +142,18 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                 UploadStore.shared.removeFromUploading(asset.localIdentifier)
                 completion?(.failure(error))
             case let .success(exp):
+                // Declared out here so the failure paths below can delete it. Both files are
+                // full-size copies of the asset living under a UUID in tmp; if we return without
+                // handing them to a URLSession task, nothing else has a reference and nothing
+                // ever reclaims the space (§5.6). On the success path the task owns them until
+                // didCompleteWithError removes them.
+                let multipartURL = self.fileManager.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString).appendingPathExtension("multipart")
+                func discardTempFiles() {
+                    try? self.fileManager.removeItem(at: exp.fileURL)
+                    try? self.fileManager.removeItem(at: multipartURL)
+                }
+
                 do {
                     // Store checksum mapping immediately
                     UploadStore.shared.storeChecksumMapping(checksum: exp.checksum, localId: asset.localIdentifier)
@@ -156,13 +165,13 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                     guard let contentType = request.value(forHTTPHeaderField: "Content-Type"),
                           let boundary = contentType.components(separatedBy: "boundary=").last
                     else {
+                        discardTempFiles()
                         UploadStore.shared.removeFromUploading(asset.localIdentifier)
                         completion?(.failure(NSError(domain: "Uploader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to extract boundary"])))
                         return
                     }
 
                     // Create multipart body (streamed) with contentId and write to temp file for background upload
-                    let multipartURL = self.fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("multipart")
                     try api.writeMultipartBody(to: multipartURL,
                                                fileURL: exp.fileURL,
                                                filename: exp.filename,
@@ -176,6 +185,9 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                     task.resume()
                     completion?(.success(()))
                 } catch {
+                    // writeMultipartBody throws part-way through: both the export and whatever
+                    // was written of the multipart body have to go.
+                    discardTempFiles()
                     UploadStore.shared.removeFromUploading(asset.localIdentifier)
                     completion?(.failure(error))
                 }

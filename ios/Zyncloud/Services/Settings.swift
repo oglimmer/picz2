@@ -107,113 +107,125 @@ extension URLRequest {
     }
 }
 
+/// Everything `UploadStore` remembers, in one Codable value.
+///
+/// Kept as a single struct so the whole thing is one atomic file write. A half-written store —
+/// completed ids saved but the checksum map not — would silently re-upload or silently skip.
+struct UploadStoreState: Codable {
+    var completed: Set<String> = []
+    var uploading: Set<String> = []
+    var checksumToLocalId: [String: String] = [:]
+    /// localIdentifier -> the server byte limit that refused it (D43).
+    var skippedTooLarge: [String: Int64] = [:]
+}
+
+/// What the user has already uploaded, so a scan does not send it twice.
+///
+/// **Storage (§5.7).** This used to live in `UserDefaults`, which is the wrong shape for it. The
+/// completed-id set grows with the photo library — tens of thousands of entries for a real one —
+/// and `UserDefaults` is a property list that is loaded whole at launch and re-serialised on
+/// every write. So marking a single upload complete rewrote the entire history, several times
+/// per asset once the checksum map is counted, and every launch paid to parse all of it before
+/// the app could do anything.
+///
+/// Two changes fix that without a database. The state moves to one JSON file in Application
+/// Support, off the launch path entirely; and writes are **coalesced** — a mutation marks the
+/// state dirty and schedules a single write `saveDelay` later, so a burst of fifty completions
+/// costs one serialisation instead of fifty. The data still grows with the library, because it
+/// has to: "have I uploaded this?" cannot be answered without remembering.
+///
+/// Durability is therefore best-effort by design. ``flushPendingWrites()`` forces the write, and
+/// the app calls it when it goes to the background; a hard kill inside the delay window can lose
+/// the last second of bookkeeping, which costs a re-upload that server-side dedupe absorbs.
 final class UploadStore {
     static let shared = UploadStore()
 
-    private let defaults: UserDefaults
-    private let key = "uploads.completed.ids"
-    private let checksumKey = "uploads.checksums"
-    private let uploadingKey = "uploads.uploading.ids"
-    private let skippedTooLargeKey = "uploads.skipped.tooLarge"
-    private var set: Set<String>
-    private var uploadingSet: Set<String>
+    private let fileURL: URL
+    private let saveDelay: TimeInterval
+    private var state: UploadStoreState
+    private var dirty = false
+    private var saveScheduled = false
     private let queue = DispatchQueue(label: "com.photocloud.uploadstore", attributes: .concurrent)
 
-    // Map checksum -> localIdentifier
-    private var checksumToLocalId: [String: String]
+    /// Production path: `Application Support/UploadStore.json`.
+    ///
+    /// Application Support rather than Caches — the OS may evict Caches under storage pressure,
+    /// and losing this file means re-uploading the entire library.
+    static func defaultFileURL() -> URL {
+        let base = (try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                 in: .userDomainMask,
+                                                 appropriateFor: nil,
+                                                 create: true))
+            ?? FileManager.default.temporaryDirectory
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.appendingPathComponent("UploadStore.json")
+    }
 
-    // Map localIdentifier -> the server byte limit that rejected it. The limit is stored, not
-    // just the id, so raising `tus.maxSize` on the server automatically un-skips everything it
-    // now admits (see UploadSizeLimit.shouldRetry). A plain "skipped" set would have frozen the
-    // 500 MB verdicts in place forever on phones that had already scanned.
-    private var skippedTooLarge: [String: Int64]
+    /// - Parameters:
+    ///   - fileURL: where the state lives. Injectable so tests get a scratch file instead of the
+    ///     user's real upload history.
+    ///   - legacyDefaults: the `UserDefaults` to migrate from on first run, or nil to skip.
+    ///   - saveDelay: how long to coalesce writes. Tests pass 0 and call
+    ///     ``flushPendingWrites()`` when they want the file on disk.
+    init(fileURL: URL = UploadStore.defaultFileURL(),
+         legacyDefaults: UserDefaults? = .standard,
+         saveDelay: TimeInterval = 1)
+    {
+        self.fileURL = fileURL
+        self.saveDelay = saveDelay
 
-    /// `defaults` is injectable purely so tests can drive a scratch suite instead of the
-    /// user's real upload history. Production uses ``shared``.
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        let arr = defaults.stringArray(forKey: key) ?? []
-        set = Set(arr)
-
-        let uploadingArr = defaults.stringArray(forKey: uploadingKey) ?? []
-        uploadingSet = Set(uploadingArr)
-
-        if let data = defaults.data(forKey: checksumKey),
-           let dict = try? JSONDecoder().decode([String: String].self, from: data)
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode(UploadStoreState.self, from: data)
         {
-            checksumToLocalId = dict
+            state = decoded
+        } else if let legacyDefaults, let migrated = UploadStore.migrate(from: legacyDefaults) {
+            state = migrated
+            // Written immediately, not scheduled: if the app dies before the first coalesced
+            // write the UserDefaults keys are already gone and the history would be lost.
+            write(state)
+            UploadStore.clearLegacyKeys(in: legacyDefaults)
         } else {
-            checksumToLocalId = [:]
-        }
-
-        if let data = defaults.data(forKey: skippedTooLargeKey),
-           let dict = try? JSONDecoder().decode([String: Int64].self, from: data)
-        {
-            skippedTooLarge = dict
-        } else {
-            skippedTooLarge = [:]
+            state = UploadStoreState()
         }
     }
+
+    // MARK: - Legacy UserDefaults migration
+
+    private enum LegacyKeys {
+        static let completed = "uploads.completed.ids"
+        static let checksums = "uploads.checksums"
+        static let uploading = "uploads.uploading.ids"
+        static let skippedTooLarge = "uploads.skipped.tooLarge"
+    }
+
+    /// Reads the pre-§5.7 layout. Returns nil when there is nothing to migrate, so a fresh
+    /// install does not write an empty file on first launch.
+    private static func migrate(from defaults: UserDefaults) -> UploadStoreState? {
+        let completed = defaults.stringArray(forKey: LegacyKeys.completed) ?? []
+        let uploading = defaults.stringArray(forKey: LegacyKeys.uploading) ?? []
+        let checksums = (defaults.data(forKey: LegacyKeys.checksums))
+            .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        let skipped = (defaults.data(forKey: LegacyKeys.skippedTooLarge))
+            .flatMap { try? JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
+
+        if completed.isEmpty, uploading.isEmpty, checksums.isEmpty, skipped.isEmpty { return nil }
+        print("UploadStore: migrating \(completed.count) completed ids out of UserDefaults")
+        return UploadStoreState(completed: Set(completed), uploading: Set(uploading),
+                                checksumToLocalId: checksums, skippedTooLarge: skipped)
+    }
+
+    private static func clearLegacyKeys(in defaults: UserDefaults) {
+        defaults.removeObject(forKey: LegacyKeys.completed)
+        defaults.removeObject(forKey: LegacyKeys.checksums)
+        defaults.removeObject(forKey: LegacyKeys.uploading)
+        defaults.removeObject(forKey: LegacyKeys.skippedTooLarge)
+    }
+
+    // MARK: - Reads
 
     func isUploaded(_ localId: String) -> Bool {
         queue.sync {
-            set.contains(localId) || uploadingSet.contains(localId)
-        }
-    }
-
-    func markAsUploading(_ localId: String) {
-        queue.async(flags: .barrier) {
-            self.uploadingSet.insert(localId)
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
-        }
-    }
-
-    func removeFromUploading(_ localId: String) {
-        queue.async(flags: .barrier) {
-            self.uploadingSet.remove(localId)
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
-        }
-    }
-
-    func markUploaded(_ localId: String, checksum: String? = nil) {
-        queue.async(flags: .barrier) {
-            self.set.insert(localId)
-            self.uploadingSet.remove(localId)
-            self.defaults.set(Array(self.set), forKey: self.key)
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
-
-            // Store checksum mapping if provided
-            if let checksum {
-                self.checksumToLocalId[checksum] = localId
-                self.saveChecksums()
-            }
-        }
-    }
-
-    func reconcileWithServerChecksums(_ serverChecksums: [String]) {
-        queue.async(flags: .barrier) {
-            // Mark all assets with matching checksums as uploaded
-            for checksum in serverChecksums {
-                if let localId = self.checksumToLocalId[checksum] {
-                    self.set.insert(localId)
-                    self.uploadingSet.remove(localId)
-                }
-            }
-            self.defaults.set(Array(self.set), forKey: self.key)
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
-        }
-    }
-
-    /// Records that the server refused this asset for being larger than `limit` bytes.
-    ///
-    /// Not the same as uploaded: the bytes are not on the server, and this must never make the
-    /// asset look backed up. It only stops the scan from re-exporting a file we know is refused.
-    func markSkippedTooLarge(_ localId: String, limit: Int64) {
-        queue.async(flags: .barrier) {
-            self.skippedTooLarge[localId] = limit
-            self.uploadingSet.remove(localId)
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
-            self.saveSkippedTooLarge()
+            state.completed.contains(localId) || state.uploading.contains(localId)
         }
     }
 
@@ -221,7 +233,7 @@ final class UploadStore {
     /// so trying again would fail the same way.
     func shouldSkipForSize(_ localId: String, currentLimit: Int64?) -> Bool {
         queue.sync {
-            guard let recorded = skippedTooLarge[localId] else { return false }
+            guard let recorded = state.skippedTooLarge[localId] else { return false }
             return !UploadSizeLimit.shouldRetry(recordedLimit: recorded, currentLimit: currentLimit)
         }
     }
@@ -230,60 +242,141 @@ final class UploadStore {
     /// user can see is the difference between "my videos are safe" and a silent hole in the backup.
     func skippedTooLargeCount(currentLimit: Int64?) -> Int {
         queue.sync {
-            skippedTooLarge.values.filter {
+            state.skippedTooLarge.values.filter {
                 !UploadSizeLimit.shouldRetry(recordedLimit: $0, currentLimit: currentLimit)
             }.count
         }
     }
 
-    private func saveSkippedTooLarge() {
-        if let data = try? JSONEncoder().encode(skippedTooLarge) {
-            defaults.set(data, forKey: skippedTooLargeKey)
+    // MARK: - Writes
+
+    func markAsUploading(_ localId: String) {
+        mutate { $0.uploading.insert(localId) }
+    }
+
+    func removeFromUploading(_ localId: String) {
+        mutate { $0.uploading.remove(localId) }
+    }
+
+    func markUploaded(_ localId: String, checksum: String? = nil) {
+        mutate {
+            $0.completed.insert(localId)
+            $0.uploading.remove(localId)
+            if let checksum { $0.checksumToLocalId[checksum] = localId }
+        }
+    }
+
+    /// Records that the server refused this asset for being larger than `limit` bytes.
+    ///
+    /// Not the same as uploaded: the bytes are not on the server, and this must never make the
+    /// asset look backed up. It only stops the scan from re-exporting a file we know is refused.
+    func markSkippedTooLarge(_ localId: String, limit: Int64) {
+        mutate {
+            $0.skippedTooLarge[localId] = limit
+            $0.uploading.remove(localId)
+        }
+    }
+
+    func reconcileWithServerChecksums(_ serverChecksums: [String]) {
+        mutate { state in
+            for checksum in serverChecksums {
+                if let localId = state.checksumToLocalId[checksum] {
+                    state.completed.insert(localId)
+                    state.uploading.remove(localId)
+                }
+            }
+        }
+    }
+
+    /// Marks assets the server already holds, matched by the contentId the client sent with them.
+    ///
+    /// This is the reconciliation that survives a reinstall (§5.8).
+    /// ``reconcileWithServerChecksums(_:)`` can only mark ids it finds in the local
+    /// checksum→localId map, which is empty on a fresh install — so it did nothing in exactly
+    /// the situation it existed for. A contentId *is* the `PHAsset.localIdentifier`, which is a
+    /// property of the photo library rather than of this app, so it still means something after
+    /// the app has been deleted and reinstalled.
+    func reconcileWithServerContentIds(_ contentIds: [String]) {
+        mutate { state in
+            for contentId in contentIds where !contentId.isEmpty {
+                state.completed.insert(contentId)
+                state.uploading.remove(contentId)
+            }
         }
     }
 
     func storeChecksumMapping(checksum: String, localId: String) {
-        queue.async(flags: .barrier) {
-            self.checksumToLocalId[checksum] = localId
-            self.saveChecksums()
-        }
-    }
-
-    private func saveChecksums() {
-        if let data = try? JSONEncoder().encode(checksumToLocalId) {
-            defaults.set(data, forKey: checksumKey)
-        }
+        mutate { $0.checksumToLocalId[checksum] = localId }
     }
 
     func clear() {
-        queue.async(flags: .barrier) {
-            self.set.removeAll()
-            self.uploadingSet.removeAll()
-            self.checksumToLocalId.removeAll()
-            self.skippedTooLarge.removeAll()
-            self.defaults.removeObject(forKey: self.key)
-            self.defaults.removeObject(forKey: self.uploadingKey)
-            self.defaults.removeObject(forKey: self.checksumKey)
-            self.defaults.removeObject(forKey: self.skippedTooLargeKey)
-        }
+        mutate { $0 = UploadStoreState() }
     }
 
     func cleanupStaleUploading(activeTasks: Set<String> = []) {
-        queue.async(flags: .barrier) {
-            // Only clear uploading entries that don't have active URLSession tasks
-            // This prevents re-uploading images that are still uploading in background
-            let staleEntries = self.uploadingSet.subtracting(activeTasks)
-            for entry in staleEntries {
-                self.uploadingSet.remove(entry)
-            }
-            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
+        mutate { state in
+            // Only clear uploading entries that don't have an active URLSession task — dropping
+            // one that is still in flight would upload the same asset a second time.
+            let stale = state.uploading.subtracting(activeTasks)
+            state.uploading.subtract(stale)
 
-            if !staleEntries.isEmpty {
-                print("UploadStore: Cleaned up \(staleEntries.count) stale uploading entries")
+            if !stale.isEmpty {
+                print("UploadStore: Cleaned up \(stale.count) stale uploading entries")
             }
             if !activeTasks.isEmpty {
                 print("UploadStore: Preserved \(activeTasks.count) active upload tasks")
             }
+        }
+    }
+
+    // MARK: - Persistence
+
+    /// Writes any pending changes now and waits for them.
+    ///
+    /// Called when the app goes to the background, and by tests that want to read the file back.
+    func flushPendingWrites() {
+        queue.sync(flags: .barrier) {
+            guard dirty else { return }
+            write(state)
+            dirty = false
+        }
+    }
+
+    private func mutate(_ body: @escaping (inout UploadStoreState) -> Void) {
+        queue.async(flags: .barrier) {
+            body(&self.state)
+            self.dirty = true
+            self.scheduleSave()
+        }
+    }
+
+    /// Call on the barrier queue only.
+    ///
+    /// One timer at a time: a burst of completions all set `dirty`, but only the first schedules
+    /// a write, and that single write persists everything the burst did. This is the whole point
+    /// of the change — the old store paid a full re-serialisation per upload.
+    private func scheduleSave() {
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        queue.asyncAfter(deadline: .now() + saveDelay, flags: .barrier) {
+            self.saveScheduled = false
+            guard self.dirty else { return }
+            self.write(self.state)
+            self.dirty = false
+        }
+    }
+
+    /// Atomic so a crash mid-write leaves the previous state intact rather than a truncated file
+    /// that decodes as "nothing has ever been uploaded".
+    private func write(_ state: UploadStoreState) {
+        guard let data = try? JSONEncoder().encode(state) else {
+            print("UploadStore: failed to encode state")
+            return
+        }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            print("UploadStore: failed to write state: \(error.localizedDescription)")
         }
     }
 }

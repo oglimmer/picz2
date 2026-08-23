@@ -311,6 +311,12 @@ tus:
   # No longer aligned with spring.servlet.multipart.max-file-size: that cap governs the legacy
   # /api/upload path, which every current client has stopped using.
   maxSize: 2147483648
+  # §5.9 — lifetime of a scoped upload token, in hours. TUS uploads authenticate through
+  # Upload-Metadata (tusd forwards no arbitrary headers to its hooks), and tusd persists that
+  # metadata to a .info object in storage — so what travels there ends up on disk. A token
+  # authorises starting an upload and nothing else, and expires on its own. Long enough that a
+  # queue of background uploads finishes on one token; short enough that a leaked one is stale.
+  uploadTokenTtlHours: 24
   # Hook URL secret. tusd POSTs hook callbacks to /api/tus/hooks/$(TUS_HOOK_SECRET); the api pod
   # validates the path-secret with constant-time compare. MUST be overridden via --set or sealed
   # secrets — never commit a real value here. Generate with `openssl rand -hex 32`.
