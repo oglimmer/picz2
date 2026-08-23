@@ -7,10 +7,23 @@ class SyncLogger: ObservableObject {
 
     @Published var logs: [SyncLogEntry] = []
 
-    private let logsKey = "sync_logs"
+    private static let logsKey = "sync_logs"
     private let maxLogs = 100 // Keep last 100 logs
 
-    private init() {
+    private let defaults: UserDefaults
+    private let saveDelay: TimeInterval
+    /// Serialising 100 entries is not free, and it was happening on the main thread once per log
+    /// line. Encoding moves here; only the snapshot is taken on main.
+    private let persistQueue = DispatchQueue(label: "com.oglimmer.photosync.synclogger", qos: .utility)
+    /// Touched on the main queue only, like `logs` itself.
+    private var saveScheduled = false
+
+    /// `defaults` and `saveDelay` are injectable purely so tests can drive a scratch suite and
+    /// not wait a second — the same rationale as ``Settings/init(defaults:)`` and ``UploadStore``.
+    /// Production uses ``shared``.
+    init(defaults: UserDefaults = .standard, saveDelay: TimeInterval = 1) {
+        self.defaults = defaults
+        self.saveDelay = saveDelay
         loadLogs()
     }
 
@@ -93,7 +106,21 @@ class SyncLogger: ObservableObject {
     func clearLogs() {
         runOnMain { [weak self] in
             self?.logs.removeAll()
-            self?.saveLogs()
+            self?.scheduleSave()
+        }
+    }
+
+    /// Writes any pending log changes now and waits for them.
+    ///
+    /// Called when the app goes to the background, next to ``UploadStore/flushPendingWrites()``
+    /// and for the same reason: writes are coalesced, so backgrounding is the last moment we are
+    /// reliably given to get the last second of entries onto disk.
+    func flushPendingWrites() {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            self.saveScheduled = false
+            let snapshot = self.logs
+            self.persistQueue.sync { self.write(snapshot) }
         }
     }
 
@@ -114,12 +141,12 @@ class SyncLogger: ObservableObject {
             if self.logs.count > self.maxLogs {
                 self.logs = Array(self.logs.prefix(self.maxLogs))
             }
-            self.saveLogs()
+            self.scheduleSave()
         }
     }
 
     private func loadLogs() {
-        guard let data = UserDefaults.standard.data(forKey: logsKey),
+        guard let data = defaults.data(forKey: Self.logsKey),
               let decodedLogs = try? JSONDecoder().decode([SyncLogEntry].self, from: data)
         else { return }
         runOnMain { [weak self] in
@@ -135,9 +162,28 @@ class SyncLogger: ObservableObject {
         }
     }
 
-    private func saveLogs() {
-        if let encoded = try? JSONEncoder().encode(logs) {
-            UserDefaults.standard.set(encoded, forKey: logsKey)
+    /// Coalesces writes the way ``UploadStore`` does, and for the same reason.
+    ///
+    /// Every upload produces one or two log lines, and each one used to re-encode the whole
+    /// 100-entry buffer and write `UserDefaults` — on the main thread, three uploads at a time.
+    /// One timer at a time: a burst of entries all mark the buffer dirty, but only the first
+    /// schedules a write, and that single write persists everything the burst added.
+    ///
+    /// Call on the main queue only.
+    private func scheduleSave() {
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + saveDelay) { [weak self] in
+            guard let self else { return }
+            self.saveScheduled = false
+            let snapshot = self.logs
+            self.persistQueue.async { self.write(snapshot) }
         }
+    }
+
+    /// Call on `persistQueue` only.
+    private func write(_ snapshot: [SyncLogEntry]) {
+        guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
+        defaults.set(encoded, forKey: Self.logsKey)
     }
 }

@@ -14,9 +14,43 @@ final class SyncCoordinator: ObservableObject {
     // falls back to the multipart `uploader`. Both uploaders share the same onTaskFinished
     // callback shape (adapted in init() below) so handleUploadFinished is path-agnostic.
     private let tusUploader = TusUploader.shared
-    private var cachedCapabilities: Capabilities?
+    /// Guarded, for the same reason ``cachedApi`` is: this pair is written on the URLSession
+    /// callback thread by `ensureCapabilitiesLoaded`, read on `syncQueue` by `drainQueue` and
+    /// `enqueue`, and read on the main queue by `refreshSkippedTooLargeMetric`. Three threads,
+    /// no synchronisation. The two fields are also read together — a TTL check that saw a fresh
+    /// timestamp beside a nil payload would refetch on every batch — so they move under one lock
+    /// rather than two.
+    private let capabilitiesLock = NSLock()
+    private var storedCapabilities: Capabilities?
     private var capabilitiesFetchedAt: Date?
     private let capabilitiesTTL: TimeInterval = 3600  // 1 hour
+
+    /// The last capabilities we were told about, whether or not they are still fresh. Path
+    /// selection and the size cap both want "the best answer we have", not "a fresh answer".
+    private var cachedCapabilities: Capabilities? {
+        capabilitiesLock.lock()
+        defer { capabilitiesLock.unlock() }
+        return storedCapabilities
+    }
+
+    /// The cached value only while it is inside the TTL — nil means "go and ask".
+    private func freshCapabilities(now: Date = Date()) -> Capabilities? {
+        capabilitiesLock.lock()
+        defer { capabilitiesLock.unlock() }
+        guard let capabilities = storedCapabilities,
+              let fetchedAt = capabilitiesFetchedAt,
+              now.timeIntervalSince(fetchedAt) < capabilitiesTTL
+        else { return nil }
+        return capabilities
+    }
+
+    private func storeCapabilities(_ capabilities: Capabilities, at date: Date = Date()) {
+        capabilitiesLock.lock()
+        storedCapabilities = capabilities
+        capabilitiesFetchedAt = date
+        capabilitiesLock.unlock()
+    }
+
     /// Cached rather than rebuilt per access (§5.10).
     ///
     /// This was a computed property doing a `KeychainHelper.load()` — a synchronous IPC to
@@ -610,9 +644,7 @@ final class SyncCoordinator: ObservableObject {
     /// cache has expired. Failure is non-fatal — we just leave the cache empty and fall back
     /// to the multipart path until the next attempt.
     private func ensureCapabilitiesLoaded(completion: ((Capabilities?) -> Void)? = nil) {
-        if let fetchedAt = capabilitiesFetchedAt,
-           Date().timeIntervalSince(fetchedAt) < capabilitiesTTL,
-           let cached = cachedCapabilities {
+        if let cached = freshCapabilities() {
             completion?(cached)
             return
         }
@@ -620,8 +652,7 @@ final class SyncCoordinator: ObservableObject {
             guard let self else { completion?(nil); return }
             switch result {
             case let .success(caps):
-                self.cachedCapabilities = caps
-                self.capabilitiesFetchedAt = Date()
+                self.storeCapabilities(caps)
                 // Persist the cap so the next cold-launch scan can filter known-too-big assets
                 // before exporting them, and so a raised cap un-skips what it now admits.
                 DispatchQueue.main.async {
