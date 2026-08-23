@@ -8,7 +8,7 @@ Personal photo / video gallery with iOS background sync, TUS resumable uploads, 
 | ----------- | ---------------------------------- | --------------------------------------------------------------------- |
 | `server/`   | Spring Boot 4 / Java 25            | Backend JAR — runs as both `api` and `worker` pods (different `SPRING_PROFILES_ACTIVE`). |
 | `frontend/` | Vue 3 + Vite + TypeScript + Nginx  | SPA (`picz2.oglimmer.com`).                                           |
-| `ios/`      | Swift (Xcode project)              | iOS app `PhotoCloudSync` — the primary client.                        |
+| `ios/`      | Swift (Xcode project)              | iOS app `Zyncloud` — the primary client.                        |
 | `helm/`     | Helm chart                         | K8s deploy — five workloads (api, worker, frontend, tusd, retention CronJob). |
 
 ## Local development
@@ -46,7 +46,7 @@ npm run lint
 
 ### iOS
 
-Open `ios/PhotoCloudSync/PhotoCloudSync.xcodeproj` in Xcode. Requires a paid Apple Developer account (uses background URLSessions + APNS).
+Open `ios/Zyncloud/Zyncloud.xcodeproj` in Xcode. Requires a paid Apple Developer account (uses background URLSessions + APNS).
 
 ## Deploying to the cluster
 
