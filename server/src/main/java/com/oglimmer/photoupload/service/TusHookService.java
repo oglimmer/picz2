@@ -75,6 +75,7 @@ public class TusHookService {
   private final FileMetadataRepository metadataRepository;
   private final UserRepository userRepository;
   private final AuthenticationManager authenticationManager;
+  private final UploadTokenService uploadTokenService;
   private final JobsProperties jobsProperties;
   private final JobQueueDepthService queueDepthService;
 
@@ -216,9 +217,31 @@ public class TusHookService {
     return upload.metaData() == null ? Map.of() : upload.metaData();
   }
 
+  /**
+   * Resolves the {@code auth} metadata value to a user.
+   *
+   * <p>Two accepted formats, deliberately (§5.9):
+   *
+   * <ul>
+   *   <li>A scoped upload token ({@code zut_…}) — what current clients send. It authorises starting
+   *       an upload and nothing else, and it expires.
+   *   <li>Legacy {@code email:password} — what older builds send. tusd writes this metadata to a
+   *       {@code .info} object in storage, so it puts the account password on disk; it is kept only
+   *       so an app that has not been updated keeps working, and should be removed once the minimum
+   *       client version has moved past it.
+   * </ul>
+   *
+   * <p>Routing on the prefix is unambiguous because {@code zut_} cannot begin an e-mail address.
+   */
   private User authenticate(String authValue) {
     if (authValue == null || authValue.isBlank()) {
       throw new BadCredentialsException("missing auth metadata");
+    }
+
+    if (UploadTokenService.looksLikeToken(authValue)) {
+      return uploadTokenService
+          .resolve(authValue)
+          .orElseThrow(() -> new BadCredentialsException("unknown or expired upload token"));
     }
     int colon = authValue.indexOf(':');
     if (colon < 0) {

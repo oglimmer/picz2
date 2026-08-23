@@ -448,10 +448,12 @@ so keychain sharing would not work even if both sides used the same service.
 *Fix:* wire the entitlements file into the target, pass `kSecAttrAccessGroup` explicitly in both
 helpers, collapse to one credential store, and make logout clear it.
 
-**5.2 — `start()` blocks the main thread for up to 4 seconds.**
-`Uploader.swift:73` and `TusUploader.swift:69` use `DispatchSemaphore.wait(timeout: .now() + 2)`
-around `session.getAllTasks`; `SyncCoordinator.swift:92-93` calls both, from the main thread, on
-every activation. *Fix:* make `start()` async, or hop off main before the cleanup step.
+**5.2 — `start()` blocks the main thread for up to 4 seconds.** — **FIXED 2026-08-23.**
+`getActiveUploadAssetIds` is now completion-based on both uploaders; the semaphores are gone.
+`SyncCoordinator.start()` chains the two enumerations through `activeUploadTaskAssetIds` and runs
+the stale-entry cleanup *and the scan* inside that completion — the ordering is load-bearing, and
+a scan that overtakes the cleanup sees last launch's leftover "uploading" entries and skips
+exactly the assets that need retrying.
 
 **5.3 — The share extension hangs on unsupported attachment types.** — **FIXED, see §3.8.**
 `ShareViewController.swift:551` counts *every* attachment into `totalItemCount`, but
@@ -469,12 +471,10 @@ permanently un-exportable asset (iCloud original unavailable, corrupt resource) 
 seconds for as long as the app runs. *Fix:* per-asset failure count with a give-up threshold
 logged to `SyncLogger`.
 
-**5.5 — Wi-Fi Only / sync-days toggles may not update visually.**
-`Settings` is an `ObservableObject` held inside another (`SyncCoordinator.swift:8`). Views bind
-`$sync.settings.wifiOnly` (`SyncOptionsView.swift:29, 31, 45`), but mutating a property of the
-nested object never fires `SyncCoordinator.objectWillChange`, so SwiftUI has no reason to
-re-render. *Fix:* observe `Settings.shared` directly in the view, or forward via
-`settings.objectWillChange.sink`.
+**5.5 — Wi-Fi Only / sync-days toggles may not update visually.** — **FIXED 2026-08-23.**
+`SyncOptionsView` observes `Settings.shared` directly (`@ObservedObject private var settings`) and
+binds `$settings.x`, so the object that changes is the object SwiftUI is watching. All three
+controls moved: Wi‑Fi Only, the sync-days stepper, and the TUS toggle.
 
 **5.20 — Real videos are never backed up: the app uploads untouched 4K originals.**
 — **PARTLY ADDRESSED 2026-08-23. The cap is now 2 GiB and the refusal is legible; the client
@@ -534,31 +534,67 @@ transcode as the only surviving copy for 50 of 85 videos, and the client never r
 
 ### Medium
 
-**5.6 — Temp file leaks on TUS create-failure paths.** `TusUploader.createUpload` returns at
-lines 123, 129, 140, 162 (and the 429/503 branch) without deleting `exp.fileURL`. Same in
-`Uploader.queueUpload` when `writeMultipartBody` throws — both the exported file and the partial
-multipart file survive.
+**5.6 — Temp file leaks on TUS create-failure paths.** — **FIXED 2026-08-23.** Every
+`createUpload` path that returns without handing the file to a URLSession task now calls
+`discardExport` — attribute read failure, transport error, no HTTP response, missing `Location`,
+409, 429/503, any other status, and the new size refusal. Deleting on 429/503 is correct: a
+deferred asset is re-exported from the photo library when its turn comes round, not resumed from
+that file. `Uploader.queueUpload` hoists `multipartURL` above the `do` so both the export and a
+partially written multipart body are removed on the boundary-extraction and `writeMultipartBody`
+failure paths.
 
-**5.7 — `UploadStore` grows unbounded in `UserDefaults`.** Every completed upload is appended to
-a `Set<String>` re-serialized in full on each write, plus a parallel checksum dictionary. O(n)
-per upload and an ever-growing plist. The README already flags this ("consider Core Data").
+**5.7 — `UploadStore` grows unbounded in `UserDefaults`.** — **FIXED 2026-08-23**, without a
+database. State moved to one JSON file in Application Support (`UploadStoreState`, written
+atomically), so it is off the launch path entirely — `UserDefaults` is a plist loaded whole at
+launch. Writes are **coalesced**: a mutation marks the state dirty and schedules one write a
+second later, so a burst of fifty completions costs one serialisation instead of fifty.
+`flushPendingWrites()` forces it, and `ZyncloudApp` calls that when the app backgrounds.
+Existing installs migrate on first run and the old keys are deleted; the file wins if both exist,
+so a cleared history cannot be resurrected by leftovers. The data still grows with the library,
+because "have I uploaded this?" cannot be answered without remembering — what is fixed is the
+write amplification and the launch cost.
 
-**5.8 — Checksum reconciliation is a no-op after reinstall.**
-`Settings.swift:158` only marks assets present in the local `checksumToLocalId` map, which is
-empty on a fresh install — so the mechanism that exists to avoid re-uploading is inert exactly
-when it matters most. Server-side `contentId` dedupe (409) covers TUS, so the cost is re-export
-and re-transmit, not duplicate rows.
+**5.8 — Checksum reconciliation is a no-op after reinstall.** — **FIXED 2026-08-23.** New
+`GET /api/sync/uploaded-content-ids?days=N` returns the contentIds the server holds for this
+user; `UploadStore.reconcileWithServerContentIds` marks them directly. That works on a fresh
+install because a contentId **is** the `PHAsset.localIdentifier` — a property of the photo
+library, not of this app, so it survives delete-and-reinstall. Checksum reconciliation is kept
+and runs after it: rows uploaded before the client sent a contentId have none, and only the
+checksum path recognises those.
 
-**5.9 — Credentials travel inside `Upload-Metadata`.** `TusUploader.swift:280` and
-`UploadService.swift:221`. Deliberate (tusd does not forward arbitrary headers to hooks) and
-documented in-code, but base64 is not encryption and tusd persists metadata to a `.info` file on
-disk. A scoped upload token would be meaningful hardening whenever the server can support one.
+**5.9 — Credentials travel inside `Upload-Metadata`.** — **FIXED 2026-08-23; the server can
+support one now.** V41 adds `upload_tokens` (SHA-256 hash only — a dump of the table replays
+nothing); `UploadTokenService` issues and resolves them, sweeping expired rows on the way through
+issue; `POST /api/upload-tokens` hands an authenticated caller a `zut_…` token plus
+`expiresInSeconds` (a duration, not an instant, so a phone with a skewed clock still refreshes at
+the right moment). `TusHookService.authenticate` routes on the `zut_` prefix and still accepts
+legacy `email:password`, so no client/server deploy ordering is required.
 
-**5.10 — PII in release logs, and a keychain read per API call.**
-`SyncCoordinator.swift:20` and `PushNotificationManager.swift:10` are computed properties that
-call `KeychainHelper.shared.load()` on *every* access. `PushNotificationManager.swift:59, 67` log
-token prefix and username, un-gated. *Fix:* cache the `APIClient`; move to `os.Logger` with
-`privacy: .private`.
+Clients: `UploadTokenStore` (in-memory only — a token on disk would be one more copy of a
+credential) fetches with a 5-minute refresh margin, coalesces concurrent requests so a batch of
+three mints one token, drops the token on `credentialsDidChange`, and `TusUploader` retries a 401
+once with a fresh token before giving up. The share extension mints one token per share; the web
+client caches one keyed by the credentials it was minted with, which makes logout self-
+invalidating without a circular import into `useAuth`. Every client falls back to the legacy
+value when the endpoint is absent.
+
+Changing or resetting the password revokes every outstanding token — otherwise "I changed my
+password" would stop meaning "whatever had my old credentials is locked out". Still true, and
+still the reason this is hardening rather than a fix: the token is a bearer credential in the
+same channel. What changed is the blast radius — it authorises starting an upload, it expires,
+and throwing it away costs the user nothing.
+
+**Not migrated:** `UploadExtension/` (the standalone macOS app) still sends `email:password`. It
+is outside this review's scope and its `Shared/UploadService.swift` is a near-duplicate of the
+iOS one; the same patch applies.
+
+**5.10 — PII in release logs, and a keychain read per API call.** — **FIXED 2026-08-23.**
+`KeychainHelper` now posts `credentialsDidChange` on save and delete, which is the signal that
+makes caching safe: `SyncCoordinator` and `PushNotificationManager` hold an `APIClient` and drop
+it on that notification instead of doing a synchronous securityd IPC per access. The device-token
+prefix is `#if DEBUG` only and the account e-mail is no longer logged at all. Not moved to
+`os.Logger` — a targeted redaction was the fix; a full `print` → `os.Logger` sweep is a separate
+piece of work.
 
 **5.11 — `Info.plist` issues.** — **usage string, `armv7` and `ITSAppUsesNonExemptEncryption` FIXED, see §3.10. Deployment target still open — your call.**
 - `NSPhotoLibraryUsageDescription` reads *"…to create audiobooks about them"* — copy-paste from
@@ -662,6 +698,26 @@ generalizes.
     5.16 (`AppConfiguration` now overridable via `ZYNCLOUD_BASE_URL` in Debug instead of an
     unreachable `isProduction = true`), 5.17 (README rewritten), 5.19 (`APIClient.validate`
     extracted; the five endpoints delegate — `APIClient.swift` 350 → 158 lines).
+
+12. ~~**The remaining Medium / Low items**~~ **Done 2026-08-23.** 5.2 (blocking `start()`),
+    5.5 (nested-ObservableObject toggles), 5.6 (temp-file leaks), 5.7 (UploadStore off
+    UserDefaults, coalesced writes), 5.8 (contentId reconciliation, new server endpoint),
+    5.9 (scoped upload tokens, V41 + both clients) and 5.10 (cached `APIClient`, PII out of
+    release logs). iOS suite 211 cases, server suite 208 — both green.
+
+    **Deploy note:** 5.8 and 5.9 add server endpoints and 5.9 adds a Flyway migration, so the
+    api pod must be deployed for either to do anything. Neither needs the clients to move
+    first: both fall back to the old behaviour against an older server.
+
+### What is left after this pass
+
+* **§3.5** — push entitlement, verifiable only on a machine with a distribution certificate.
+* **B4** — a background upload surviving the app being killed, on a real device.
+* **5.13 / 5.14** — documented by tests rather than fixed, deliberately.
+* **5.18** — retain cycles in alert closures; benign in practice.
+* **D43 follow-ups** — chunked resume in `TusUploader.startPatch`, and `-vf scale=-2:1080` on
+  the server transcode.
+* `UploadExtension/` (macOS) still on legacy credential metadata — see 5.9.
 
 ---
 

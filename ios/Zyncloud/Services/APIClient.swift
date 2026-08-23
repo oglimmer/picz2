@@ -109,6 +109,46 @@ struct APIClient {
         }
     }
 
+    /// ContentIds the server already holds for this user.
+    ///
+    /// Companion to ``fetchUploadedChecksums(days:completion:)``. That one can only ever mark
+    /// assets this install has already seen, because the client matches the returned checksums
+    /// against a local map that a fresh install has not built yet — so it was inert exactly
+    /// where it was needed (§5.8). ContentIds are `PHAsset.localIdentifier` values, which belong
+    /// to the photo library and still match after a delete-and-reinstall.
+    func fetchUploadedContentIds(days: Int, completion: @escaping (Result<[String], Error>) -> Void) {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/sync/uploaded-content-ids"),
+            resolvingAgainstBaseURL: false,
+        )
+        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
+        guard let url = components?.url else {
+            completion(.failure(AppError.api(message: "Invalid URL", statusCode: nil)))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        addBasicAuth(to: &request)
+
+        performRequest(request, expecting: SyncContentIdsResponse.self) { result in
+            completion(result.map(\.contentIds))
+        }
+    }
+
+    /// Mints a scoped upload token (§5.9).
+    ///
+    /// Authenticated like any other call — the point is not to skip logging in, it is to keep the
+    /// account password out of `Upload-Metadata`, which tusd persists to storage for the life of
+    /// an upload. See ``UploadTokenStore``.
+    func fetchUploadToken(completion: @escaping (Result<UploadTokenResponse, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/upload-tokens"))
+        request.httpMethod = "POST"
+        addBasicAuth(to: &request)
+
+        performRequest(request, expecting: UploadTokenResponse.self, completion: completion)
+    }
+
     func getTargetAlbum(completion: @escaping (Result<Int?, Error>) -> Void) {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/settings/target-album"))
         request.httpMethod = "GET"

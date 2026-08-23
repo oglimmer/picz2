@@ -6,6 +6,12 @@ class UploadService {
     private var email: String?
     private var password: String?
 
+    /// Scoped upload token for the TUS metadata (§5.9), fetched once per share and kept only in
+    /// memory. The extension's lifetime is one share sheet, so there is nothing to expire here —
+    /// the point is simply that the account password no longer travels in `Upload-Metadata`,
+    /// which tusd writes to a `.info` object in storage for the life of the upload.
+    private var uploadToken: String?
+
     private init() {}
 
     /// Base URL for the JSON API surface (auth, albums). Distinct from the TUS upload
@@ -22,6 +28,7 @@ class UploadService {
     func clearCredentials() {
         email = nil
         password = nil
+        uploadToken = nil
     }
 
     func getAuthorizationHeader() -> String? {
@@ -65,11 +72,57 @@ class UploadService {
     }
 
     /// Upload media items via TUS, sequentially, reporting per-file progress.
+    /// The legacy `auth` metadata value — the account's own `email:password`.
+    private var legacyAuthValue: String? {
+        guard let email, let password else { return nil }
+        return "\(email):\(password)"
+    }
+
+    /// Mints a scoped upload token, if the server offers them.
+    ///
+    /// Failure is not an error: an older server has no such endpoint, and the upload proceeds on
+    /// the legacy credential value instead.
+    private func fetchUploadToken(completion: @escaping () -> Void) {
+        guard let url = URL(string: getApiBaseUrl() + "/upload-tokens"),
+              let authorization = getAuthorizationHeader()
+        else {
+            completion()
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            defer { completion() }
+            guard let self,
+                  let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+                  let data,
+                  let decoded = try? JSONDecoder().decode(ShareUploadTokenResponse.self, from: data)
+            else { return }
+            uploadToken = decoded.token
+        }.resume()
+    }
+
     func upload(
         mediaItems: [MediaItem],
         albumId: Int? = nil,
         progress: @escaping (Double) -> Void,
         completion: @escaping (Result<Int, Error>) -> Void,
+    ) {
+        // One token for the whole share, minted before the first byte moves.
+        fetchUploadToken { [weak self] in
+            self?.performUpload(mediaItems: mediaItems, albumId: albumId,
+                               progress: progress, completion: completion)
+        }
+    }
+
+    private func performUpload(
+        mediaItems: [MediaItem],
+        albumId: Int?,
+        progress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Int, Error>) -> Void
     ) {
         var uploadedCount = 0
         var failedError: Error?
@@ -217,8 +270,10 @@ class UploadService {
         if let albumId {
             parts.append(("albumId", String(albumId)))
         }
-        if let email, let password {
-            parts.append(("auth", "\(email):\(password)"))
+        // Prefer the scoped token; fall back to the account credentials only when the server
+        // has no token endpoint (§5.9).
+        if let auth = uploadToken ?? legacyAuthValue {
+            parts.append(("auth", auth))
         }
         return parts
             .map { key, value in
@@ -237,6 +292,12 @@ class UploadService {
         if let abs = URL(string: location), abs.scheme != nil { return abs }
         return URL(string: location, relativeTo: base)?.absoluteURL
     }
+}
+
+/// `POST /api/upload-tokens`. Only the token is read here — the extension lives for one share,
+/// so it never needs to reason about expiry.
+private struct ShareUploadTokenResponse: Decodable {
+    let token: String
 }
 
 // MediaItem struct for type safety

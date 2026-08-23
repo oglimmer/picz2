@@ -24,10 +24,47 @@ export interface UploadResult {
  * running unchanged; R2 flips advertised and the next page load switches to TUS automatically.
  * If capabilities can't be fetched, we fall back to multipart (see {@link useCapabilities}).
  */
+/**
+ * Cached across calls: a multi-file upload should cost one token, not one per file.
+ *
+ * Keyed by the credentials it was minted with, which is what makes it self-invalidating — a
+ * logout (or a login as somebody else) changes the key, so the old token is never reused and
+ * `useAuth` does not have to know this cache exists. Importing it there would also make the two
+ * composables circular.
+ */
+let cachedUploadToken: { credentials: string; token: Promise<string | null> } | null = null;
+
 export function useUpload() {
   const { fetchWithAuth } = useApi();
   const { authEmail, authPassword } = useAuth();
   const { ensureLoaded } = useCapabilities();
+
+  /**
+   * Mints a scoped upload token, or null when the server has no such endpoint (§5.9).
+   *
+   * A failure here is deliberately not surfaced: it means "fall back to the legacy credential
+   * value", which is what an older server still expects.
+   */
+  function fetchUploadToken(): Promise<string | null> {
+    const credentials = `${authEmail.value}:${authPassword.value}`;
+    if (cachedUploadToken?.credentials === credentials) return cachedUploadToken.token;
+
+    const token = (async () => {
+      try {
+        const res = await fetch(`${getApiUrl()}/api/upload-tokens`, {
+          method: "POST",
+          headers: { Authorization: `Basic ${btoa(credentials)}` },
+        });
+        if (!res.ok) return null;
+        const body = (await res.json()) as { token?: string };
+        return body?.token ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    cachedUploadToken = { credentials, token };
+    return token;
+  }
 
   async function uploadFile(
     file: File,
@@ -43,7 +80,8 @@ export function useUpload() {
       if (caps.tus.maxSize > 0 && file.size > caps.tus.maxSize) {
         throw new Error(tooLargeMessage(file.size, caps.tus.maxSize));
       }
-      return uploadViaTus(file, albumId, caps.tus.endpoint, opts, caps.tus.maxSize);
+      const uploadToken = await fetchUploadToken();
+      return uploadViaTus(file, albumId, caps.tus.endpoint, opts, caps.tus.maxSize, uploadToken);
     }
     return uploadViaMultipart(file, albumId, opts);
   }
@@ -54,6 +92,7 @@ export function useUpload() {
     endpoint: string,
     opts: UploadOptions,
     maxSize: number,
+    uploadToken: string | null,
   ): Promise<UploadResult> {
     return new Promise((resolve, reject) => {
       const apiUrl = getApiUrl();
@@ -69,9 +108,12 @@ export function useUpload() {
           filename: file.name,
           filetype: file.type || "application/octet-stream",
           albumId: String(albumId),
-          // Carries HTTP Basic credentials as plain "email:password" — the api hook splits
-          // and validates via the existing AuthenticationManager. Same convention as iOS.
-          auth: credentials,
+          // Scoped upload token when the server offers one, otherwise the legacy plain
+          // "email:password" that the api hook splits and validates through the existing
+          // AuthenticationManager. tusd persists this metadata to a `.info` object in storage
+          // for the life of the upload, which is why sending the account password here is the
+          // fallback rather than the default (§5.9). Same convention as iOS.
+          auth: uploadToken ?? credentials,
         },
         headers: {
           // Belt-and-braces: tusd forwards Authorization to the hook (per
