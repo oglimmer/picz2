@@ -98,6 +98,20 @@ class AlbumDetailViewModel: ViewModelProtocol {
         }
     }
 
+    /// Playback URL for a video asset.
+    ///
+    /// Deliberately carries **no** `size` parameter: with no size the server hands back the
+    /// transcoded H.264 rendition when one exists and the untouched original otherwise. Any
+    /// size value would ask for an image derivative a video does not have — that is what made
+    /// tapping a video show "Failed". Mirrors what the web Lightbox does.
+    func videoURL(for photo: Photo) -> URL? {
+        let baseURL = AppConfiguration.apiBaseURL
+        return URLComponents(
+            url: baseURL.appendingPathComponent("api/i/\(photo.publicToken)"),
+            resolvingAgainstBaseURL: false,
+        )?.url
+    }
+
     func fullImageURL(for photo: Photo) -> URL? {
         // Use public token to access original/large image via /api/i/{token}
         let baseURL = AppConfiguration.apiBaseURL

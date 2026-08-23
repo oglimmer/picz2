@@ -30,6 +30,13 @@ struct FileInfo: Codable, Identifiable {
         case albumName
     }
 
+    /// True when the stored asset is a video. The gallery has to know, because a video's
+    /// bytes are not an image: asking `/api/i/{token}?size=large` for one returns the video
+    /// itself (videos get no `large` derivative), and `UIImage(data:)` on that is nil.
+    var isVideo: Bool {
+        mimetype?.lowercased().hasPrefix("video/") ?? false
+    }
+
     // Computed properties for backwards compatibility
     var thumbnailPath: String? { nil }
     var mediumPath: String? { nil }
