@@ -468,6 +468,7 @@ class ShareViewController: UIViewController {
     private func performSignOut() {
         CredentialsManager.clear()
         uploadService.clearCredentials()
+        LastAlbumStore.forget()
         isLoggedIn = false
         selectedAlbumId = nil
         albums = []
@@ -669,7 +670,13 @@ class ShareViewController: UIViewController {
 
         uploadService.upload(mediaItems: mediaItems, albumId: albumId) { [weak self] progress in
             DispatchQueue.main.async {
-                self?.progressView.setProgress(Float(progress), animated: true)
+                guard let self, self.isUploading else { return }
+                // Progress now arrives continuously, in small steps. Animating each one queues
+                // overlapping 0.25s animations and the bar visibly lags the bytes, so only the
+                // rare big jump — a whole file retiring — is animated.
+                let value = Float(progress)
+                self.progressView.setProgress(value, animated: value - self.progressView.progress > 0.05)
+                self.subtitleLabel.text = "Uploading… \(Int(progress * 100))%"
             }
         } completion: { [weak self] result in
             DispatchQueue.main.async {
@@ -832,7 +839,8 @@ extension ShareViewController {
                     self.albumButton.isEnabled = false
                 } else {
                     self.albumButton.isEnabled = true
-                    if let first = albums.first, let id = first["id"] as? Int {
+                    let ids = albums.compactMap { $0["id"] as? Int }
+                    if let id = AlbumPreselection.choose(from: ids, remembered: LastAlbumStore.albumId) {
                         self.selectAlbum(id: id)
                     }
                 }
@@ -857,6 +865,10 @@ extension ShareViewController {
 
     private func selectAlbum(id: Int) {
         selectedAlbumId = id
+        // Both callers land here: the user tapping the menu, and the preselect on load. Saving
+        // in both is deliberate — it lets a remembered id that points at a deleted album be
+        // replaced by the fallback rather than being retried on every share.
+        LastAlbumStore.remember(albumId: id)
         if let album = albums.first(where: { ($0["id"] as? Int) == id }) {
             let name = (album["name"] as? String) ?? "Album"
             let count = album["fileCount"] as? Int ?? 0

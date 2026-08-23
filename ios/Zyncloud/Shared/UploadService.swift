@@ -1,6 +1,6 @@
 import Foundation
 
-class UploadService {
+class UploadService: NSObject {
     static let shared = UploadService()
 
     private var email: String?
@@ -12,7 +12,27 @@ class UploadService {
     /// which tusd writes to a `.info` object in storage for the life of the upload.
     private var uploadToken: String?
 
-    private init() {}
+    /// Byte-level progress for the share currently in flight, plus the closure to report it to.
+    /// Written when a share starts, read on ``uploadSession``'s delegate queue — hence the lock.
+    private let progressLock = NSLock()
+    private var progressTracker: ShareUploadProgress?
+    private var progressHandler: ((Double) -> Void)?
+    /// Last value handed to ``progressHandler``, in per-mille. `didSendBodyData` fires once per
+    /// socket write — thousands of times for a video — so we only forward visible changes.
+    private var lastReportedPerMille = -1
+
+    /// The PATCH session. It cannot be `URLSession.shared`: a shared session has no delegate, so
+    /// `didSendBodyData` is never delivered and the progress bar can only move once per file.
+    private lazy var uploadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 600
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.name = "UploadService.progress"
+        return URLSession(configuration: config, delegate: self, delegateQueue: queue)
+    }()
+
+    override private init() { super.init() }
 
     /// Base URL for the JSON API surface (auth, albums). Distinct from the TUS upload
     /// endpoint, which lives under /files/ and is reached via ``AppConfiguration/tusEndpointURL``.
@@ -126,10 +146,16 @@ class UploadService {
     ) {
         var uploadedCount = 0
         var failedError: Error?
-        let totalCount = mediaItems.count
+
+        // Sizes are read once, up front: they are both the `Upload-Length` header and the weights
+        // the progress bar is drawn from. A share of one 200 MB video and one 2 MB photo must not
+        // pretend the photo is half the work.
+        let sizes = mediaItems.map { Self.fileSize(of: $0.url) }
+        beginProgress(fileSizes: sizes.map { (try? $0.get()) ?? 0 }, handler: progress)
 
         func uploadNext(index: Int) {
             guard index < mediaItems.count else {
+                endProgress()
                 DispatchQueue.main.async {
                     if let error = failedError {
                         completion(.failure(error))
@@ -141,40 +167,93 @@ class UploadService {
             }
 
             let item = mediaItems[index]
-            uploadFile(item: item, albumId: albumId) { result in
+
+            func advance(_ result: Result<Void, Error>) {
                 switch result {
-                case .success:
-                    uploadedCount += 1
-                    let currentProgress = Double(uploadedCount) / Double(totalCount)
-                    DispatchQueue.main.async { progress(currentProgress) }
-                case let .failure(error):
-                    if failedError == nil { failedError = error }
+                case .success: uploadedCount += 1
+                case let .failure(error): if failedError == nil { failedError = error }
                 }
+                // Both outcomes retire this file's weight, so a failed item does not park the bar.
+                finishProgressItem()
                 uploadNext(index: index + 1)
+            }
+
+            switch sizes[index] {
+            case let .success(fileSize):
+                uploadFile(item: item, albumId: albumId, fileSize: fileSize, completion: advance)
+            case let .failure(error):
+                advance(.failure(error))
             }
         }
 
         uploadNext(index: 0)
     }
 
+    private static func fileSize(of url: URL) -> Result<Int64, Error> {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            return .success((attrs[.size] as? NSNumber)?.int64Value ?? 0)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    // MARK: - Progress plumbing
+
+    private func beginProgress(fileSizes: [Int64], handler: @escaping (Double) -> Void) {
+        progressLock.lock()
+        progressTracker = ShareUploadProgress(fileSizes: fileSizes)
+        progressHandler = handler
+        lastReportedPerMille = -1
+        progressLock.unlock()
+    }
+
+    private func endProgress() {
+        progressLock.lock()
+        progressTracker = nil
+        progressHandler = nil
+        progressLock.unlock()
+    }
+
+    /// Called from `didSendBodyData` with the running total for the file in flight.
+    fileprivate func noteBytesSent(_ totalBytesSentForCurrentFile: Int64) {
+        emitProgress { $0.noteBytesSent(totalBytesSentForCurrentFile) }
+    }
+
+    private func finishProgressItem() {
+        emitProgress { $0.finishCurrentItem() }
+    }
+
+    private func emitProgress(_ mutate: (inout ShareUploadProgress) -> Void) {
+        progressLock.lock()
+        guard var tracker = progressTracker, let handler = progressHandler else {
+            progressLock.unlock()
+            return
+        }
+        mutate(&tracker)
+        progressTracker = tracker
+        let fraction = tracker.fraction
+        let perMille = Int(fraction * 1000)
+        guard perMille != lastReportedPerMille else {
+            progressLock.unlock()
+            return
+        }
+        lastReportedPerMille = perMille
+        progressLock.unlock()
+
+        DispatchQueue.main.async { handler(fraction) }
+    }
+
     private func uploadFile(
         item: MediaItem,
         albumId: Int?,
+        fileSize: Int64,
         completion: @escaping (Result<Void, Error>) -> Void,
     ) {
         // Auth via Upload-Metadata is required by the server (D26) — Authorization header is
         // sent too as belt-and-braces, but tusd does not forward arbitrary headers to hooks.
         guard email != nil, password != nil else {
             completion(.failure(NSError(domain: "UploadService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])))
-            return
-        }
-
-        let fileSize: Int64
-        do {
-            let attrs = try FileManager.default.attributesOfItem(atPath: item.url.path)
-            fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-        } catch {
-            completion(.failure(error))
             return
         }
 
@@ -237,7 +316,10 @@ class UploadService {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
-        let task = URLSession.shared.uploadTask(with: request, fromFile: item.url) { _, response, error in
+        // `uploadSession`, not `URLSession.shared` — see the property comment. The completion
+        // handler still stands in for `didCompleteWithError`; `didSendBodyData` is delivered
+        // alongside it, and that is where the bar gets its numbers.
+        let task = uploadSession.uploadTask(with: request, fromFile: item.url) { _, response, error in
             if let error {
                 print("❌ TUS PATCH failed: \(item.filename) - \(error.localizedDescription)")
                 completion(.failure(error))
@@ -291,6 +373,68 @@ class UploadService {
     private func resolveLocation(_ location: String, against base: URL) -> URL? {
         if let abs = URL(string: location), abs.scheme != nil { return abs }
         return URL(string: location, relativeTo: base)?.absoluteURL
+    }
+}
+
+// MARK: - URLSessionTaskDelegate
+
+extension UploadService: URLSessionTaskDelegate {
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        didSendBodyData _: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend _: Int64
+    ) {
+        // Uploads run strictly one at a time (`uploadNext`), so the task firing here is always
+        // the file the tracker considers current — no task-to-item bookkeeping is needed.
+        noteBytesSent(totalBytesSent)
+    }
+}
+
+/// Byte-weighted progress across the files of one share.
+///
+/// Split out from ``UploadService`` because it is the part with the arithmetic worth testing:
+/// weighting, clamping, and the rule that a file leaving the queue always retires its weight.
+struct ShareUploadProgress {
+    /// Bytes per file, in upload order. A zero-byte or unmeasurable file still gets weight 1 so
+    /// it can move the bar when it finishes, rather than being invisible.
+    private let weights: [Int64]
+    private let totalBytes: Int64
+    private var completedIndex = 0
+    private var completedBytes: Int64 = 0
+    private var currentSent: Int64 = 0
+
+    init(fileSizes: [Int64]) {
+        weights = fileSizes.map { max(1, $0) }
+        totalBytes = weights.reduce(0, +)
+    }
+
+    /// 0.0 … 1.0. Empty shares read as 0 — there is nothing to wait for, but claiming "done"
+    /// before the completion handler runs would be a lie.
+    var fraction: Double {
+        guard totalBytes > 0 else { return 0 }
+        let sent = completedBytes + min(currentSent, currentWeight)
+        return min(1.0, Double(sent) / Double(totalBytes))
+    }
+
+    private var currentWeight: Int64 {
+        completedIndex < weights.count ? weights[completedIndex] : 0
+    }
+
+    /// `totalBytesSent` for the file in flight — an absolute count, not a delta. A retried body
+    /// restarts that count from zero; we keep the high-water mark so the bar never walks backwards.
+    mutating func noteBytesSent(_ totalForCurrentFile: Int64) {
+        currentSent = max(currentSent, totalForCurrentFile)
+    }
+
+    /// The current file is done — uploaded, or failed and given up on. Either way its whole
+    /// weight is now behind us, so the bar lands exactly on the file boundary.
+    mutating func finishCurrentItem() {
+        guard completedIndex < weights.count else { return }
+        completedBytes += weights[completedIndex]
+        completedIndex += 1
+        currentSent = 0
     }
 }
 
