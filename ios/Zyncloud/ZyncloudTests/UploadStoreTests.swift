@@ -223,4 +223,91 @@ struct UploadStoreTests {
             #expect(!store.isUploaded("asset-1"))
         }
     }
+
+    // MARK: - Refused for size (D43)
+
+    private let twoGiB: Int64 = 2_147_483_648
+    private let fiveHundredMB: Int64 = 524_288_000
+
+    /// The trap this guards: "we will not try again" must never be stored as "it is on the
+    /// server". A refused video is missing from the backup, and every mechanism that reports on
+    /// the backup has to keep saying so.
+    @Test func aRefusedAssetIsNotMarkedUploaded() {
+        withScratchStore { store, _ in
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            flush(store)
+            #expect(!store.isUploaded("asset-1"))
+        }
+    }
+
+    @Test func aRefusedAssetIsSkippedWhileTheCapIsUnchanged() {
+        withScratchStore { store, _ in
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            flush(store)
+            #expect(store.shouldSkipForSize("asset-1", currentLimit: fiveHundredMB))
+        }
+    }
+
+    /// The rollout case: raising the server cap has to un-skip the videos the old cap refused,
+    /// on its own. Without this, every phone that scanned under 500 MB keeps ignoring those
+    /// files forever and the 2 GiB change buys nothing for existing installs.
+    @Test func raisingTheCapUnskipsARefusedAsset() {
+        withScratchStore { store, _ in
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            flush(store)
+            #expect(!store.shouldSkipForSize("asset-1", currentLimit: twoGiB))
+        }
+    }
+
+    @Test func anAssetThatWasNeverRefusedIsNeverSkipped() {
+        withScratchStore { store, _ in
+            #expect(!store.shouldSkipForSize("asset-1", currentLimit: twoGiB))
+        }
+    }
+
+    @Test func refusingAnAssetClearsItsUploadingEntry() {
+        withScratchStore { store, _ in
+            store.markAsUploading("asset-1")
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            flush(store)
+            // isUploaded is true for anything in the uploading set, so this asserts both that
+            // the slot was released and that the refusal did not masquerade as a success.
+            #expect(!store.isUploaded("asset-1"))
+        }
+    }
+
+    /// Counted against the *current* cap, so the Sync tab stops warning about files the server
+    /// would now accept instead of nagging about a problem that no longer exists.
+    @Test func theRefusedCountFollowsTheCurrentCap() {
+        withScratchStore { store, _ in
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            store.markSkippedTooLarge("asset-2", limit: twoGiB)
+            flush(store)
+            #expect(store.skippedTooLargeCount(currentLimit: fiveHundredMB) == 2)
+            #expect(store.skippedTooLargeCount(currentLimit: twoGiB) == 1)
+        }
+    }
+
+    @Test func refusalsSurviveARestart() {
+        let name = "test.uploadstore.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let first = UploadStore(defaults: defaults)
+        first.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+        flush(first)
+
+        let second = UploadStore(defaults: defaults)
+        #expect(second.shouldSkipForSize("asset-1", currentLimit: fiveHundredMB))
+    }
+
+    @Test func clearingWipesRefusals() {
+        withScratchStore { store, _ in
+            store.markSkippedTooLarge("asset-1", limit: fiveHundredMB)
+            flush(store)
+            store.clear()
+            flush(store)
+            #expect(!store.shouldSkipForSize("asset-1", currentLimit: fiveHundredMB))
+        }
+    }
 }

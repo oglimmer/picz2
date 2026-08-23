@@ -20,12 +20,24 @@ struct SyncOptionsView: View {
                 // background tasks were only ever scheduled at launch, and the only symptom was
                 // sync quietly stopping. Scheduled and run are shown separately because "iOS has
                 // not granted us time yet" and "we never asked" are different faults.
-                Section(header: Text("Sync Status")) {
+                Section(
+                    header: Text("Sync Status"),
+                    footer: sync.metrics.skippedTooLarge > 0
+                        ? Text("Some files are larger than this server accepts, so they were not backed up. Open the Sync Log to see which ones and how big they are.")
+                        : Text("")
+                ) {
                     LabeledContent("Queued", value: "\(sync.metrics.queued)")
                     LabeledContent("Uploading", value: "\(sync.metrics.uploading)")
                     LabeledContent("Uploaded this session", value: "\(sync.metrics.uploaded)")
                     LabeledContent("In scope", value: "\(sync.metrics.inScope)")
                     LabeledContent("Last sync", value: Self.stamp(sync.metrics.lastSync))
+                    // Only shown when it is non-zero: a permanent "Too big: 0" row would train
+                    // the eye to skip the one line that means part of the library is unprotected.
+                    if sync.metrics.skippedTooLarge > 0 {
+                        LabeledContent("Too big to back up",
+                                       value: "\(sync.metrics.skippedTooLarge)")
+                            .foregroundColor(.orange)
+                    }
                 }
 
                 Section(

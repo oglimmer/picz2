@@ -69,6 +69,15 @@ class SyncLogger: ObservableObject {
         addLog(isManual: false, success: true, message: message)
     }
 
+    // The file is larger than the server's advertised tus.maxSize, so it was never sent. This
+    // is the one failure the user can actually act on (trim the clip, or ask for a bigger cap),
+    // so it names the file and both sizes instead of the usual truncated asset id — "HTTP 413"
+    // told nobody that their videos were missing from the backup (D43).
+    func logUploadSkippedTooLarge(filename: String, size: Int64, limit: Int64?) {
+        addLog(isManual: false, success: false,
+               message: UploadSizeLimit.message(filename: filename, size: size, limit: limit))
+    }
+
     func logBackgroundSync(success: Bool, message: String) {
         addLog(isManual: false, success: success, message: "Background sync: \(message)")
     }

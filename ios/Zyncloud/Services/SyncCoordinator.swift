@@ -31,6 +31,9 @@ final class SyncCoordinator: ObservableObject {
         var uploaded: Int = 0
         var inScope: Int = 0
         var lastSync: Date?
+        /// Assets held back because they exceed the server's cap. Shown on the Sync tab: a
+        /// backup with a silent hole in it is worse than one that says which files are missing.
+        var skippedTooLarge: Int = 0
     }
 
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
@@ -363,11 +366,15 @@ final class SyncCoordinator: ObservableObject {
     private func enqueue(assets: [PHAsset]) {
         guard !assets.isEmpty else { return }
 
-        // Filter out assets that are already pending or currently uploading
+        // Filter out assets that are already pending or currently uploading, plus any the
+        // server has already refused for size under a cap that has not since been raised —
+        // re-exporting a 1.6 GB video on every scan to earn the same 413 helps nobody.
+        let sizeLimit = currentUploadSizeLimit()
         let newAssets = assets.filter { asset in
             let isAlreadyQueued = pendingAssets.contains(where: { $0.localIdentifier == asset.localIdentifier })
             let isCurrentlyUploading = uploadingAssets.contains(asset.localIdentifier)
-            return !isAlreadyQueued && !isCurrentlyUploading
+            let isTooLarge = UploadStore.shared.shouldSkipForSize(asset.localIdentifier, currentLimit: sizeLimit)
+            return !isAlreadyQueued && !isCurrentlyUploading && !isTooLarge
         }
 
         guard !newAssets.isEmpty else {
@@ -409,6 +416,7 @@ final class SyncCoordinator: ObservableObject {
         // Decision is made per-batch (not per-asset) so a mid-batch capability flip can't
         // produce a half-multipart-half-TUS batch with race-prone state.
         let useTus = shouldUseTus()
+        let uploadSizeLimit = currentUploadSizeLimit()
         for asset in batch {
             let completion: ((Result<Void, Error>) -> Void) = { [weak self] result in
                 guard let self else { return }
@@ -451,7 +459,8 @@ final class SyncCoordinator: ObservableObject {
                 }
             }
             if useTus {
-                tusUploader.queueUpload(asset: asset, api: api, completion: completion)
+                tusUploader.queueUpload(asset: asset, api: api,
+                                        maxUploadBytes: uploadSizeLimit, completion: completion)
             } else {
                 uploader.queueUpload(asset: asset, api: api, completion: completion)
             }
@@ -465,6 +474,20 @@ final class SyncCoordinator: ObservableObject {
     /// first drainQueue after a fresh launch — this returns false, and the batch goes via
     /// the multipart path. The next refresh after ensureCapabilitiesLoaded completes flips
     /// the answer; subsequent batches use TUS.
+    /// The cap to judge file sizes against: the live capabilities response when we have one,
+    /// otherwise the last one we persisted, otherwise nil for "unknown, let the server decide".
+    private func currentUploadSizeLimit() -> Int64? {
+        if let advertised = cachedCapabilities?.tus.maxSize, advertised > 0 { return advertised }
+        let remembered = Settings.shared.tusMaxUploadBytes
+        return remembered > 0 ? remembered : nil
+    }
+
+    private func refreshSkippedTooLargeMetric() {
+        let limit = currentUploadSizeLimit()
+        let count = UploadStore.shared.skippedTooLargeCount(currentLimit: limit)
+        DispatchQueue.main.async { self.metrics.skippedTooLarge = count }
+    }
+
     private func shouldUseTus() -> Bool {
         UploadRouting.selectPath(
             userOptedIn: Settings.shared.useTus,
@@ -523,6 +546,12 @@ final class SyncCoordinator: ObservableObject {
             case let .success(caps):
                 self.cachedCapabilities = caps
                 self.capabilitiesFetchedAt = Date()
+                // Persist the cap so the next cold-launch scan can filter known-too-big assets
+                // before exporting them, and so a raised cap un-skips what it now admits.
+                DispatchQueue.main.async {
+                    Settings.shared.tusMaxUploadBytes = caps.tus.maxSize
+                    self.refreshSkippedTooLargeMetric()
+                }
                 completion?(caps)
             case let .failure(err):
                 print("SyncCoordinator: capabilities fetch failed: \(err) — staying on multipart path")
@@ -554,6 +583,7 @@ final class SyncCoordinator: ObservableObject {
                 self.drainQueue()
             case .clientError, .transport:
                 // clientError: permanent failure; transport: system-retried.
+                self.refreshSkippedTooLargeMetric()
                 self.drainQueue()
             case let .backpressure(retryAfter):
                 // Server asked us to back off. Re-enqueue this asset and pause

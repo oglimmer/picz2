@@ -152,7 +152,7 @@ tus:
   enabled: "${TUS_ENABLED:false}"
   advertised: "${TUS_ADVERTISED:false}"
   endpoint: "${TUS_ENDPOINT:/files/}"
-  max-size: "${TUS_MAX_SIZE:524288000}"
+  max-size: "${TUS_MAX_SIZE:2147483648}"
   hook-secret: "${TUS_HOOK_SECRET:}"
   version: "1.0.0"
 logging:
