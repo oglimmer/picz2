@@ -7,6 +7,8 @@ import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
+import com.oglimmer.photoupload.util.RangeRequestHandler;
+import java.io.OutputStream;
 import java.time.Instant;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
@@ -21,10 +23,12 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
@@ -45,6 +49,57 @@ public class ImageServeController {
       FileStorageService fileStorageService, Optional<ObjectStorageService> objectStorage) {
     this.fileStorageService = fileStorageService;
     this.objectStorage = objectStorage;
+  }
+
+  /**
+   * Serves a ranged GET, which is how AVPlayer (iOS) and Safari fetch video: they open with {@code
+   * Range: bytes=0-1} and will not seek in a response that cannot answer one.
+   *
+   * <p>This is a **separate handler** rather than a branch inside {@link #downloadFileByToken}, and
+   * the declared return type matters. {@code StreamingResponseBodyReturnValueHandler} only claims a
+   * return value when the declared type is {@code ResponseEntity<StreamingResponseBody>}; a {@code
+   * ResponseEntity<?>} falls through to {@code HttpEntityMethodProcessor}, which looks for a
+   * message converter for the lambda's class, finds none, and 500s with "No converter for
+   * [...$$Lambda] with preset Content-Type 'video/mp4'". Spring routes here ahead of the wildcard
+   * mapping because {@code headers = "Range"} is the more specific condition.
+   */
+  @GetMapping(value = "/{token}", headers = HttpHeaders.RANGE)
+  public ResponseEntity<StreamingResponseBody> streamRangeByToken(
+      @PathVariable String token,
+      @RequestParam(value = "size", required = false) String size,
+      @RequestHeader(HttpHeaders.RANGE) String rangeHeader,
+      WebRequest webRequest) {
+    try {
+      FileServeInfo fileInfo = fileStorageService.getFileServeInfoByPublicToken(token, size);
+
+      if (!fileInfo.isDerivativeReady()
+          && fileInfo.getProcessingStatus() != ProcessingStatus.DONE) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+            .header(HttpHeaders.RETRY_AFTER, RETRY_AFTER_SECONDS)
+            .cacheControl(CacheControl.noStore())
+            .build();
+      }
+
+      if (isNotModified(webRequest, fileInfo)) {
+        return null; // webRequest already set 304 + validators on the response
+      }
+
+      if (fileInfo.getStorageKey() != null) {
+        return serveRangeFromObjectStorage(fileInfo, rangeHeader);
+      }
+      return RangeRequestHandler.serveFileWithRangeSupport(
+          fileInfo.getFilePath(),
+          rangeHeader,
+          fileInfo.getMimeType() != null
+              ? fileInfo.getMimeType()
+              : MediaType.APPLICATION_OCTET_STREAM_VALUE,
+          safeFilenameForKey(fileInfo));
+    } catch (ResourceNotFoundException e) {
+      throw e;
+    } catch (Exception e) {
+      log.error("Error serving ranged request for file", e);
+      throw new RuntimeException("Error downloading file: " + e.getMessage(), e);
+    }
   }
 
   @GetMapping("/{token}")
@@ -127,6 +182,7 @@ public class ImageServeController {
             CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic().immutable())
         .header(
             HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
         .body(resource);
   }
 
@@ -152,11 +208,63 @@ public class ImageServeController {
                     .immutable())
             .header(
                 HttpHeaders.CONTENT_DISPOSITION,
-                "inline; filename=\"" + safeFilenameForKey(fileInfo) + "\"");
+                "inline; filename=\"" + safeFilenameForKey(fileInfo) + "\"")
+            .header(HttpHeaders.ACCEPT_RANGES, "bytes");
     if (contentLength != null) {
       builder.contentLength(contentLength);
     }
     return builder.body(new InputStreamResource(stream));
+  }
+
+  /**
+   * Streams an S3-backed asset back with the caller's Range honoured. The header is forwarded to
+   * MinIO so it does the slicing and the JVM only proxies bytes — the same shape {@code
+   * SlideshowRecordingController} uses for audio. MinIO has no public ingress, so a redirect to a
+   * presigned URL is not an option; the api pod must mediate.
+   */
+  private ResponseEntity<StreamingResponseBody> serveRangeFromObjectStorage(
+      FileServeInfo fileInfo, String rangeHeader) {
+    ObjectStorageService os =
+        objectStorage.orElseThrow(
+            () ->
+                new IllegalStateException(
+                    "Asset path is an S3 key but ObjectStorageService is not enabled — "
+                        + "check storage.s3.enabled"));
+
+    ResponseInputStream<GetObjectResponse> stream =
+        os.openStream(fileInfo.getStorageKey(), rangeHeader);
+    GetObjectResponse meta = stream.response();
+    boolean partial = meta.contentRange() != null;
+
+    StreamingResponseBody body =
+        (OutputStream out) -> {
+          try (ResponseInputStream<GetObjectResponse> s = stream) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = s.read(buf)) > 0) {
+              out.write(buf, 0, n);
+            }
+          }
+        };
+
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.status(partial ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
+            .contentType(parseMediaType(fileInfo.getMimeType()))
+            .cacheControl(
+                CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS)
+                    .cachePublic()
+                    .immutable())
+            .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+            .header(
+                HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=\"" + safeFilenameForKey(fileInfo) + "\"");
+    if (meta.contentLength() != null) {
+      builder.contentLength(meta.contentLength());
+    }
+    if (partial) {
+      builder.header(HttpHeaders.CONTENT_RANGE, meta.contentRange());
+    }
+    return builder.body(body);
   }
 
   private MediaType parseMediaType(String mime) {

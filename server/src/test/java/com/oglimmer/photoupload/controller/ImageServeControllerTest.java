@@ -164,6 +164,45 @@ class ImageServeControllerTest {
     assertEquals(HttpStatus.ACCEPTED, resp.getStatusCode());
   }
 
+  @Test
+  void rangedGetOnADiskVideoAnswersPartialContent(@org.junit.jupiter.api.io.TempDir Path tempDir)
+      throws Exception {
+    Path file = tempDir.resolve("clip.mp4");
+    java.nio.file.Files.writeString(file, "0123456789");
+
+    FileServeInfo info =
+        new FileServeInfo(
+            "video/mp4", "abc", UPLOADED_AT, file, "clip.mp4", ProcessingStatus.DONE, false, null);
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
+    request.addHeader(HttpHeaders.RANGE, "bytes=2-5");
+
+    ResponseEntity<?> resp = controller.streamRangeByToken("tok", null, "bytes=2-5", webRequest);
+
+    // Without 206 + Content-Range, iOS AVPlayer refuses the stream and the app shows "Failed".
+    assertEquals(HttpStatus.PARTIAL_CONTENT, resp.getStatusCode());
+    assertEquals("bytes 2-5/10", resp.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE));
+    assertEquals("bytes", resp.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES));
+    assertEquals(4L, resp.getHeaders().getContentLength());
+  }
+
+  @Test
+  void unrangedGetStillAdvertisesRangeSupport(@org.junit.jupiter.api.io.TempDir Path tempDir)
+      throws Exception {
+    Path file = tempDir.resolve("clip.mp4");
+    java.nio.file.Files.writeString(file, "0123456789");
+
+    FileServeInfo info =
+        new FileServeInfo(
+            "video/mp4", "abc", UPLOADED_AT, file, "clip.mp4", ProcessingStatus.DONE, false, null);
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
+
+    ResponseEntity<?> resp = controller.downloadFileByToken("tok", null, webRequest);
+
+    assertEquals(HttpStatus.OK, resp.getStatusCode());
+    // Accept-Ranges is what tells the player it may seek at all.
+    assertEquals("bytes", resp.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES));
+  }
+
   private FileServeInfo serveInfo(Path path, ProcessingStatus status, boolean derivativeReady) {
     return new FileServeInfo(
         "image/jpeg",

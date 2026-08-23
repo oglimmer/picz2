@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct AlbumDetailView: View {
@@ -100,6 +101,13 @@ struct PhotoThumbnailView: View {
                 Image(systemName: "photo")
                     .foregroundColor(.gray)
             }
+
+            if photo.isVideo {
+                Image(systemName: "play.circle.fill")
+                    .font(.title)
+                    .foregroundColor(.white)
+                    .shadow(radius: 3)
+            }
         }
         .aspectRatio(1.0, contentMode: .fit)
         .clipped()
@@ -120,12 +128,31 @@ struct PhotoDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    /// Owned by the view so the sheet keeps one player across body re-evaluations; the item is
+    /// attached in `onAppear` because `photo` is not available at initialiser time here.
+    @StateObject private var playerBox = PlayerBox()
+    private var player: AVPlayer { playerBox.player }
+
     var body: some View {
         NavigationView {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if let imageURL = viewModel.fullImageURL(for: photo) {
+                if photo.isVideo, let videoURL = viewModel.videoURL(for: photo) {
+                    // A video must be played, not decoded. AVPlayer streams it; feeding the
+                    // same bytes to AuthenticatedImage is what used to render "Failed".
+                    VideoPlayer(player: player)
+                        .onAppear {
+                            // Without .playback the ring/silent switch silences the video.
+                            try? AVAudioSession.sharedInstance().setCategory(.playback)
+                            try? AVAudioSession.sharedInstance().setActive(true)
+                            if player.currentItem == nil {
+                                player.replaceCurrentItem(with: AVPlayerItem(url: videoURL))
+                            }
+                            player.play()
+                        }
+                        .onDisappear { player.pause() }
+                } else if let imageURL = viewModel.fullImageURL(for: photo) {
                     AuthenticatedImage(url: imageURL)
                         .scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -151,6 +178,12 @@ struct PhotoDetailView: View {
             }
         }
     }
+}
+
+/// Keeps one `AVPlayer` alive for a `PhotoDetailView`. `@StateObject` needs a reference type,
+/// and `AVPlayer` is not `ObservableObject`, so it is wrapped rather than held directly.
+final class PlayerBox: ObservableObject {
+    let player = AVPlayer()
 }
 
 // Note: AuthenticatedImage is now implemented in Utils/AuthenticatedImageLoader.swift
