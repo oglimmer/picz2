@@ -71,6 +71,19 @@ public class FfmpegService {
             // web-playable derivative. The failure is silent: the job still completes DONE.
             "-pix_fmt",
             "yuv420p",
+            // Cap the web derivative at 1080p. A 4K (3840x2160) iPhone clip encoded at native
+            // resolution made x264 hold ~50 lookahead frames of 12 MiB each, which pushed the
+            // worker past its 2 GiB limit and got the pod OOMKilled — repeatedly, because the
+            // job was retried onto the other replica (asset 6720, 2026-08-23). Scaling down
+            // only ever shrinks: min(1920,iw) leaves sub-1080p sources untouched, and -2 keeps
+            // the aspect ratio while forcing an even height (x264 rejects odd dimensions).
+            "-vf",
+            "scale='min(1920,iw)':-2",
+            // rc-lookahead is the dominant x264 buffer; 'medium' defaults to 40 frames. 20 is
+            // a second, resolution-independent guard so an unexpectedly large source cannot
+            // reach the old footprint again. Quality cost at this bitrate is negligible.
+            "-x264-params",
+            "rc-lookahead=20",
             "-preset",
             "medium",
             "-c:a",
@@ -304,8 +317,8 @@ public class FfmpegService {
   }
 
   /**
-   * The UTC offset carried by an ffprobe timestamp, in seconds, or null when the value has none
-   * (or does not parse). Apple's {@code creationdate} is a local wall clock plus offset, e.g.
+   * The UTC offset carried by an ffprobe timestamp, in seconds, or null when the value has none (or
+   * does not parse). Apple's {@code creationdate} is a local wall clock plus offset, e.g.
    * "2026-05-04T19:12:33-0400"; that offset is what puts the video on the right calendar day.
    */
   static Integer parseOffsetSeconds(String raw) {
