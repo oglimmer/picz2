@@ -65,6 +65,7 @@
 				AppConfiguration.swift,
 				AttachmentLoading.swift,
 				Credentials.swift,
+				LastAlbumStore.swift,
 				UploadService.swift,
 			);
 			target = 4FCF81DB2EA2D6AC00FD14F6 /* ShareExtension */;
