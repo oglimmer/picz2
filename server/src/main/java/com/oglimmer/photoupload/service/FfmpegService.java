@@ -31,7 +31,20 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class FfmpegService {
 
-  private static final long TRANSCODE_TIMEOUT_MINUTES = 15;
+  /**
+   * Raised 15 -> 40 on 2026-08-23, once the timeout started being enforced at all. The 15 was
+   * written against 1080p sources, but the wall clock is dominated by decoding the source: a 4K
+   * iPhone clip took 17 minutes end to end on the Pi. That overrun went unnoticed only because
+   * ProcessRunner never applied the deadline; with the deadline live, 15 would have killed a
+   * transcode that was progressing normally.
+   *
+   * <p>Sits deliberately below the 45 min job lease ({@code JobsProperties.Lease}). The lease has
+   * to cover the whole job — S3 GET, transcode, thumbnail, PUTs — so the encode ceiling needs
+   * enough slack beneath it that a job hits this limit and fails cleanly rather than having its
+   * lease expire and the work restarted on the other replica.
+   */
+  private static final long TRANSCODE_TIMEOUT_MINUTES = 40;
+
   private static final long THUMBNAIL_TIMEOUT_SECONDS = 60;
   private static final long PROBE_TIMEOUT_SECONDS = 30;
   private static final String TAG_CREATION_TIME = "creation_time";
