@@ -35,10 +35,12 @@ struct ZyncloudApp: App {
                 // task handler — one missed handler and scheduling stops until a cold launch.
                 AppDelegate.scheduleBackgroundTasks()
 
-                // UploadStore coalesces its writes (§5.7), so up to a second of bookkeeping can
-                // still be in memory here. Backgrounding is the last moment we are reliably
-                // given before the app may be killed outright, so force it to disk now.
+                // UploadStore and SyncLogger both coalesce their writes (§5.7), so up to a
+                // second of bookkeeping can still be in memory here. Backgrounding is the last
+                // moment we are reliably given before the app may be killed outright, so force
+                // both to disk now.
                 UploadStore.shared.flushPendingWrites()
+                SyncLogger.shared.flushPendingWrites()
 
             default:
                 break

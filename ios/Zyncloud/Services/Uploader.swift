@@ -88,12 +88,15 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
             return
         }
 
-        let ext: String
-        let mime: String
-        switch resource.type {
-        case .video, .fullSizeVideo: ext = "mov"; mime = "video/quicktime"
-        default: ext = "jpg"; mime = "image/jpeg"
-        }
+        // Ask the resource what it is instead of assuming "not a video means JPEG" — an iPhone
+        // photo is HEIC, and mislabelling it only worked because the server re-checks the
+        // filename extension. See ``ExportFormat``.
+        let format = ExportFormat.forResource(
+            type: resource.type,
+            uniformTypeIdentifier: resource.uniformTypeIdentifier,
+        )
+        let ext = format.fileExtension
+        let mime = format.mimeType
 
         let filename = (resource.originalFilename as NSString).pathExtension.isEmpty ? "\(UUID().uuidString).\(ext)" : resource.originalFilename
         let tempDir = fileManager.temporaryDirectory

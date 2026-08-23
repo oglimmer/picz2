@@ -751,3 +751,89 @@ generalizes.
 - `ZyncloudTests/` — five test files
 - `Scripts/check-entitlements.sh` — source invariants plus optional signed-binary check
 - `CODE-REVIEW-2026-08-21.md` — this file
+
+---
+
+## 8. Second pass — 2026-08-23
+
+A fresh read of all 64 Swift files, on macOS with the suite running. Four new findings, all
+fixed here. Suite **211 → 228 cases**, still green, still zero warnings.
+
+### 8.1 `SyncLogger` re-encoded its whole buffer on every log line
+`Services/SyncLogger.swift` — `addLog` called `saveLogs()`, which `JSONEncoder`-ed all 100
+entries and wrote `UserDefaults`. On the main thread. Every upload produces one or two entries
+and three uploads run at once, so this is exactly the write amplification §5.7 removed from
+`UploadStore` — left behind because the two were never read side by side.
+
+**Fix:** the same shape as `UploadStore`. A mutation schedules one coalesced write `saveDelay`
+later; the encode happens on a `utility` queue and only the snapshot is taken on main;
+`flushPendingWrites()` forces it and `ZyncloudApp` calls it when the app backgrounds, next to
+`UploadStore`'s. `defaults` and `saveDelay` are injectable so tests get a scratch suite and do
+not have to wait a second. New `SyncLoggerTests` (7 cases) pins the coalescing directly: after a
+burst of twenty entries nothing has reached `UserDefaults`, and the flush persists all twenty.
+
+### 8.2 `cachedCapabilities` had no lock
+`Services/SyncCoordinator.swift` — written on the URLSession callback thread by
+`ensureCapabilitiesLoaded`, read on `syncQueue` by `drainQueue`/`enqueue`, and read on the main
+queue by `refreshSkippedTooLargeMetric`. Three threads, no synchronisation. `cachedApi`, ten
+lines above it, got an `NSLock` in §5.10; this pair was missed.
+
+**Fix:** one `capabilitiesLock` over both fields, since they are read together — a TTL check that
+saw a fresh timestamp beside a nil payload would refetch on every batch. Three accessors:
+`cachedCapabilities` (best answer we have), `freshCapabilities(now:)` (inside the TTL only), and
+`storeCapabilities(_:at:)`.
+
+### 8.3 A Keychain read per thumbnail, for a header the server ignores
+`Utils/AuthenticatedImageLoader.swift` — `load()` did a `KeychainHelper.shared.load()` (a
+synchronous IPC to securityd) per image to build a Basic auth header. All three call sites
+(`AlbumDetailView` ×2, `AlbumListView`) point at `/api/i/{publicToken}`, which `SecurityConfig`
+declares `permitAll`. The public token *is* the credential there. It also meant a signed-out
+viewer got "No credentials found" instead of the picture.
+
+Compounding it: no image cache. `AuthenticatedImage` holds its loader in a `@StateObject`, which
+SwiftUI discards when a `LazyVGrid` cell scrolls out — so every returning cell was a fresh
+request and a fresh decode.
+
+**Fix:** the header is gone, and a shared `NSCache<NSURL, UIImage>` (`ImageCache`, 300 entries,
+keyed by absolute URL so the size variant is part of the key) is consulted in `init` and filled
+on receive.
+
+### 8.4 Photos uploaded describing themselves as JPEGs
+`Services/Uploader.swift` — `exportAssetToTempFile` switched on `PHAssetResourceType` alone and
+labelled **everything that was not a video** `image/jpeg` with a `.jpg` extension. An unedited
+iPhone photo is HEIC, so every one of them was mislabelled.
+
+This survived only because the server independently sniffs the filename: `FileProcessingService`
+treats a file as HEIC when the mime type *or* the extension says so, and the client passes
+`resource.originalFilename` through. Take the extension away — a resource whose
+`originalFilename` has none, where the client invents `<uuid>.jpg` — and the rescue is gone:
+HEIC bytes labelled JPEG reach libvips, thumbnail generation produces nothing, and
+`processFile` throws it into FAILED.
+
+**Fix:** new pure `Services/ExportFormat.swift` derives both halves from
+`PHAssetResource.uniformTypeIdentifier`, falling back to the old hardcoded values when there
+isn't one, so a resource that cannot describe itself is no worse off than before. Live Photo
+paired-video resources count as video, or the fallback would name an MOV `.jpg`. New
+`ExportFormatTests` (10 cases).
+
+### Still open after this pass
+
+Reported, not fixed — small, and none of them lose data:
+
+* `Models/Photo.swift:33-39` — seven computed properties that are always `nil` (`width`,
+  `height`, `duration`, `thumbnailPath`, `mediumPath`, `largePath`, `transcodedVideoPath`).
+  §5.12 lists these as deleted. They are not. Plus `typealias Photo`/`PhotosResponse` and
+  `APIClient.fetchPhotos` — compat shims the root `CLAUDE.md` says should not exist.
+* `UploadExtension/` at the repo root is a dead macOS clone (Cocoa `NSViewController`). Still on
+  the legacy credential metadata (§5.9 flagged this), and it carries a checked-in
+  `release/PhotoUploader.zip` and three `.DS_Store` files.
+* `Shared/UploadService.swift` has no size pre-check, so the share sheet still shows
+  "POST /files/ returned 413" where the main app now names the file and both sizes (D43).
+  Its `contentType(for:)` also builds mime types from the file extension, producing `image/jpg`
+  and `video/mov` — accepted only via the server's extension allow-list.
+* 122 raw `print()` calls ship in release, including one per thumbnail URL inside a scroll grid
+  (`AlbumDetailViewModel.thumbnailURL`). §5.10 deferred the `os.Logger` sweep; it is still due.
+* `AppDelegate.scheduleBackgroundTasks()` runs on every backgrounding and sets
+  `earliestBeginDate = now + 15 min`, so a user who opens the app often keeps pushing the
+  refresh task out.
+* **5.18** — strong `self` in the alert closures in `SyncOptionsViewModel`. Still benign.

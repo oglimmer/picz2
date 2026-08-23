@@ -2,7 +2,38 @@ import Combine
 import Foundation
 import SwiftUI
 
-// Custom image loader that supports Basic Authentication
+/// Decoded images, kept so scrolling a grid does not re-fetch and re-decode what it just showed.
+///
+/// `AuthenticatedImage` holds its loader in a `@StateObject`, and SwiftUI throws that away when a
+/// `LazyVGrid` cell scrolls out of view — so without this, every cell that comes back is a fresh
+/// network request and a fresh decode. `NSCache` is the right shape for it: it is thread-safe and
+/// the system evicts it under memory pressure, which a plain dictionary would not.
+///
+/// Keyed by absolute URL, which already carries the size variant (`?size=thumbnail` vs `large`).
+enum ImageCache {
+    private static let cache: NSCache<NSURL, UIImage> = {
+        let cache = NSCache<NSURL, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
+    static func image(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    static func store(_ image: UIImage, for url: URL) {
+        cache.setObject(image, forKey: url as NSURL)
+    }
+}
+
+/// Loads one image URL into a SwiftUI view.
+///
+/// **No `Authorization` header, deliberately.** This used to read the Keychain on every `load()`
+/// to build one — a synchronous IPC to securityd per grid cell — for a header the server ignores:
+/// all three call sites point at `/api/i/{publicToken}`, which `SecurityConfig` declares
+/// `permitAll`. The public token *is* the credential for that endpoint. Sending Basic auth
+/// alongside it bought nothing and cost a securityd round-trip per thumbnail, and it also meant a
+/// signed-out user saw a "No credentials found" error instead of the image.
 class AuthenticatedImageLoader: ObservableObject {
     @Published var image: UIImage?
     @Published var isLoading = false
@@ -13,28 +44,21 @@ class AuthenticatedImageLoader: ObservableObject {
 
     init(url: URL) {
         self.url = url
+        image = ImageCache.image(for: url)
     }
 
     func load() {
         guard image == nil, !isLoading else { return }
 
-        isLoading = true
-        error = nil
-
-        // Get credentials
-        guard let credentials = KeychainHelper.shared.load() else {
-            error = NSError(domain: "AuthenticatedImageLoader", code: 401, userInfo: [NSLocalizedDescriptionKey: "No credentials found"])
-            isLoading = false
+        if let cached = ImageCache.image(for: url) {
+            image = cached
             return
         }
 
-        // Create authenticated request
-        var request = URLRequest(url: url)
-        let authString = "\(credentials.username):\(credentials.password)"
-        if let authData = authString.data(using: .utf8) {
-            let base64Auth = authData.base64EncodedString()
-            request.setValue("Basic \(base64Auth)", forHTTPHeaderField: "Authorization")
-        }
+        isLoading = true
+        error = nil
+
+        let request = URLRequest(url: url)
 
         // Load image
         cancellable = URLSession.shared.dataTaskPublisher(for: request)
@@ -53,10 +77,13 @@ class AuthenticatedImageLoader: ObservableObject {
                     self?.isLoading = false
                 }
             }, receiveValue: { [weak self] loadedImage in
-                self?.image = loadedImage
-                self?.isLoading = false
-                if loadedImage == nil {
-                    self?.error = NSError(domain: "AuthenticatedImageLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to load image"])
+                guard let self else { return }
+                self.image = loadedImage
+                self.isLoading = false
+                if let loadedImage {
+                    ImageCache.store(loadedImage, for: self.url)
+                } else {
+                    self.error = NSError(domain: "AuthenticatedImageLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to load image"])
                 }
             })
     }
