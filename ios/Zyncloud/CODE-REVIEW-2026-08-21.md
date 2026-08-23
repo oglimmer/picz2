@@ -477,6 +477,35 @@ re-render. *Fix:* observe `Settings.shared` directly in the view, or forward via
 `settings.objectWillChange.sink`.
 
 **5.20 — Real videos are never backed up: the app uploads untouched 4K originals.**
+— **PARTLY ADDRESSED 2026-08-23. The cap is now 2 GiB and the refusal is legible; the client
+still uploads originals, by decision.**
+
+> **What changed.** `tus.maxSize` went from 500 MB to 2 GiB (2147483648) in `values.yaml`,
+> `application.yml`, `TusProperties` and both Helm templates, so the 4:30 clip that motivated
+> this entry now fits. Client-side re-encoding was **explicitly ruled out** for now — see the
+> decision note in D43 — so points (1), (3) and (5) of the chain below are untouched and the
+> server still stores 4K H.264.
+>
+> The second half is the error message. `Services/UploadSizeLimit.swift` (new, pure, tested)
+> decides whether a file fits and phrases the refusal; `TusUploader` checks the exported file
+> against the advertised cap *before* `POST /files/` and also maps a 413 onto the same path, so
+> the user reads "Too big to back up: IMG_4021.MOV is 2.4 GB, the server accepts up to 2 GB"
+> instead of "Failed to upload 0AC3F1B2...: HTTP 413". A refused asset is recorded in
+> `UploadStore` **with the limit that refused it** — never as uploaded — so the scan stops
+> re-exporting it every pass, and raising the cap later automatically un-skips everything the
+> new cap admits. The count appears on the Sync tab ("Too big to back up") whenever it is not
+> zero, because a backup with a silent hole is worse than one that names the missing files.
+> The web client gained the same pre-flight check and the same two-number message.
+>
+> **Still open, and it is the one that decides whether any of this works:** Traefik v3.5 serves
+> this cluster with `respondingTimeouts.readTimeout` at its default **60 s**, which is the
+> maximum duration for reading an entire request *including the body*. `TusUploader.startPatch`
+> sends the whole file in a single PATCH, so an upload that takes longer than 60 s is cut by the
+> ingress no matter what the cap says — 2 GiB inside 60 s needs a sustained 273 Mbit/s. That
+> ceiling has to be raised on the Traefik entryPoint (cluster-level, outside this repo) before
+> the 2 GiB cap buys anything on a real connection, and chunked resume (point 5) is what makes
+> it robust rather than merely possible.
+
 Found 2026-08-23. `Uploader.exportAsset` writes the raw `PHAssetResource` to disk
 (`PHAssetResourceManager.writeData`) and uploads that; `AVAssetExportSession` appears nowhere in
 the app. A 4:30 iPhone clip is ~1.6 GB, and tusd refuses anything over 500 MB with
@@ -610,8 +639,15 @@ generalizes.
 6. ~~**Fix 5.11**~~ **Done** — §3.10 closed the two App Review risks on 2026-08-22, and on
    2026-08-23 the deployment target was decided: **iOS 26 is the intended minimum and stays.**
 7. ~~**Testing phase 2**~~ **Done 2026-08-22** — see §4. 141 cases, mutation-tested.
-8. **Fix 5.20 / D41** — 1080p export before upload. Highest user-visible severity of what
-   remains: right now no real video reaches the server at all.
+8. ~~**Fix 5.20 / D43**~~ **Partly done 2026-08-23.** Cap raised to 2 GiB and the refusal is
+   now a readable sentence naming the file and both sizes (client and web), with a Sync-tab
+   count and a skip record that a larger cap un-does. Client-side 1080p export is deliberately
+   **not** done — no re-encoding on the phone for now.
+   **Next, in order:** (a) raise Traefik's `respondingTimeouts.readTimeout` off its 60 s
+   default, or nothing above roughly 300 MB completes on a normal connection regardless of the
+   cap; (b) make `TusUploader.startPatch` chunk and resume from the server's reported offset
+   instead of hardcoding `Upload-Offset: 0`; (c) add `-vf scale=-2:1080` to the server
+   transcode, which is where the archival-size question actually belongs now.
 9. ~~**Testing phase 3**~~ **Done 2026-08-23** — see §4. All three landed: attachment counting
    in `AttachmentLoadingTests`, and `shouldUseTus()` plus background-session routing in
    `UploadRoutingTests`. 156 cases, mutation-tested.

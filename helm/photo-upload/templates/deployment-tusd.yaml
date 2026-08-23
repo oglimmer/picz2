@@ -97,7 +97,7 @@ spec:
         # the storage layer's job. The MinIO bucket lifecycle rule (`mc ilm rule add --prefix
         # tus-uploads/ --expiry-days 7`) is the only mechanism that cleans up abandoned
         # tus-uploads/{uuid} objects. See NOTES.txt for the operator-side command.
-        - -max-size={{ .Values.tus.maxSize | default 524288000 | int64 }}
+        - -max-size={{ .Values.tus.maxSize | default 2147483648 | int64 }}
         livenessProbe:
           httpGet:
             path: /metrics

@@ -30,10 +30,22 @@ final class Settings: ObservableObject {
         didSet { defaults.set(useTus, forKey: Keys.useTus) }
     }
 
+    /// Last `tus.maxSize` the server advertised, in bytes; 0 means "never asked yet".
+    ///
+    /// Persisted rather than kept only in ``SyncCoordinator/cachedCapabilities`` because the
+    /// scan that decides what to enqueue runs on a cold launch, before capabilities come back.
+    /// Without a remembered limit the first scan after every launch re-exports a file we
+    /// already know the server will refuse — for a 1.6 GB video that is minutes of work and
+    /// battery for a guaranteed failure.
+    @Published var tusMaxUploadBytes: Int64 {
+        didSet { defaults.set(tusMaxUploadBytes, forKey: Keys.tusMaxUploadBytes) }
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
         static let wifiOnly = "settings.wifiOnly"
+        static let tusMaxUploadBytes = "settings.tusMaxUploadBytes"
         static let lastSyncDate = "settings.lastSyncDate"
         static let albumId = "settings.albumId"
         static let selectedAlbumName = "settings.selectedAlbumName"
@@ -54,6 +66,7 @@ final class Settings: ObservableObject {
         // who never touched the toggle). UserDefaults.object returns nil iff the key was never
         // written, so a user who explicitly toggled OFF still gets `false` and is respected.
         useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? true
+        tusMaxUploadBytes = (defaults.object(forKey: Keys.tusMaxUploadBytes) as? NSNumber)?.int64Value ?? 0
     }
 
     func clear() {
@@ -63,6 +76,7 @@ final class Settings: ObservableObject {
         defaults.removeObject(forKey: Keys.selectedAlbumName)
         defaults.removeObject(forKey: Keys.syncLastDays)
         defaults.removeObject(forKey: Keys.useTus)
+        defaults.removeObject(forKey: Keys.tusMaxUploadBytes)
 
         // Reset to default values
         wifiOnly = true
@@ -71,6 +85,7 @@ final class Settings: ObservableObject {
         selectedAlbumName = nil
         syncLastDays = 3
         useTus = true  // R3 default
+        tusMaxUploadBytes = 0  // unknown until the next /api/capabilities
     }
 }
 
@@ -99,12 +114,19 @@ final class UploadStore {
     private let key = "uploads.completed.ids"
     private let checksumKey = "uploads.checksums"
     private let uploadingKey = "uploads.uploading.ids"
+    private let skippedTooLargeKey = "uploads.skipped.tooLarge"
     private var set: Set<String>
     private var uploadingSet: Set<String>
     private let queue = DispatchQueue(label: "com.photocloud.uploadstore", attributes: .concurrent)
 
     // Map checksum -> localIdentifier
     private var checksumToLocalId: [String: String]
+
+    // Map localIdentifier -> the server byte limit that rejected it. The limit is stored, not
+    // just the id, so raising `tus.maxSize` on the server automatically un-skips everything it
+    // now admits (see UploadSizeLimit.shouldRetry). A plain "skipped" set would have frozen the
+    // 500 MB verdicts in place forever on phones that had already scanned.
+    private var skippedTooLarge: [String: Int64]
 
     /// `defaults` is injectable purely so tests can drive a scratch suite instead of the
     /// user's real upload history. Production uses ``shared``.
@@ -122,6 +144,14 @@ final class UploadStore {
             checksumToLocalId = dict
         } else {
             checksumToLocalId = [:]
+        }
+
+        if let data = defaults.data(forKey: skippedTooLargeKey),
+           let dict = try? JSONDecoder().decode([String: Int64].self, from: data)
+        {
+            skippedTooLarge = dict
+        } else {
+            skippedTooLarge = [:]
         }
     }
 
@@ -174,6 +204,44 @@ final class UploadStore {
         }
     }
 
+    /// Records that the server refused this asset for being larger than `limit` bytes.
+    ///
+    /// Not the same as uploaded: the bytes are not on the server, and this must never make the
+    /// asset look backed up. It only stops the scan from re-exporting a file we know is refused.
+    func markSkippedTooLarge(_ localId: String, limit: Int64) {
+        queue.async(flags: .barrier) {
+            self.skippedTooLarge[localId] = limit
+            self.uploadingSet.remove(localId)
+            self.defaults.set(Array(self.uploadingSet), forKey: self.uploadingKey)
+            self.saveSkippedTooLarge()
+        }
+    }
+
+    /// True when this asset was refused for size under a limit no smaller than the current one,
+    /// so trying again would fail the same way.
+    func shouldSkipForSize(_ localId: String, currentLimit: Int64?) -> Bool {
+        queue.sync {
+            guard let recorded = skippedTooLarge[localId] else { return false }
+            return !UploadSizeLimit.shouldRetry(recordedLimit: recorded, currentLimit: currentLimit)
+        }
+    }
+
+    /// How many assets are currently held back for size. Surfaced on the Sync tab — a count the
+    /// user can see is the difference between "my videos are safe" and a silent hole in the backup.
+    func skippedTooLargeCount(currentLimit: Int64?) -> Int {
+        queue.sync {
+            skippedTooLarge.values.filter {
+                !UploadSizeLimit.shouldRetry(recordedLimit: $0, currentLimit: currentLimit)
+            }.count
+        }
+    }
+
+    private func saveSkippedTooLarge() {
+        if let data = try? JSONEncoder().encode(skippedTooLarge) {
+            defaults.set(data, forKey: skippedTooLargeKey)
+        }
+    }
+
     func storeChecksumMapping(checksum: String, localId: String) {
         queue.async(flags: .barrier) {
             self.checksumToLocalId[checksum] = localId
@@ -192,9 +260,11 @@ final class UploadStore {
             self.set.removeAll()
             self.uploadingSet.removeAll()
             self.checksumToLocalId.removeAll()
+            self.skippedTooLarge.removeAll()
             self.defaults.removeObject(forKey: self.key)
             self.defaults.removeObject(forKey: self.uploadingKey)
             self.defaults.removeObject(forKey: self.checksumKey)
+            self.defaults.removeObject(forKey: self.skippedTooLargeKey)
         }
     }
 

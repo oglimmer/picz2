@@ -1,4 +1,5 @@
 import { Upload } from "tus-js-client";
+import { formatBytes } from "../utils/format";
 import { getApiUrl } from "../utils/api-config";
 import { useApi } from "./useApi";
 import { useAuth } from "./useAuth";
@@ -35,7 +36,14 @@ export function useUpload() {
   ): Promise<UploadResult> {
     const caps = await ensureLoaded();
     if (caps.tus.enabled) {
-      return uploadViaTus(file, albumId, caps.tus.endpoint, opts);
+      // Refuse an oversized file here rather than letting tusd answer the create request with
+      // a bare 413. The server knows its own cap and advertises it, so the browser can say
+      // which file is too big and by how much — see D43, where the iOS side of the same gap
+      // meant real video was never backed up and the only clue was "HTTP 413".
+      if (caps.tus.maxSize > 0 && file.size > caps.tus.maxSize) {
+        throw new Error(tooLargeMessage(file.size, caps.tus.maxSize));
+      }
+      return uploadViaTus(file, albumId, caps.tus.endpoint, opts, caps.tus.maxSize);
     }
     return uploadViaMultipart(file, albumId, opts);
   }
@@ -45,6 +53,7 @@ export function useUpload() {
     albumId: number,
     endpoint: string,
     opts: UploadOptions,
+    maxSize: number,
   ): Promise<UploadResult> {
     return new Promise((resolve, reject) => {
       const apiUrl = getApiUrl();
@@ -84,7 +93,14 @@ export function useUpload() {
           };
           const status = detailed?.originalResponse?.getStatus?.() ?? null;
           const retryAfter = detailed?.originalResponse?.getHeader?.("Retry-After") ?? null;
-          reject(new Error(translateUploadError(status, retryAfter, detailed.message)));
+          reject(
+            new Error(
+              translateUploadError(status, retryAfter, detailed.message, {
+                fileSize: file.size,
+                maxSize,
+              }),
+            ),
+          );
         },
         onProgress(sent, total) {
           if (opts.onProgress && total > 0) {
@@ -145,6 +161,15 @@ export function useUpload() {
 }
 
 /**
+ * One sentence for the file that cannot be uploaded, naming both numbers. "Too large" on its
+ * own leaves the user unable to tell a file that is slightly over the cap from one that never
+ * had a chance, which is the difference between trimming a clip and giving up.
+ */
+function tooLargeMessage(fileSize: number, maxSize: number): string {
+  return `File is ${formatBytes(fileSize)} — this server accepts up to ${formatBytes(maxSize)}.`;
+}
+
+/**
  * Translate HTTP status + optional server message into user-facing copy. Shared by both
  * upload paths so the user sees the same text regardless of which protocol surfaced the
  * failure. Status `null` means a network / parse / library error with no HTTP response —
@@ -154,6 +179,7 @@ function translateUploadError(
   status: number | null,
   retryAfter: string | null,
   fallbackMessage?: string,
+  size?: { fileSize: number; maxSize: number },
 ): string {
   switch (status) {
     case 401:
@@ -162,7 +188,12 @@ function translateUploadError(
     case 409:
       return "This file has already been uploaded.";
     case 413:
-      return "File is too large.";
+      // Reached when the cap was lowered since the page loaded, or on the multipart path where
+      // the limit is not advertised. With numbers when we have them, without when we don't —
+      // never with a guessed limit, which would send the user off trimming to the wrong size.
+      return size && size.maxSize > 0
+        ? tooLargeMessage(size.fileSize, size.maxSize)
+        : "File is too large for this server.";
     case 429:
     case 503:
       return retryAfter

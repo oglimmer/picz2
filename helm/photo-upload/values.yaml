@@ -305,8 +305,12 @@ tus:
     port: 1080
   # Path prefix on the public Ingress. tusd's -base-path is set to this value.
   endpoint: "/files/"
-  # Per-upload size cap (bytes). Aligned with Spring's spring.servlet.multipart.max-file-size 500MB.
-  maxSize: 524288000
+  # Per-upload size cap (bytes) for the TUS path. 2 GiB — raised from 500 MB on 2026-08-23.
+  # The iOS client uploads untouched 4K originals, so a 4-minute clip (~1.6 GB) was refused at
+  # POST /files/ before a byte moved and real videos were never backed up at all (D43).
+  # No longer aligned with spring.servlet.multipart.max-file-size: that cap governs the legacy
+  # /api/upload path, which every current client has stopped using.
+  maxSize: 2147483648
   # Hook URL secret. tusd POSTs hook callbacks to /api/tus/hooks/$(TUS_HOOK_SECRET); the api pod
   # validates the path-secret with constant-time compare. MUST be overridden via --set or sealed
   # secrets — never commit a real value here. Generate with `openssl rand -hex 32`.

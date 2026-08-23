@@ -29,10 +29,15 @@ public class TusProperties {
   private String endpoint = "/files/";
 
   /**
-   * Per-upload size cap in bytes. Aligned with multipart {@code
-   * spring.servlet.multipart.max-file-size}.
+   * Per-upload size cap in bytes, mirrored into tusd's {@code -max-size} flag by Helm and
+   * advertised to clients through {@code /api/capabilities} so they can refuse an oversized file
+   * locally instead of learning about it from a 413.
+   *
+   * <p>2 GiB since 2026-08-23 (was 500 MB, see D43). Deliberately no longer tied to {@code
+   * spring.servlet.multipart.max-file-size}: that cap belongs to the legacy {@code /api/upload}
+   * path, and holding the two together is what kept real 4K video off the server entirely.
    */
-  private long maxSize = 524288000L;
+  private long maxSize = 2147483648L;
 
   /**
    * Path-secret embedded in the tusd→api hook URL. The api validates it with constant-time compare;

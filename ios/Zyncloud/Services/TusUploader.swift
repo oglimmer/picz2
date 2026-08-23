@@ -70,7 +70,15 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         return activeIds
     }
 
-    func queueUpload(asset: PHAsset, api: APIClient, completion: ((Result<Void, Error>) -> Void)? = nil) {
+    /// - Parameter maxUploadBytes: the server's advertised `tus.maxSize`, or nil when
+    ///   capabilities have not been fetched yet. Only used to refuse a file locally with a
+    ///   readable reason instead of a 413 — never to relax anything the server enforces.
+    func queueUpload(
+        asset: PHAsset,
+        api: APIClient,
+        maxUploadBytes: Int64? = nil,
+        completion: ((Result<Void, Error>) -> Void)? = nil
+    ) {
         UploadStore.shared.markAsUploading(asset.localIdentifier)
         Uploader.shared.exportAssetToTempFile(asset) { [weak self] result in
             guard let self else { return }
@@ -80,7 +88,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 completion?(.failure(error))
             case let .success(exp):
                 UploadStore.shared.storeChecksumMapping(checksum: exp.checksum, localId: asset.localIdentifier)
-                self.createUpload(api: api, asset: asset, exp: exp, completion: completion)
+                self.createUpload(api: api, asset: asset, exp: exp,
+                                  maxUploadBytes: maxUploadBytes, completion: completion)
             }
         }
     }
@@ -89,6 +98,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         api: APIClient,
         asset: PHAsset,
         exp: Uploader.ExportResult,
+        maxUploadBytes: Int64?,
         completion: ((Result<Void, Error>) -> Void)?
     ) {
         let tusURL = api.tusEndpointURL()
@@ -99,6 +109,15 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         } catch {
             UploadStore.shared.removeFromUploading(asset.localIdentifier)
             completion?(.failure(error))
+            return
+        }
+
+        // Refuse oversized files here rather than letting tusd do it. The server's answer is a
+        // bare 413 with no numbers in it, and it arrives only after the whole asset has been
+        // exported to disk — so checking the size we already computed costs nothing and is the
+        // only way the user learns which file is missing and by how much (D43).
+        if case let .tooLarge(size, limit) = UploadSizeLimit.check(size: fileSize, limit: maxUploadBytes) {
+            refuseForSize(asset: asset, exp: exp, size: size, limit: limit, completion: completion)
             return
         }
 
@@ -149,6 +168,12 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
                 self.onTaskFinished?(assetId, .success(serverAssetId: nil))
                 completion?(.success(()))
+            case 413:
+                // The local check above did not catch it — capabilities were never fetched, or
+                // the cap was lowered since. Same outcome, same message, limit left unstated
+                // when we genuinely do not know it.
+                self.refuseForSize(asset: asset, exp: exp, size: fileSize,
+                                   limit: maxUploadBytes, completion: completion)
             case 429, 503:
                 let retry = self.parseRetryAfter(from: http) ?? 30
                 SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
@@ -188,6 +213,31 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             exp.checksum,
         ].joined(separator: "|")
         task.resume()
+        completion?(.success(()))
+    }
+
+    /// Ends an upload that can never succeed at its current size.
+    ///
+    /// Deliberately reports `.clientError` and completes the hand-off with `.success`, mirroring
+    /// the 409-dedupe path: `.failure` here would route into SyncCoordinator's export-retry
+    /// branch and re-queue the asset every ten seconds, which is precisely the spin §5.4 removed.
+    /// The asset is **not** marked uploaded — its bytes are not on the server — only recorded as
+    /// refused at this limit, so a later, larger cap picks it up again.
+    private func refuseForSize(
+        asset: PHAsset,
+        exp: Uploader.ExportResult,
+        size: Int64,
+        limit: Int64?,
+        completion: ((Result<Void, Error>) -> Void)?
+    ) {
+        let assetId = asset.localIdentifier
+        try? fileManager.removeItem(at: exp.fileURL)
+        SyncLogger.shared.logUploadSkippedTooLarge(filename: exp.filename, size: size, limit: limit)
+        UploadStore.shared.markSkippedTooLarge(
+            assetId,
+            limit: limit ?? UploadSizeLimit.impliedLimit(forRefusedSize: size)
+        )
+        onTaskFinished?(assetId, .clientError)
         completion?(.success(()))
     }
 

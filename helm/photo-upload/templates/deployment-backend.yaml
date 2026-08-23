@@ -152,7 +152,7 @@ spec:
         - name: TUS_ENDPOINT
           value: {{ .Values.tus.endpoint | default "/files/" | quote }}
         - name: TUS_MAX_SIZE
-          value: {{ .Values.tus.maxSize | default 524288000 | int64 | quote }}
+          value: {{ .Values.tus.maxSize | default 2147483648 | int64 | quote }}
         - name: TUS_HOOK_SECRET
           valueFrom:
             secretKeyRef:
