@@ -12,8 +12,8 @@ import java.time.Instant;
  *
  * <p>{@code offsetSeconds} is what turns the instant back into the camera's own wall clock, which
  * is the only clock "which day was this taken on" can be answered from. It is null only when the
- * file gave us no way to know it; every extractor that produces an instant also produces the
- * offset it interpreted that instant with, including the fallback zone — undoing a fallback offset
+ * file gave us no way to know it; every extractor that produces an instant also produces the offset
+ * it interpreted that instant with, including the fallback zone — undoing a fallback offset
  * recovers the original wall clock exactly, whether or not the fallback zone was the right guess.
  */
 public record CaptureDate(Instant instant, CaptureDateSource source, Integer offsetSeconds) {

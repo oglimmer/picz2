@@ -111,7 +111,8 @@ class AlbumServiceTest {
     original.setProcessingCompletedAt(Instant.parse("2026-08-17T23:23:11Z"));
     when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(1L, 1L))
         .thenReturn(new ArrayList<>(List.of(original)));
-    when(fileMetadataRepository.save(any(FileMetadata.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(fileMetadataRepository.save(any(FileMetadata.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
 
     service.duplicateAlbum(1L);
 

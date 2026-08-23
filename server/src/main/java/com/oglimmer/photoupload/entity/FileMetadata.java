@@ -84,10 +84,10 @@ public class FileMetadata {
   private CaptureDateSource exifDateSource;
 
   /**
-   * The UTC offset in seconds that applied where {@link #exifDateTimeOriginal} was captured.
-   * Adding it to the instant gives the camera's own wall clock, which is the only clock the
-   * gallery's "group by day" can trust — the viewer's browser zone would shelve a Toronto evening
-   * under the next morning.
+   * The UTC offset in seconds that applied where {@link #exifDateTimeOriginal} was captured. Adding
+   * it to the instant gives the camera's own wall clock, which is the only clock the gallery's
+   * "group by day" can trust — the viewer's browser zone would shelve a Toronto evening under the
+   * next morning.
    *
    * <p>Null means unknown: rows written before the column existed (the EXTRACT_CAPTURE_DATE sweep
    * selects exactly those), videos whose only timestamp is the zone-less mvhd atom, and originals
