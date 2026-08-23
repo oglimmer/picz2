@@ -140,7 +140,9 @@ jobs:
   poll:
     interval-ms: "${JOBS_POLL_INTERVAL_MS:2000}"
   lease:
-    seconds: "${JOBS_LEASE_SECONDS:900}"
+    # 45 min. Must exceed the slowest single job — a 4K source transcode runs ~17 min on the
+    # Pi, and a lease that expires mid-encode gets the job restarted on the other replica.
+    seconds: "${JOBS_LEASE_SECONDS:2700}"
   max-attempts: "${JOBS_MAX_ATTEMPTS:3}"
   backpressure:
     queue-depth-threshold: "${JOBS_BACKPRESSURE_QUEUE_DEPTH_THRESHOLD:200}"
