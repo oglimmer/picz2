@@ -8,6 +8,13 @@ class AlbumDetailViewModel: ViewModelProtocol {
     @Published var alertState: AlertState?
     @Published var isLoadingMore: Bool = false
 
+    /// True while a sort request is in flight, so the Sort menu can disable itself.
+    @Published var isReordering: Bool = false
+
+    /// Mirrors the web gallery's "Arrange by hand" mode: while on, the grid is replaced by a
+    /// movable list and every move is written straight back to the server.
+    @Published var isArrangingByHand: Bool = false
+
     let album: Album
     private var apiClient: APIClient?
     private var currentPage: Int = 1
@@ -81,6 +88,72 @@ class AlbumDetailViewModel: ViewModelProtocol {
             }
         }
     }
+
+    // MARK: - Sorting
+
+    /// Runs one of the album-wide sorts on the server, then reloads so the grid shows the new
+    /// order. The confirmation prompt lives in the view, same split as the web app.
+    func reorder(by action: AlbumSortAction) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        isReordering = true
+
+        apiClient.reorderAlbum(albumId: album.id, by: action) { [weak self] result in
+            guard let self else { return }
+
+            DispatchQueue.main.async {
+                switch result {
+                case let .success(count):
+                    Task { @MainActor in
+                        await self.refreshPhotos()
+                        self.isReordering = false
+                        self.showSuccess(message: "Reordered \(count) files by \(action.title.lowercased()).")
+                    }
+
+                case let .failure(error):
+                    self.isReordering = false
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    func toggleArrangeByHand() {
+        isArrangingByHand.toggle()
+    }
+
+    /// Applies a hand move locally, then persists the whole album order. On failure the photos
+    /// are reloaded from the server so the list can never keep an order the server rejected.
+    func movePhotos(from source: IndexSet, to destination: Int) {
+        guard let apiClient else { return }
+
+        let previous = photos
+        photos.move(fromOffsets: source, toOffset: destination)
+
+        let fileIds = photos.map(\.id)
+        isReordering = true
+
+        apiClient.reorderFiles(fileIds: fileIds) { [weak self] result in
+            guard let self else { return }
+
+            DispatchQueue.main.async {
+                self.isReordering = false
+
+                if case let .failure(error) = result {
+                    self.photos = previous
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Media URLs
 
     func thumbnailURL(for photo: Photo) -> URL? {
         // Use public token to access image via /api/i/{token}?size=thumbnail

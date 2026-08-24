@@ -16,7 +16,99 @@ struct AlbumDetailView: View {
         GridItem(.flexible(), spacing: 2),
     ]
 
+    /// Set when a Sort menu item was picked but not yet confirmed. The web app puts the same
+    /// warning behind these two actions because they rewrite the order of the whole album.
+    @State private var pendingSort: AlbumSortAction?
+
+    private var sortConfirmationShown: Binding<Bool> {
+        Binding(
+            get: { pendingSort != nil },
+            set: { shown in
+                if !shown {
+                    pendingSort = nil
+                }
+            },
+        )
+    }
+
     var body: some View {
+        Group {
+            if viewModel.isArrangingByHand {
+                arrangeByHandList
+            } else {
+                photoGrid
+            }
+        }
+        .navigationTitle(album.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                sortMenu
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(
+                    action: { viewModel.fetchPhotos() },
+                    label: { Image(systemName: "arrow.clockwise") },
+                )
+                .disabled(viewModel.isLoading || viewModel.isArrangingByHand)
+            }
+        }
+        .confirmationDialog(
+            "Reorder album",
+            isPresented: sortConfirmationShown,
+            titleVisibility: .visible,
+            presenting: pendingSort,
+        ) { action in
+            Button("Reorder") {
+                pendingSort = nil
+                viewModel.reorder(by: action)
+            }
+            Button("Cancel", role: .cancel) { pendingSort = nil }
+        } message: { action in
+            Text(action.confirmationMessage)
+        }
+        .alert(item: $viewModel.alertState) { alertState in
+            Alert(
+                title: Text(alertState.title),
+                message: Text(alertState.message),
+            )
+        }
+        .onAppear {
+            if viewModel.photos.isEmpty {
+                viewModel.fetchPhotos()
+            }
+        }
+    }
+
+    // MARK: - Sort Menu
+
+    private var sortMenu: some View {
+        Menu {
+            Section("Reorder every photo by") {
+                ForEach(AlbumSortAction.allCases) { action in
+                    Button(action.title) { pendingSort = action }
+                }
+            }
+
+            Divider()
+
+            Button {
+                viewModel.toggleArrangeByHand()
+            } label: {
+                Label(
+                    viewModel.isArrangingByHand ? "Stop arranging by hand" : "Arrange by hand",
+                    systemImage: viewModel.isArrangingByHand ? "checkmark" : "hand.draw",
+                )
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .disabled(viewModel.photos.isEmpty || viewModel.isReordering)
+    }
+
+    // MARK: - Grid
+
+    private var photoGrid: some View {
         ScrollView {
             if viewModel.isLoading, viewModel.photos.isEmpty {
                 ProgressView("Loading photos...")
@@ -31,31 +123,30 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        .navigationTitle(album.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(
-                    action: { viewModel.fetchPhotos() },
-                    label: { Image(systemName: "arrow.clockwise") },
-                )
-                .disabled(viewModel.isLoading)
-            }
-        }
         .refreshable {
             await viewModel.refreshPhotos()
         }
-        .alert(item: $viewModel.alertState) { alertState in
-            Alert(
-                title: Text(alertState.title),
-                message: Text(alertState.message),
-            )
-        }
-        .onAppear {
-            if viewModel.photos.isEmpty {
-                viewModel.fetchPhotos()
+    }
+
+    // MARK: - Arrange By Hand
+
+    /// A grid cannot be dragged into order reliably, so hand-arranging switches to a `List` in
+    /// permanent edit mode — the standard iOS way to move rows. Every move is saved at once.
+    private var arrangeByHandList: some View {
+        List {
+            Section {
+                ForEach(viewModel.photos) { photo in
+                    PhotoArrangeRow(photo: photo, viewModel: viewModel)
+                }
+                .onMove { source, destination in
+                    viewModel.movePhotos(from: source, to: destination)
+                }
+            } header: {
+                Text("Drag the handles to set the order. Changes are saved right away.")
+                    .textCase(nil)
             }
         }
+        .environment(\.editMode, .constant(.active))
     }
 
     private var emptyStateView: some View {
@@ -76,6 +167,44 @@ struct AlbumDetailView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Photo Arrange Row
+
+/// One movable row of the hand-arrange list: the thumbnail plus the name, enough to tell the
+/// photos apart while dragging.
+struct PhotoArrangeRow: View {
+    let photo: Photo
+    let viewModel: AlbumDetailViewModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Rectangle().fill(Color.black)
+
+                if let thumbnailURL = viewModel.thumbnailURL(for: photo) {
+                    AuthenticatedImage(url: thumbnailURL)
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo").foregroundColor(.gray)
+                }
+
+                if photo.isVideo {
+                    Image(systemName: "play.circle.fill")
+                        .foregroundColor(.white)
+                        .shadow(radius: 2)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipped()
+            .cornerRadius(4)
+
+            Text(photo.filename ?? photo.originalName)
+                .font(.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 }
 
