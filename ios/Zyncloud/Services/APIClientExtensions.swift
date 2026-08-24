@@ -553,3 +553,82 @@ struct AuthCheckResponse: Codable {
     let email: String?
     let emailVerified: Bool
 }
+
+// MARK: - Reordering
+
+/// The three sort actions the web gallery offers under its "Sort" menu. Kept as one enum so the
+/// view can drive a menu from `allCases` and the view model only needs a single entry point.
+enum AlbumSortAction: String, CaseIterable, Identifiable {
+    case filename
+    case exifDate
+
+    var id: String {
+        rawValue
+    }
+
+    /// Wording copied from the web gallery so both clients read the same.
+    var title: String {
+        switch self {
+        case .filename: "Number in filename"
+        case .exifDate: "Date the photo was taken"
+        }
+    }
+
+    var confirmationMessage: String {
+        switch self {
+        case .filename:
+            "Reorder all files in this album by filename numbers? This will sort files based on numbers found in their filenames."
+        case .exifDate:
+            "Reorder all files in this album by EXIF date? This will sort files based on the date the photo was taken (from EXIF metadata). Files without EXIF dates will be sorted by upload date."
+        }
+    }
+
+    /// Path segment of the server endpoint that performs this sort.
+    fileprivate var endpointSuffix: String {
+        switch self {
+        case .filename: "reorder-by-filename"
+        case .exifDate: "reorder-by-exif"
+        }
+    }
+}
+
+extension APIClient {
+    /// Re-sorts every file in an album server-side and answers how many rows changed.
+    /// Mirrors `reorderByFilename` / `reorderByExif` in the web app's `useFiles` composable.
+    func reorderAlbum(albumId: Int, by action: AlbumSortAction, completion: @escaping (Result<Int, Error>) -> Void) {
+        var request = URLRequest(
+            url: baseURL.appendingPathComponent("api/albums/\(albumId)/\(action.endpointSuffix)"),
+        )
+        request.httpMethod = "POST"
+        addBasicAuth(to: &request)
+
+        performRequest(request, expecting: ReorderResponse.self) { result in
+            completion(result.map(\.updatedCount))
+        }
+    }
+
+    /// Persists a hand-made order. `fileIds` must be the album's files in the wanted order —
+    /// the server writes each file's `displayOrder` from its index, same as the web app's
+    /// "Arrange by hand" mode.
+    func reorderFiles(fileIds: [Int], completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/files/reorder"))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addBasicAuth(to: &request)
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["fileIds": fileIds])
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        performRequestIgnoringBody(request, completion: completion)
+    }
+}
+
+struct ReorderResponse: Codable {
+    let success: Bool
+    let message: String?
+    let updatedCount: Int
+}
