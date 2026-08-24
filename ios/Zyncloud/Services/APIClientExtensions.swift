@@ -627,6 +627,31 @@ extension APIClient {
     }
 }
 
+// MARK: - Single-file actions
+
+extension APIClient {
+    /// Deletes one file. Irreversible — the server drops the stored objects as well as the row.
+    func deleteFile(id: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/files/\(id)"))
+        request.httpMethod = "DELETE"
+        addBasicAuth(to: &request)
+
+        performRequestIgnoringBody(request, completion: completion)
+    }
+
+    /// Queues a 90° left rotation. Answers 202 as soon as the job is enqueued — the worker pod
+    /// does the work, so the caller has to poll ``getAssetStatus(id:completion:)`` before the
+    /// new image is there to show. Rotating also swaps the asset's `publicToken`, which is why
+    /// the file list has to be reloaded afterwards rather than just the image.
+    func rotateImageLeft(id: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/files/\(id)/rotate"))
+        request.httpMethod = "POST"
+        addBasicAuth(to: &request)
+
+        performRequestIgnoringBody(request, completion: completion)
+    }
+}
+
 struct ReorderResponse: Codable {
     let success: Bool
     let message: String?

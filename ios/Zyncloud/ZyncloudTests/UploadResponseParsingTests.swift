@@ -48,6 +48,33 @@ struct UploadResponseParsingTests {
         #expect(uploader.parseRetryAfter(from: response(headers: ["Retry-After": value])) == nil)
     }
 
+    // MARK: - Server album id
+
+    /// The multipart path tells a stored upload from a rejected duplicate by comparing the
+    /// album it asked for with the album the server answers with. The server dedupes by
+    /// contentId across the whole account and replies with the row it already had, so a
+    /// mismatch means nothing was stored — an upload that used to report plain success and
+    /// then leave the album unchanged.
+    @Test func readsTheAlbumIdFromAnUploadResponse() {
+        let body = Data(#"{ "success": true, "file": { "id": 4321, "albumId": 37 } }"#.utf8)
+        #expect(uploader.parseServerAlbumId(from: body) == 37)
+    }
+
+    /// Degrades to nil, which makes the caller treat the upload as an ordinary success. That
+    /// is the safe direction: a missed duplicate is a quiet no-op, while a wrongly claimed one
+    /// would tell the user their photo was refused when it was stored.
+    @Test(arguments: [
+        #"{ "success": true }"#,
+        #"{ "file": {} }"#,
+        #"{ "file": { "albumId": "37" } }"#,
+        #"{ "file": null }"#,
+        #"{ "albumId": 37 }"#,
+        "not json at all",
+    ])
+    func returnsNilForAnyOtherAlbumShape(json: String) {
+        #expect(uploader.parseServerAlbumId(from: Data(json.utf8)) == nil)
+    }
+
     // MARK: - Server asset id
 
     @Test func readsTheAssetIdFromAnUploadResponse() throws {

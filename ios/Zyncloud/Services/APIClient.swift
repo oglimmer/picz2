@@ -41,7 +41,11 @@ struct APIClient {
                             filename: String,
                             mimeType: String,
                             boundary: String,
-                            contentId: String? = nil) throws
+                            contentId: String? = nil,
+                            // Names the destination album. Left nil the server files the asset
+                            // under the account's target album, which is what background sync
+                            // wants; the album screen's upload button passes what it is showing.
+                            albumId: Int? = nil) throws
     {
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: destinationURL.path) {
@@ -56,6 +60,14 @@ struct APIClient {
             out.write(Data("--\(boundary)\r\n".utf8))
             out.write(Data("Content-Disposition: form-data; name=\"contentId\"\r\n\r\n".utf8))
             out.write(Data(contentId.utf8))
+            out.write(Data("\r\n".utf8))
+        }
+
+        // Write albumId part if present
+        if let albumId {
+            out.write(Data("--\(boundary)\r\n".utf8))
+            out.write(Data("Content-Disposition: form-data; name=\"albumId\"\r\n\r\n".utf8))
+            out.write(Data(String(albumId).utf8))
             out.write(Data("\r\n".utf8))
         }
 

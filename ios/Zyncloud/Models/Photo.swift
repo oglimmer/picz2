@@ -15,6 +15,15 @@ struct FileInfo: Codable, Identifiable {
     let albumId: Int
     let albumName: String?
 
+    /// Where the worker pod has got to with this asset, straight from the file list.
+    ///
+    /// Kept as the raw string rather than ``AssetProcessingStatus``: decoding an optional enum
+    /// from an unknown raw value *throws*, so one status a future server adds would fail the
+    /// decode of the whole album rather than of one row. `var` because the poller patches it in
+    /// place as the worker progresses — reloading the entire list every two seconds to learn
+    /// one photo finished would be a poor trade in an album of several hundred.
+    var processingStatus: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case originalName
@@ -28,6 +37,31 @@ struct FileInfo: Codable, Identifiable {
         case tags
         case albumId
         case albumName
+        case processingStatus
+    }
+
+    var processing: AssetProcessingStatus? {
+        processingStatus.flatMap(AssetProcessingStatus.init(rawValue:))
+    }
+
+    /// True when the server has something to serve for this asset.
+    ///
+    /// Asking for a derivative before the worker has made it answers `202 Accepted` with an
+    /// empty body, which is not an image — rendering it is what made every freshly uploaded
+    /// photo show the red "Failed" icon.
+    ///
+    /// Compared as a raw string, deliberately, so the rule is the web gallery's exactly: an
+    /// *absent* status is an older row and counts as ready, while a status this build does not
+    /// recognise counts as not ready. Waiting on a status we cannot read is the safe way round
+    /// — the other way shows a broken picture.
+    var isThumbnailReady: Bool {
+        guard let processingStatus else { return true }
+        return processingStatus == AssetProcessingStatus.done.rawValue
+    }
+
+    /// The worker gave up. Distinct from "not ready yet": no amount of waiting fixes it.
+    var processingFailed: Bool {
+        processing == .failed || processing == .deadLetter
     }
 
     /// True when the stored asset is a video. The gallery has to know, because a video's

@@ -30,6 +30,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
     /// top-level type) to keep this scaffolding additive.
     enum UploadOutcome {
         case success(serverAssetId: Int?)
+        case deduped
         case clientError
         case transport
         case backpressure(TimeInterval)
@@ -72,6 +73,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         }
     }
 
+    /// - Parameter albumId: the album the asset must land in, sent as `Upload-Metadata.albumId`.
+    ///   Nil — the background-sync case — leaves the choice to the server's target album.
     /// - Parameter maxUploadBytes: the server's advertised `tus.maxSize`, or nil when
     ///   capabilities have not been fetched yet. Only used to refuse a file locally with a
     ///   readable reason instead of a 413 — never to relax anything the server enforces.
@@ -79,6 +82,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         asset: PHAsset,
         api: APIClient,
         maxUploadBytes: Int64? = nil,
+        albumId: Int? = nil,
         completion: ((Result<Void, Error>) -> Void)? = nil
     ) {
         UploadStore.shared.markAsUploading(asset.localIdentifier)
@@ -90,8 +94,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 completion?(.failure(error))
             case let .success(exp):
                 UploadStore.shared.storeChecksumMapping(checksum: exp.checksum, localId: asset.localIdentifier)
-                self.createUpload(api: api, asset: asset, exp: exp,
-                                  maxUploadBytes: maxUploadBytes, completion: completion)
+                self.createUpload(api: api, asset: asset, exp: exp, maxUploadBytes: maxUploadBytes,
+                                  albumId: albumId, completion: completion)
             }
         }
     }
@@ -101,6 +105,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         asset: PHAsset,
         exp: Uploader.ExportResult,
         maxUploadBytes: Int64?,
+        albumId: Int?,
         completion: ((Result<Void, Error>) -> Void)?
     ) {
         let tusURL = api.tusEndpointURL()
@@ -130,6 +135,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         UploadTokenStore.shared.token(api: api) { [weak self] token in
             self?.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
                                 tusURL: tusURL, authValue: token, maxUploadBytes: maxUploadBytes,
+                                albumId: albumId,
                                 mayRetryWithFreshToken: token != nil, completion: completion)
         }
     }
@@ -144,6 +150,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         tusURL: URL,
         authValue: String?,
         maxUploadBytes: Int64?,
+        albumId: Int?,
         mayRetryWithFreshToken: Bool,
         completion: ((Result<Void, Error>) -> Void)?
     ) {
@@ -154,7 +161,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         request.setValue(String(fileSize), forHTTPHeaderField: "Upload-Length")
         request.setValue(
             api.tusUploadMetadata(filename: exp.filename, mimeType: exp.mimeType,
-                                  contentId: asset.localIdentifier, auth: authValue),
+                                  contentId: asset.localIdentifier, albumId: albumId,
+                                  auth: authValue),
             forHTTPHeaderField: "Upload-Metadata"
         )
         api.addBasicAuth(to: &request)
@@ -191,12 +199,14 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 }
                 self.startPatch(asset: asset, exp: exp, uploadURL: uploadURL, api: api, completion: completion)
             case 409:
-                // Pre-create dedupe — server already has a row for this contentId. Treat as
-                // success so SyncCoordinator stops retrying.
+                // Pre-create dedupe — the server already has a row for this contentId, anywhere
+                // in the account, and refuses the bytes. Reported as its own outcome rather than
+                // as a success: nothing was stored, so an upload aimed at a particular album
+                // produces no new photo there, and the caller has to be able to say so.
                 self.discardExport(exp)
                 SyncLogger.shared.logUploadDeduped(assetId: assetId)
                 UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
-                self.onTaskFinished?(assetId, .success(serverAssetId: nil))
+                self.onTaskFinished?(assetId, .deduped)
                 completion?(.success(()))
             case 401 where mayRetryWithFreshToken:
                 // The token was refused — expired early, or revoked by a password change. Mint a
@@ -209,7 +219,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                     print("TusUploader: upload token refused, retrying with a fresh one")
                     self.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
                                        tusURL: tusURL, authValue: fresh,
-                                       maxUploadBytes: maxUploadBytes,
+                                       maxUploadBytes: maxUploadBytes, albumId: albumId,
                                        mayRetryWithFreshToken: false, completion: completion)
                 }
             case 413:
