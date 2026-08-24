@@ -570,6 +570,43 @@ class AlbumDetailViewModel: ViewModelProtocol {
         )?.url
     }
 
+    // MARK: - Album Actions
+
+    /// The public link for this album, or nil when the server gave it no share token.
+    var shareURL: URL? {
+        guard let shareToken = album.shareToken else { return nil }
+        return AppConfiguration.publicAlbumURL(shareToken: shareToken)
+    }
+
+    /// Deletes the whole album, exactly as the web app's album delete does. The view asks for
+    /// confirmation first and closes the screen on success — what it was showing is gone.
+    func deleteAlbum(completion: @escaping (Bool) -> Void) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            completion(false)
+            return
+        }
+
+        isLoading = true
+
+        apiClient.deleteAlbum(id: album.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isLoading = false
+                switch result {
+                case .success:
+                    completion(true)
+                case let .failure(error):
+                    self.handleError(error)
+                    completion(false)
+                }
+            }
+        }
+    }
+
     func fullImageURL(for photo: Photo) -> URL? {
         // Use public token to access original/large image via /api/i/{token}
         let baseURL = AppConfiguration.apiBaseURL

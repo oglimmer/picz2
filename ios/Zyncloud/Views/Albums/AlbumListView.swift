@@ -6,6 +6,10 @@ struct AlbumListView: View {
     @State private var showingEditSheet = false
     @State private var albumToEdit: Album?
 
+    /// The link handed to the system share sheet. Owned by this screen, not by the card: a sheet
+    /// presented from a context menu goes away with the menu.
+    @State private var sharingLink: ShareableLink?
+
     private let columns = [
         GridItem(.flexible(), spacing: 16),
         GridItem(.flexible(), spacing: 16),
@@ -22,12 +26,21 @@ struct AlbumListView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(viewModel.albums) { album in
-                            NavigationLink(destination: AlbumDetailView(album: album)) {
+                            NavigationLink(destination: AlbumDetailView(album: album) {
+                                viewModel.albums.removeAll { $0.id == album.id }
+                            }) {
                                 AlbumCardView(
                                     album: album,
                                     onEdit: {
                                         albumToEdit = album
                                         showingEditSheet = true
+                                    },
+                                    onShare: {
+                                        if let shareToken = album.shareToken,
+                                           let shareURL = AppConfiguration.publicAlbumURL(shareToken: shareToken)
+                                        {
+                                            sharingLink = ShareableLink(url: shareURL)
+                                        }
                                     },
                                     onDelete: {
                                         viewModel.showDeleteConfirmation(for: album) {
@@ -69,6 +82,9 @@ struct AlbumListView: View {
                         }
                     }
                 }
+            }
+            .sheet(item: $sharingLink) { link in
+                ShareSheet(items: [link.url])
             }
             .sheet(item: $albumToEdit) { album in
                 AlbumFormView(mode: .edit(album)) { name, description in
@@ -139,6 +155,9 @@ struct AlbumListView: View {
 struct AlbumCardView: View {
     let album: Album
     let onEdit: () -> Void
+
+    /// Raised to the list screen, which owns the share sheet.
+    let onShare: () -> Void
     let onDelete: () -> Void
 
     @State private var showingActions = false
@@ -203,6 +222,12 @@ struct AlbumCardView: View {
         .contextMenu {
             Button(action: onEdit) {
                 Label("Edit", systemImage: "pencil")
+            }
+
+            if album.shareToken != nil {
+                Button(action: onShare) {
+                    Label("Share Link", systemImage: "square.and.arrow.up")
+                }
             }
 
             Button(role: .destructive, action: onDelete) {

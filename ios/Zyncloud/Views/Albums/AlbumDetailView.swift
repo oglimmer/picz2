@@ -6,8 +6,15 @@ struct AlbumDetailView: View {
     let album: Album
     @StateObject private var viewModel: AlbumDetailViewModel
 
-    init(album: Album) {
+    /// Called after the album is deleted on the server, so the list behind this screen can drop
+    /// it. Without it the album would still be on the grid the pop lands back on.
+    private let onDeleted: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(album: Album, onDeleted: @escaping () -> Void = {}) {
         self.album = album
+        self.onDeleted = onDeleted
         _viewModel = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
     }
 
@@ -23,6 +30,13 @@ struct AlbumDetailView: View {
     /// Set when Delete was chosen on a tile but not yet confirmed. Deleting is irreversible —
     /// the server drops the stored file, not just the row — so it always asks first.
     @State private var pendingDelete: Photo?
+
+    /// The link handed to the system share sheet, set by the menu's Share entry.
+    @State private var sharingLink: ShareableLink?
+
+    /// True while Delete Album waits for a yes. Deleting an album takes its photos with it, so
+    /// it always asks first — same as the web app.
+    @State private var confirmingAlbumDelete = false
 
     /// Set when a Sort menu item was picked but not yet confirmed. The web app puts the same
     /// warning behind these two actions because they rewrite the order of the whole album.
@@ -72,6 +86,9 @@ struct AlbumDetailView: View {
                 )
                 .disabled(viewModel.isLoading || viewModel.isArrangingByHand)
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                albumMenu
+            }
         }
         // `photoLibrary: .shared()` is load-bearing, not a default: without it the picker runs
         // out of process and the returned items carry no `itemIdentifier`, which is the only
@@ -111,6 +128,26 @@ struct AlbumDetailView: View {
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { _ in
             Text("This removes the photo from your server for good. It cannot be undone.")
+        }
+        .sheet(item: $sharingLink) { link in
+            ShareSheet(items: [link.url])
+        }
+        .confirmationDialog(
+            "Delete album",
+            isPresented: $confirmingAlbumDelete,
+            titleVisibility: .visible,
+        ) {
+            Button("Delete", role: .destructive) {
+                viewModel.deleteAlbum { deleted in
+                    if deleted {
+                        onDeleted()
+                        dismiss()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes '\(album.name)' and every photo in it for good. It cannot be undone.")
         }
         .confirmationDialog(
             "Reorder album",
@@ -162,6 +199,33 @@ struct AlbumDetailView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.thinMaterial)
+    }
+
+    // MARK: - Album Menu
+
+    /// Share and Delete, the two album-wide actions the web app has. Share hands the public link
+    /// to the system share sheet; a missing token only hides the entry, because a link cannot be
+    /// invented on the phone.
+    private var albumMenu: some View {
+        Menu {
+            if let shareURL = viewModel.shareURL {
+                Button {
+                    sharingLink = ShareableLink(url: shareURL)
+                } label: {
+                    Label("Share Link", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            Button(role: .destructive) {
+                confirmingAlbumDelete = true
+            } label: {
+                Label("Delete Album", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .disabled(viewModel.isArrangingByHand)
+        .accessibilityLabel("Album actions")
     }
 
     // MARK: - Sort Menu
