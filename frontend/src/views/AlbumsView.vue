@@ -1,95 +1,240 @@
 <template>
   <div class="albums-page">
+    <!--
+      The masthead carries identity, one line of live state, and the account. Nothing here is
+      a toolbar button: the destination is a sentence you can click, the rest are words in a menu.
+    -->
     <header class="picz-header">
-      <div class="header-brand">
-        <h1 class="brand-wordmark">Picz</h1>
+      <h1 class="brand-wordmark">
+        Picz
+      </h1>
+
+      <div
+        v-if="albums.length > 0 && destinationLoaded"
+        class="receiving"
+      >
+        <span
+          class="receiving-dot"
+          :class="uploadTarget ? 'receiving-dot--live' : 'receiving-dot--paused'"
+        />
+        <span class="receiving-label">
+          {{ uploadTarget ? 'Phone uploads to' : 'Phone uploads' }}
+        </span>
+        <MenuButton role="listbox">
+          <template #trigger="{ open, toggle }">
+            <button
+              class="receiving-value"
+              :class="{ 'receiving-value--paused': !uploadTarget }"
+              aria-haspopup="listbox"
+              :aria-expanded="open"
+              @click="toggle"
+            >
+              <span class="receiving-name">{{ uploadTarget ? uploadTarget.name : 'Paused' }}</span>
+              <svg
+                class="chev"
+                width="9"
+                height="9"
+                viewBox="0 0 10 10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+              >
+                <path d="M2 4l3 3 3-3" />
+              </svg>
+            </button>
+          </template>
+
+          <template #default="{ close }">
+            <p class="popover-head">
+              Send phone photos to
+            </p>
+            <div class="popover-scroll">
+              <button
+                v-for="album in albums"
+                :key="album.id"
+                class="menu-item"
+                :class="{ 'menu-item--on': album.id === targetAlbumId }"
+                role="option"
+                :aria-selected="album.id === targetAlbumId"
+                :disabled="savingDestination"
+                @click="close(); chooseDestination(album)"
+              >
+                <span class="menu-item-label">{{ album.name }}</span>
+                <span class="menu-item-count">{{ (album.fileCount || 0).toLocaleString() }}</span>
+                <svg
+                  v-if="album.id === targetAlbumId"
+                  class="menu-check"
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                >
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              </button>
+            </div>
+            <div class="popover-sep" />
+            <button
+              class="menu-item"
+              :disabled="savingDestination || !uploadTarget"
+              @click="close(); pauseUploads()"
+            >
+              <span class="menu-item-label">Pause uploads</span>
+            </button>
+          </template>
+        </MenuButton>
       </div>
-      <div class="header-actions">
-        <button
-          class="icon-btn"
-          :class="{ 'icon-btn--active': showManageTags }"
-          title="Manage Tags"
-          @click="showManageTags = !showManageTags"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
-            <line x1="7" y1="7" x2="7.01" y2="7"/>
-          </svg>
-        </button>
-        <button
-          class="icon-btn"
-          :class="{ 'icon-btn--active': showManageLanguages }"
-          title="Manage Languages"
-          @click="showManageLanguages = !showManageLanguages"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="2" y1="12" x2="22" y2="12"/>
-            <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
-          </svg>
-        </button>
-        <button
-          class="icon-btn"
-          :class="{ 'icon-btn--active': showTargetAlbumSettings }"
-          title="Target Album Settings"
-          @click="showTargetAlbumSettings = !showTargetAlbumSettings"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-            <line x1="12" y1="18" x2="12.01" y2="18"/>
-          </svg>
-        </button>
-        <button
-          class="icon-btn"
-          title="Profile & Settings"
-          @click="goToProfile"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-        </button>
+
+      <AccountMenu>
+        <template #default="{ close }">
+          <p class="popover-head">
+            Library
+          </p>
+          <button
+            class="menu-item"
+            :class="{ 'menu-item--on': showManageTags }"
+            role="menuitem"
+            @click="close(); openPanel('tags')"
+          >
+            <span class="menu-item-label">Tags</span>
+          </button>
+          <button
+            class="menu-item"
+            :class="{ 'menu-item--on': showManageLanguages }"
+            role="menuitem"
+            @click="close(); openPanel('languages')"
+          >
+            <span class="menu-item-label">Narration languages</span>
+          </button>
+        </template>
+      </AccountMenu>
+    </header>
+
+    <!-- The shelf: what the archive holds, then the controls that act on it. -->
+    <div
+      v-if="albums.length > 0"
+      class="shelf"
+    >
+      <p class="shelf-count">
+        <strong>{{ albums.length }}</strong>&nbsp;{{ albums.length === 1 ? 'album' : 'albums' }}<span
+          class="shelf-dot"
+        >·</span><strong>{{ totalFrames.toLocaleString() }}</strong>&nbsp;{{ totalFrames === 1 ? 'frame' : 'frames' }}
+      </p>
+      <span class="shelf-rule" />
+      <div class="shelf-controls">
+        <div class="grid-size-picker">
+          <button
+            v-for="size in (['small', 'medium', 'large'] as const)"
+            :key="size"
+            class="grid-size-btn"
+            :class="{ 'grid-size-btn--active': albumSize === size }"
+            :title="`${size.charAt(0).toUpperCase() + size.slice(1)} thumbnails`"
+            :aria-pressed="albumSize === size"
+            @click="albumSize = size"
+          >
+            <svg
+              v-if="size === 'small'"
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="currentColor"
+            >
+              <rect
+                x="0"
+                y="0"
+                width="6"
+                height="6"
+                rx="1"
+              />
+              <rect
+                x="8"
+                y="0"
+                width="6"
+                height="6"
+                rx="1"
+              />
+              <rect
+                x="0"
+                y="8"
+                width="6"
+                height="6"
+                rx="1"
+              />
+              <rect
+                x="8"
+                y="8"
+                width="6"
+                height="6"
+                rx="1"
+              />
+            </svg>
+            <svg
+              v-else-if="size === 'medium'"
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="currentColor"
+            >
+              <rect
+                x="0"
+                y="0"
+                width="6"
+                height="14"
+                rx="1"
+              />
+              <rect
+                x="8"
+                y="0"
+                width="6"
+                height="14"
+                rx="1"
+              />
+            </svg>
+            <svg
+              v-else
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="currentColor"
+            >
+              <rect
+                x="0"
+                y="0"
+                width="14"
+                height="14"
+                rx="1"
+              />
+            </svg>
+          </button>
+        </div>
         <button
           class="new-album-btn"
           @click="showCreateAlbum = !showCreateAlbum"
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <line
+              x1="12"
+              y1="5"
+              x2="12"
+              y2="19"
+            />
+            <line
+              x1="5"
+              y1="12"
+              x2="19"
+              y2="12"
+            />
           </svg>
-          <span>New Album</span>
-        </button>
-      </div>
-    </header>
-
-    <div class="header-divider">
-      <div class="divider-line" />
-      <span class="album-count-badge">
-        {{ albums.length }}&nbsp;{{ albums.length === 1 ? 'album' : 'albums' }}
-      </span>
-      <div class="divider-line" />
-      <div class="grid-size-picker">
-        <button
-          v-for="size in (['small', 'medium', 'large'] as const)"
-          :key="size"
-          class="grid-size-btn"
-          :class="{ 'grid-size-btn--active': albumSize === size }"
-          :title="`${size.charAt(0).toUpperCase() + size.slice(1)} thumbnails`"
-          @click="albumSize = size"
-        >
-          <svg v-if="size === 'small'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="6" height="6" rx="1"/>
-            <rect x="8" y="0" width="6" height="6" rx="1"/>
-            <rect x="0" y="8" width="6" height="6" rx="1"/>
-            <rect x="8" y="8" width="6" height="6" rx="1"/>
-          </svg>
-          <svg v-else-if="size === 'medium'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="6" height="14" rx="1"/>
-            <rect x="8" y="0" width="6" height="14" rx="1"/>
-          </svg>
-          <svg v-else width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="14" height="14" rx="1"/>
-          </svg>
+          <span>New album</span>
         </button>
       </div>
     </div>
@@ -100,27 +245,32 @@
         class="create-panel"
       >
         <h2 class="create-panel-title">
-          New Album
+          New album
         </h2>
         <div class="create-panel-fields">
           <input
+            ref="newAlbumInput"
             v-model="newAlbumName"
             placeholder="Album title"
             class="create-input"
             @keyup.enter="handleCreateAlbum"
+            @keyup.esc="cancelCreateAlbum"
           >
           <input
             v-model="newAlbumDescription"
             placeholder="Description (optional)"
             class="create-input"
+            @keyup.enter="handleCreateAlbum"
+            @keyup.esc="cancelCreateAlbum"
           >
         </div>
         <div class="create-panel-actions">
           <button
             class="btn-create"
+            :disabled="!newAlbumName.trim()"
             @click="handleCreateAlbum"
           >
-            Create
+            Create album
           </button>
           <button
             class="btn-cancel"
@@ -140,10 +290,6 @@
     <LanguageManager
       v-if="isLoggedIn && showManageLanguages"
       @close="showManageLanguages = false"
-    />
-    <TargetAlbumSettings
-      v-if="isLoggedIn && showTargetAlbumSettings"
-      @close="showTargetAlbumSettings = false"
     />
 
     <div
@@ -199,11 +345,38 @@
           />
         </svg>
         <p class="empty-title">
-          No albums yet
+          Nothing archived yet
         </p>
         <p class="empty-hint">
-          Create your first album to begin
+          Make an album and your phone has somewhere to put photos.
         </p>
+        <button
+          class="new-album-btn"
+          @click="showCreateAlbum = true"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <line
+              x1="12"
+              y1="5"
+              x2="12"
+              y2="19"
+            />
+            <line
+              x1="5"
+              y1="12"
+              x2="19"
+              y2="12"
+            />
+          </svg>
+          <span>New album</span>
+        </button>
       </div>
     </div>
 
@@ -220,6 +393,7 @@
         :can-delete="isLoggedIn"
         :can-duplicate="isLoggedIn"
         :is-deleting="deletingAlbumId === album.id"
+        :is-upload-target="album.id === targetAlbumId"
         @click="handleOpenAlbum(album)"
         @delete="handleDeleteAlbum"
         @duplicate="handleDuplicateAlbum"
@@ -229,23 +403,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { useAlbums } from '../composables/useAlbums'
 import { useTags } from '../composables/useTags'
+import { useSettings } from '../composables/useSettings'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
 import AlbumCard from '../components/AlbumCard.vue'
+import AccountMenu from '../components/AccountMenu.vue'
+import MenuButton from '../components/MenuButton.vue'
 import TagManager from '../components/TagManager.vue'
 import LanguageManager from '../components/LanguageManager.vue'
-import TargetAlbumSettings from '../components/TargetAlbumSettings.vue'
 import type { Album } from '@/types'
 
 const router = useRouter()
 const { isLoggedIn } = useAuth()
 const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
 const { availableTags, loadTags } = useTags()
+const { targetAlbumId, loadTargetAlbum, updateTargetAlbum, clearTargetAlbum } = useSettings()
 const { error: showError, info, success: showSuccess, removeNotification } = useNotifications()
 const deletingAlbumId = ref<number | null>(null)
 const { confirm: confirmDialog } = useConfirm()
@@ -257,26 +434,73 @@ watch(albumSize, v => localStorage.setItem('albumGridSize', v))
 const showCreateAlbum = ref(false)
 const showManageTags = ref(false)
 const showManageLanguages = ref(false)
-const showTargetAlbumSettings = ref(false)
 const newAlbumName = ref('')
 const newAlbumDescription = ref('')
+const newAlbumInput = ref<HTMLInputElement | null>(null)
+
+// The line says "Paused" when nothing is set, so don't render it until the setting has
+// actually arrived — otherwise a fast /api/albums flashes a false alarm.
+const destinationLoaded = ref(false)
+const savingDestination = ref(false)
+
+/** The album the iOS app is currently uploading into, or null while sync is paused. */
+const uploadTarget = computed(() => albums.value.find(a => a.id === targetAlbumId.value) ?? null)
+const totalFrames = computed(() => albums.value.reduce((sum, a) => sum + (a.fileCount || 0), 0))
 
 onMounted(async () => {
   if (isLoggedIn.value) {
-    await loadAlbums()
-    await loadTags()
+    await Promise.all([
+      loadAlbums(),
+      loadTags(),
+      loadTargetAlbum().finally(() => { destinationLoaded.value = true }),
+    ])
   }
 })
+
+function openPanel(panel: 'tags' | 'languages') {
+  if (panel === 'tags') {
+    showManageLanguages.value = false
+    showManageTags.value = !showManageTags.value
+  } else {
+    showManageTags.value = false
+    showManageLanguages.value = !showManageLanguages.value
+  }
+}
+
+async function chooseDestination(album: Album) {
+  if (album.id === targetAlbumId.value) return
+
+  savingDestination.value = true
+  try {
+    await updateTargetAlbum(album.id)
+    showSuccess(`Phone uploads now go to "${album.name}".`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    showError(`Could not change the upload destination: ${message}`)
+  } finally {
+    savingDestination.value = false
+  }
+}
+
+async function pauseUploads() {
+  savingDestination.value = true
+  try {
+    await clearTargetAlbum()
+    showSuccess('Phone uploads paused.')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    showError(`Could not pause uploads: ${message}`)
+  } finally {
+    savingDestination.value = false
+  }
+}
 
 function handleOpenAlbum(album: Album) {
   router.push({ name: 'Album', params: { albumId: album.id.toString() } })
 }
 
-function goToProfile() {
-  router.push({ name: 'Profile' })
-}
-
 async function handleCreateAlbum() {
+  if (!newAlbumName.value.trim()) return
   try {
     await createAlbum(newAlbumName.value, newAlbumDescription.value)
     newAlbumName.value = ''
@@ -293,6 +517,12 @@ function cancelCreateAlbum() {
   newAlbumName.value = ''
   newAlbumDescription.value = ''
 }
+
+watch(showCreateAlbum, async open => {
+  if (!open) return
+  await nextTick()
+  newAlbumInput.value?.focus()
+})
 
 async function handleDuplicateAlbum(albumId: number) {
   try {
@@ -314,6 +544,10 @@ async function handleDeleteAlbum(albumId: number) {
     confirmMessage = `Delete "${album.name}"?\n\nThis album contains ${album.fileCount} photo${album.fileCount !== 1 ? 's' : ''}. All photos will be permanently deleted.\n\nThis cannot be undone.`
   }
 
+  if (albumId === targetAlbumId.value) {
+    confirmMessage += '\n\nYour phone uploads here, so sync will pause until you pick another album.'
+  }
+
   const confirmed = await confirmDialog(confirmMessage, {
     type: 'danger',
     confirmText: 'Delete Album'
@@ -327,6 +561,8 @@ async function handleDeleteAlbum(albumId: number) {
     await deleteAlbum(albumId)
     removeNotification(toastId)
     showSuccess(`"${album.name}" deleted.`)
+    // The server clears the setting with the album; keep the masthead honest.
+    if (albumId === targetAlbumId.value) await loadTargetAlbum()
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     removeNotification(toastId)

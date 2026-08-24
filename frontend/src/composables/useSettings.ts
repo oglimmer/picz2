@@ -10,17 +10,20 @@ export interface SettingsComposable {
   updateLanguage2Name: (newName: string) => Promise<void>;
   loadTargetAlbum: () => Promise<void>;
   updateTargetAlbum: (albumId: number) => Promise<void>;
+  clearTargetAlbum: () => Promise<void>;
 }
+
+// Shared across every caller (same pattern as useAuth): the albums masthead shows the
+// upload destination while other components change it, so both must read one ref.
+const language1Name = ref<string>("German");
+const language2Name = ref<string>("English");
+const targetAlbumId = ref<number | null>(null);
 
 /**
  * Settings composable for managing app settings
  */
 export function useSettings(): SettingsComposable {
   const { apiUrl, fetchWithAuth } = useApi();
-
-  const language1Name = ref<string>("German");
-  const language2Name = ref<string>("English");
-  const targetAlbumId = ref<number | null>(null);
 
   /**
    * Load language settings
@@ -156,6 +159,23 @@ export function useSettings(): SettingsComposable {
     }
   }
 
+  /**
+   * Clear the target album — the iOS app stops uploading until one is picked again.
+   */
+  async function clearTargetAlbum(): Promise<void> {
+    const response = await fetchWithAuth(`${apiUrl}/api/settings/target-album`, {
+      method: "DELETE",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Failed to pause uploads");
+    }
+
+    targetAlbumId.value = null;
+  }
+
   return {
     // State
     language1Name,
@@ -168,5 +188,6 @@ export function useSettings(): SettingsComposable {
     updateLanguage2Name,
     loadTargetAlbum,
     updateTargetAlbum,
+    clearTargetAlbum,
   };
 }

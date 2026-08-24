@@ -1,6 +1,6 @@
 <template>
   <div class="language-management-panel">
-    <h3>Manage Languages</h3>
+    <h3>Narration languages</h3>
 
     <div class="language-list">
       <div class="language-item">

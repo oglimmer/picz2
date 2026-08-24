@@ -15,6 +15,7 @@ import VerificationPendingView from "../views/VerificationPendingView.vue";
 import VerifyEmailView from "../views/VerifyEmailView.vue";
 import AlbumsView from "../views/AlbumsView.vue";
 import GalleryView from "../views/GalleryView.vue";
+import AlbumAnalyticsView from "../views/AlbumAnalyticsView.vue";
 import PublicGalleryView from "../views/PublicGalleryView.vue";
 import ProfileView from "../views/ProfileView.vue";
 import ImprintView from "../views/ImprintView.vue";
@@ -154,6 +155,13 @@ const routes: RouteRecordRaw[] = [
     path: "/album/:albumId",
     name: "Album",
     component: GalleryView,
+    props: true,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/album/:albumId/analytics",
+    name: "AlbumAnalytics",
+    component: AlbumAnalyticsView,
     props: true,
     meta: { requiresAuth: true },
   },
