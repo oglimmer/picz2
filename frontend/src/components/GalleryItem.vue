@@ -15,7 +15,43 @@
       class="drag-handle"
       title="Drag to reorder"
     >
-      ⋮⋮
+      <svg
+        width="10"
+        height="14"
+        viewBox="0 0 10 14"
+        fill="currentColor"
+      >
+        <circle
+          cx="2.5"
+          cy="2.5"
+          r="1.2"
+        />
+        <circle
+          cx="7.5"
+          cy="2.5"
+          r="1.2"
+        />
+        <circle
+          cx="2.5"
+          cy="7"
+          r="1.2"
+        />
+        <circle
+          cx="7.5"
+          cy="7"
+          r="1.2"
+        />
+        <circle
+          cx="2.5"
+          cy="11.5"
+          r="1.2"
+        />
+        <circle
+          cx="7.5"
+          cy="11.5"
+          r="1.2"
+        />
+      </svg>
     </div>
     <button
       v-if="selectable && !bulkSelect"
@@ -24,7 +60,18 @@
       :title="selected ? 'Deselect' : 'Select (Shift+click for range)'"
       @click.stop="(e) => $emit('toggle-select', file.id, e.shiftKey)"
     >
-      <span class="checkbox-icon">{{ selected ? '✓' : '' }}</span>
+      <svg
+        v-if="selected"
+        class="checkbox-icon"
+        width="11"
+        height="11"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="3"
+      >
+        <path d="M20 6L9 17l-5-5" />
+      </svg>
     </button>
 
     <div
@@ -48,7 +95,15 @@
         v-if="isVideoFile"
         class="video-play-overlay"
       >
-        <span class="play-icon">▶</span>
+        <svg
+          class="play-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+        >
+          <path d="M8 5v14l11-7z" />
+        </svg>
       </div>
       <label
         v-if="bulkSelect"
@@ -63,26 +118,77 @@
           @change="$emit('toggle-select', file.id)"
         >
       </label>
+      <div
+        v-if="showFileInfo"
+        class="item-actions"
+        @click.stop
+      >
+        <button
+          v-if="!isVideoFile && canRotate"
+          class="tile-btn"
+          title="Rotate left 90°"
+          @click.stop="$emit('rotate', file.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M3 12a9 9 0 1 0 3-6.7" />
+            <path d="M3 4v5h5" />
+          </svg>
+        </button>
+        <button
+          class="tile-btn tile-btn--danger"
+          title="Delete photo"
+          @click.stop="$emit('delete', file.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2" />
+          </svg>
+        </button>
+      </div>
       <button
         v-if="moveTarget"
         class="move-here-btn"
         title="Move selected images here"
         @click.stop="$emit('move-here', file.id)"
       >
-        ⬇ Move here
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+        >
+          <path d="M12 5v14M19 12l-7 7-7-7" />
+        </svg>
+        <span>Move here</span>
       </button>
       <span
         v-if="groupStart"
         class="group-start-badge"
         title="A group starts at this photo"
-      >◆ Group start</span>
+      >Group start</span>
       <button
         v-else-if="canStartGroup"
         class="start-group-btn"
         title="Start a new group at this photo"
         @click.stop="$emit('start-group', file.id)"
       >
-        ＋ Start group
+        Start group
       </button>
     </div>
     <div
@@ -92,14 +198,19 @@
       <div class="file-name">
         {{ file.originalName }}
       </div>
+      <!-- When a photo carries its own date, that is the one worth showing; the upload
+           date stays available on hover rather than taking a second line on every tile. -->
       <div class="file-meta">
         <span class="file-size">{{ fileSize }}</span>
-        <span class="file-date">{{ fileDate }}</span>
         <span
           v-if="exifDate"
           class="file-exif-date"
-          title="EXIF DateTimeOriginal"
-        >📷 {{ exifDate }}</span>
+          :title="uploadedTitle"
+        >Taken {{ exifDate }}</span>
+        <span
+          v-else-if="fileDate"
+          class="file-date"
+        >{{ fileDate }}</span>
       </div>
       <div class="file-tags">
         <span
@@ -120,6 +231,7 @@
         <select
           class="tag-select"
           :value="''"
+          aria-label="Add a tag to this photo"
           @change="handleAddTag"
           @click.stop
         >
@@ -135,21 +247,6 @@
             {{ tag.name }}
           </option>
         </select>
-        <button
-          v-if="!isVideoFile && canRotate"
-          class="rotate-btn"
-          title="Rotate left 90°"
-          @click.stop="$emit('rotate', file.id)"
-        >
-          ↻
-        </button>
-        <button
-          class="delete-btn"
-          title="Delete photo"
-          @click.stop="$emit('delete', file.id)"
-        >
-          🗑️
-        </button>
       </div>
     </div>
   </div>
@@ -252,6 +349,7 @@ const canRotate = computed(() => true)
 const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))
 const exifDate = computed(() => props.file.exifDateTimeOriginal ? formatDate(props.file.exifDateTimeOriginal) : null)
+const uploadedTitle = computed(() => fileDate.value ? `Uploaded ${fileDate.value}` : '')
 
 function handleAddTag(event: Event) {
   const target = event.target as HTMLSelectElement

@@ -26,9 +26,19 @@
         <span class="placeholder-label">Empty</span>
       </div>
 
+      <!-- Ties the masthead's "phone uploads to X" line to the tile it means. -->
+      <span
+        v-if="isUploadTarget"
+        class="tile-destination"
+        title="Your phone is uploading into this album"
+      >
+        <span class="receiving-dot receiving-dot--live" />
+        <span class="tile-destination-label">Receiving</span>
+      </span>
+
       <div class="tile-caption">
         <span class="tile-frame-count">
-          {{ album.fileCount || 0 }}&nbsp;{{ (album.fileCount || 0) === 1 ? 'frame' : 'frames' }}
+          {{ (album.fileCount || 0).toLocaleString() }}&nbsp;{{ (album.fileCount || 0) === 1 ? 'frame' : 'frames' }}
         </span>
         <h3 class="tile-title">
           {{ album.name }}
@@ -124,13 +134,15 @@ interface Props {
   canDuplicate?: boolean
   tileIndex?: number
   isDeleting?: boolean
+  isUploadTarget?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   canDelete: false,
   canDuplicate: false,
   tileIndex: 0,
-  isDeleting: false
+  isDeleting: false,
+  isUploadTarget: false
 })
 
 defineEmits<{

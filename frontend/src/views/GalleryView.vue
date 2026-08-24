@@ -17,252 +17,193 @@
       >
         <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
       </svg>
-      <p class="album-deleting-message">Deleting album and all photos…</p>
-      <p class="album-deleting-sub">This may take a moment.</p>
+      <p class="album-deleting-message">
+        Deleting album and all photos…
+      </p>
+      <p class="album-deleting-sub">
+        This may take a moment.
+      </p>
     </div>
-    <!-- Minimal Header -->
+    <!--
+      Masthead, shared with the albums page: identity, where you are, and the account. The
+      album's own actions live with the album below, not up here.
+    -->
+    <header
+      v-if="!presentationMode"
+      class="picz-header"
+    >
+      <router-link
+        to="/albums"
+        class="brand-wordmark"
+      >
+        Picz
+      </router-link>
+      <div class="crumb">
+        <router-link
+          to="/albums"
+          class="crumb-link"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M19 12H5M11 18l-6-6 6-6" />
+          </svg>
+          <span class="crumb-name">All albums</span>
+        </router-link>
+      </div>
+      <AccountMenu v-if="isLoggedIn" />
+    </header>
+
     <div
       v-if="!presentationMode"
-      class="gallery-header-minimal"
+      class="album-head"
     >
-      <div class="header-top-bar">
-        <button
-          class="back-link"
-          @click="goBack"
-        >
-          ← Back to Albums
-        </button>
-        <div
-          v-if="isLoggedIn"
-          class="header-actions"
-        >
-          <button
-            class="action-link"
-            @click="togglePresentation"
-          >
-            Present
-          </button>
-          <button
-            class="action-link"
-            @click="copyPresentationUrl"
-          >
-            Share
-          </button>
-          <button
-            class="action-link action-delete"
-            :disabled="isDeletingAlbum"
-            @click="handleDeleteAlbum"
-          >
-            {{ isDeletingAlbum ? 'Deleting…' : 'Delete' }}
-          </button>
-          <span class="divider">|</span>
-          <button
-            class="action-link"
-            @click="goToProfile"
-          >
-            👤 Profile
-          </button>
-        </div>
-      </div>
-
-      <div class="album-header-content">
+      <div class="album-head-top">
         <div class="title-and-meta">
           <EditableTitle
-            :title="album?.name || 'Loading...'"
+            :title="album?.name || 'Loading…'"
             :can-edit="isLoggedIn && !presentationMode"
             title-tag="h1"
             @update:title="handleUpdateAlbumTitle"
           />
           <div class="album-meta">
-            <span class="meta-item">{{ files.length }} photos</span>
-            <span class="meta-dot">•</span>
-            <span class="meta-item">{{ formattedTotalSize }}</span>
+            <span class="album-meta-facts">
+              <strong>{{ files.length.toLocaleString() }}</strong>&nbsp;{{ files.length === 1 ? 'photo' : 'photos' }}<span
+                class="shelf-dot"
+              >·</span><strong>{{ formattedTotalSize }}</strong>
+            </span>
+            <router-link
+              v-if="isLoggedIn"
+              class="album-meta-link"
+              :to="{ name: 'AlbumAnalytics', params: { albumId: String(albumId) } }"
+            >
+              Analytics
+            </router-link>
           </div>
         </div>
 
         <div
-          v-if="!presentationMode"
-          class="album-description-minimal"
-        >
-          <div
-            v-if="!isEditingDescription"
-            class="description-view"
-          >
-            <p
-              v-if="album?.description"
-              class="description-text-minimal"
-            >
-              {{ album.description }}
-            </p>
-            <button
-              v-else-if="isLoggedIn"
-              class="add-description-btn"
-              @click="startEditDescription"
-            >
-              + Add description
-            </button>
-            <button
-              v-if="isLoggedIn && album?.description"
-              class="edit-description-link"
-              @click="startEditDescription"
-            >
-              Edit
-            </button>
-          </div>
-          <div
-            v-else
-            class="description-edit"
-          >
-            <textarea
-              ref="descriptionInput"
-              v-model="editedDescription"
-              class="description-textarea"
-              placeholder="Describe this album..."
-              rows="2"
-              @keyup.esc="cancelEditDescription"
-              @keydown.enter.meta="saveDescription"
-              @keydown.enter.ctrl="saveDescription"
-            />
-            <div class="description-actions">
-              <button
-                class="btn-save-small"
-                @click="saveDescription"
-              >
-                Save
-              </button>
-              <button
-                class="btn-cancel-link"
-                @click="cancelEditDescription"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Analytics Section -->
-        <div
-          v-if="isLoggedIn && !presentationMode"
-          class="analytics-section"
+          v-if="isLoggedIn"
+          class="album-head-actions"
         >
           <button
-            class="analytics-toggle"
-            @click="toggleAnalytics"
+            class="btn"
+            @click="togglePresentation"
           >
-            <span class="toggle-icon">{{ showAnalytics ? '▼' : '▶' }}</span>
-            Analytics
-            <span
-              v-if="!showAnalytics && analyticsStats"
-              class="analytics-preview"
-            >
-              ({{ analyticsStats.uniqueVisitors }} visitors, {{ analyticsStats.totalEvents }} events)
-            </span>
+            Present
           </button>
-
-          <div
-            v-if="showAnalytics"
-            class="analytics-content"
+          <button
+            class="btn"
+            @click="copyPresentationUrl"
           >
-            <div class="analytics-header">
+            Share
+          </button>
+          <MenuButton
+            label="Manage"
+            align="right"
+          >
+            <template #default="{ close }">
+              <p class="popover-head">
+                This album
+              </p>
               <button
-                class="refresh-button"
-                @click="loadAnalyticsStats"
-                :disabled="loadingAnalytics"
-                title="Refresh analytics data"
+                class="menu-item"
+                :class="{ 'menu-item--on': tagPickerOpen }"
+                role="menuitem"
+                @click="close(); toggleTagPicker()"
               >
-                <span class="refresh-icon">↻</span>
-                Refresh
+                <span class="menu-item-label">Album tags</span>
+                <span class="menu-item-count">{{ enabledAlbumTags.length }}</span>
               </button>
               <button
-                v-if="analyticsStats"
-                class="pause-button"
-                :class="{ 'paused': analyticsStats.analyticsPaused }"
-                @click="handleToggleAnalyticsPaused"
-                :title="analyticsStats.analyticsPaused ? 'Resume analytics counting' : 'Pause analytics counting'"
+                class="menu-item"
+                :class="{ 'menu-item--on': duplicateFilterActive }"
+                role="menuitem"
+                @click="close(); toggleDuplicateFilter()"
               >
-                {{ analyticsStats.analyticsPaused ? '▶ Resume' : '⏸ Pause' }}
+                <span class="menu-item-label">
+                  {{ duplicateFilterActive ? 'Stop checking duplicates' : 'Find duplicate names' }}
+                </span>
               </button>
+              <div class="popover-sep" />
               <button
-                v-if="analyticsStats"
-                class="reset-button"
-                @click="handleResetAnalytics"
-                title="Delete all analytics data for this album"
+                class="menu-item menu-item--danger"
+                role="menuitem"
+                :disabled="isDeletingAlbum"
+                @click="close(); handleDeleteAlbum()"
               >
-                ✕ Reset
+                <span class="menu-item-label">
+                  {{ isDeletingAlbum ? 'Deleting…' : 'Delete album' }}
+                </span>
               </button>
-            </div>
-            <div
-              v-if="analyticsStats && analyticsStats.analyticsPaused"
-              class="analytics-paused-notice"
-            >
-              Analytics counting is paused — no new events are being recorded.
-            </div>
-            <div
-              v-if="loadingAnalytics"
-              class="analytics-loading"
-            >
-              Loading analytics...
-            </div>
-            <div
-              v-else-if="analyticsStats"
-              class="analytics-stats"
-            >
-              <div class="stats-grid">
-                <div class="stat-card">
-                  <div class="stat-value">
-                    {{ analyticsStats.uniqueVisitors }}
-                  </div>
-                  <div class="stat-label">
-                    Unique Visitors
-                  </div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-value">
-                    {{ analyticsStats.pageViews }}
-                  </div>
-                  <div class="stat-label">
-                    Page Views
-                  </div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-value">
-                    {{ analyticsStats.filterChanges }}
-                  </div>
-                  <div class="stat-label">
-                    Filter Changes
-                  </div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-value">
-                    {{ analyticsStats.audioPlays }}
-                  </div>
-                  <div class="stat-label">
-                    Audio Plays
-                  </div>
-                </div>
-              </div>
+            </template>
+          </MenuButton>
+        </div>
+      </div>
 
-              <div
-                v-if="Object.keys(analyticsStats.filterTagCounts).length > 0"
-                class="filter-stats"
-              >
-                <h3>Popular Filter Tags</h3>
-                <div class="filter-tag-list">
-                  <div
-                    v-for="(count, tag) in analyticsStats.filterTagCounts"
-                    :key="tag"
-                    class="filter-tag-item"
-                  >
-                    <span class="filter-tag-name">{{ tag }}</span>
-                    <span class="filter-tag-count">{{ count }} events</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+      <div class="album-description-minimal">
+        <div
+          v-if="!isEditingDescription"
+          class="description-view"
+        >
+          <p
+            v-if="album?.description"
+            class="description-text-minimal"
+          >
+            {{ album.description }}
+          </p>
+          <button
+            v-else-if="isLoggedIn"
+            class="add-description-btn"
+            @click="startEditDescription"
+          >
+            + Add description
+          </button>
+          <button
+            v-if="isLoggedIn && album?.description"
+            class="edit-description-link"
+            @click="startEditDescription"
+          >
+            Edit
+          </button>
+        </div>
+        <div
+          v-else
+          class="description-edit"
+        >
+          <textarea
+            ref="descriptionInput"
+            v-model="editedDescription"
+            class="description-textarea"
+            placeholder="Describe this album…"
+            rows="2"
+            @keyup.esc="cancelEditDescription"
+            @keydown.enter.meta="saveDescription"
+            @keydown.enter.ctrl="saveDescription"
+          />
+          <div class="description-actions">
+            <button
+              class="btn-save-small"
+              @click="saveDescription"
+            >
+              Save
+            </button>
+            <button
+              class="btn-cancel-link"
+              @click="cancelEditDescription"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       </div>
     </div>
+
 
     <!-- Presentation Mode Header -->
     <div
@@ -391,124 +332,46 @@
       </div>
     </div>
 
-    <!-- Regular mode controls -->
+    <!--
+      The shelf: what the album holds, how you are looking at it, then what you can do to it.
+      View mode and tag filter are separate controls — the map is a view, not a tag — and the
+      rare or destructive operations sit inside named menus instead of holding permanent space.
+    -->
     <div
       v-if="!presentationMode && isLoggedIn"
-      class="controls"
+      class="shelf gallery-shelf"
     >
-      <div class="left-controls">
-        <button
-          class="refresh-btn"
-          @click="handleRefresh"
-        >
-          🔄 Refresh
-        </button>
-        <button
-          class="upload-btn"
-          title="Upload photos to this album"
-          @click="triggerFileUpload"
-        >
-          📤 Upload Files
-        </button>
-        <input
-          ref="fileInput"
-          type="file"
-          multiple
-          accept="image/*,video/*"
-          style="display: none"
-          @change="handleFileUpload"
-        >
-        <button
-          class="more-actions-btn"
-          :class="{ 'more-actions-btn-active': mobileActionsOpen }"
-          :aria-expanded="mobileActionsOpen"
-          @click="mobileActionsOpen = !mobileActionsOpen"
-        >
-          {{ mobileActionsOpen ? '✕ Close' : 'More ▾' }}
-        </button>
-        <div
-          class="secondary-actions"
-          :class="{ 'secondary-actions--open': mobileActionsOpen }"
-        >
+      <div class="shelf-views">
+        <span class="shelf-eyebrow">View</span>
+        <div class="segmented">
           <button
-            class="reorder-btn"
-            title="Reorder files by numbers in filename"
-            @click="mobileActionsOpen = false; handleReorderByFilename()"
+            v-for="mode in viewModes"
+            :key="mode.value"
+            class="segmented-btn"
+            :class="{ 'segmented-btn--active': viewMode === mode.value }"
+            :disabled="mode.disabled"
+            :title="mode.hint"
+            :aria-pressed="viewMode === mode.value"
+            @click="viewMode = mode.value"
           >
-            🔢 Reorder by Filename
-          </button>
-          <button
-            class="reorder-btn"
-            title="Reorder files by EXIF date (photo taken date)"
-            @click="mobileActionsOpen = false; handleReorderByExif()"
-          >
-            📷 Reorder by EXIF
-          </button>
-          <button
-            class="duplicates-btn"
-            :class="{ 'duplicates-btn-active': duplicateFilterActive }"
-            :title="duplicateFilterActive ? 'Exit duplicate view' : 'Show only files with duplicate names'"
-            @click="mobileActionsOpen = false; toggleDuplicateFilter()"
-          >
-            {{ duplicateFilterActive ? '✕ Exit Duplicates' : '🔍 Find Duplicates' }}
-          </button>
-          <button
-            class="reorder-mode-btn"
-            :class="{ 'reorder-mode-btn-active': reorderModeActive }"
-            :title="reorderModeActive ? 'Exit reorder mode' : 'Select and mass-move images'"
-            @click="mobileActionsOpen = false; toggleReorderMode()"
-          >
-            {{ reorderModeActive ? '✕ Exit Reorder' : '🔀 Reorder' }}
-          </button>
-          <button
-            class="tag-manage-btn"
-            :class="{ 'tag-manage-btn-active': tagPickerOpen }"
-            title="Choose which tags are available in this album"
-            @click="mobileActionsOpen = false; toggleTagPicker()"
-          >
-            🏷️ Manage Album Tags
-          </button>
-          <button
-            class="tag-all-btn"
-            :class="{ 'tag-all-btn-active': allFilesHaveAllTag }"
-            :disabled="taggingAllFiles || (files.length === 0 && !selectedTag)"
-            :title="allFilesHaveAllTag
-              ? 'Remove the &quot;all&quot; tag from every photo and video in this album'
-              : 'Give every photo and video in this album the &quot;all&quot; tag'"
-            @click="mobileActionsOpen = false; handleToggleAllTag()"
-          >
-            {{ taggingAllFiles ? '⏳ Working…' : allFilesHaveAllTag ? '🏷️ Untag All from "all"' : '🏷️ Tag All as "all"' }}
+            {{ mode.label }}
           </button>
         </div>
-        <button
-          v-if="duplicateFilterActive"
-          class="delete-selected-btn"
-          :disabled="selectedForDeletion.size === 0"
-          title="Delete all selected files"
-          @click="handleDeleteSelected"
-        >
-          🗑️ Delete Selected ({{ selectedForDeletion.size }})
-        </button>
-        <button
-          v-if="reorderModeActive"
-          class="move-to-top-btn"
-          :disabled="selectedForReorder.size === 0"
-          title="Move selected images to the top"
-          @click="handleMoveSelectedToTop"
-        >
-          ⬆ Move to Top ({{ selectedForReorder.size }})
-        </button>
       </div>
 
-      <div class="filter-controls">
+      <div class="shelf-filter">
         <label
           for="tag-filter"
-          class="filter-label"
-        >Filter by tag:</label>
+          class="shelf-eyebrow"
+        >Tag</label>
         <select
           id="tag-filter"
-          v-model="filterSelection"
-          aria-label="Filter by tag"
+          v-model="selectedTag"
+          class="shelf-select"
+          :disabled="viewMode === 'map'"
+          :title="viewMode === 'map'
+            ? 'The map shows every located photo in the album, so a tag filter does not apply'
+            : 'Show only photos carrying this tag'"
         >
           <option value="">
             All photos
@@ -520,53 +383,291 @@
           >
             {{ tag.name }}
           </option>
-          <option
-            v-if="mapFilterAvailable"
-            :value="MAP_FILTER_VALUE"
-          >
-            🗺️ Map
-          </option>
         </select>
       </div>
 
-      <label
-        v-if="dayRegionAvailable"
-        class="day-region-toggle"
-        :class="{ 'day-region-toggle--active': dayRegionGrouping }"
-        title="Group these photos by the day they were taken, then by places within 2 km of each other"
+      <div
+        v-if="viewMode !== 'map'"
+        class="grid-size-picker"
       >
-        <input
-          v-model="dayRegionGrouping"
-          type="checkbox"
-        >
-        <span>📅 By day &amp; region</span>
-      </label>
-
-      <div class="grid-size-picker">
         <button
           v-for="size in ['small', 'medium', 'large']"
           :key="size"
           class="grid-size-btn"
           :class="{ 'grid-size-btn--active': albumSize === size }"
           :title="`${size.charAt(0).toUpperCase() + size.slice(1)} thumbnails`"
+          :aria-pressed="albumSize === size"
           @click="albumSize = size"
         >
-          <svg v-if="size === 'small'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="6" height="6" rx="1"/>
-            <rect x="8" y="0" width="6" height="6" rx="1"/>
-            <rect x="0" y="8" width="6" height="6" rx="1"/>
-            <rect x="8" y="8" width="6" height="6" rx="1"/>
+          <svg
+            v-if="size === 'small'"
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="currentColor"
+          >
+            <rect
+              x="0"
+              y="0"
+              width="6"
+              height="6"
+              rx="1"
+            />
+            <rect
+              x="8"
+              y="0"
+              width="6"
+              height="6"
+              rx="1"
+            />
+            <rect
+              x="0"
+              y="8"
+              width="6"
+              height="6"
+              rx="1"
+            />
+            <rect
+              x="8"
+              y="8"
+              width="6"
+              height="6"
+              rx="1"
+            />
           </svg>
-          <svg v-else-if="size === 'medium'" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="6" height="14" rx="1"/>
-            <rect x="8" y="0" width="6" height="14" rx="1"/>
+          <svg
+            v-else-if="size === 'medium'"
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="currentColor"
+          >
+            <rect
+              x="0"
+              y="0"
+              width="6"
+              height="14"
+              rx="1"
+            />
+            <rect
+              x="8"
+              y="0"
+              width="6"
+              height="14"
+              rx="1"
+            />
           </svg>
-          <svg v-else width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-            <rect x="0" y="0" width="14" height="14" rx="1"/>
+          <svg
+            v-else
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="currentColor"
+          >
+            <rect
+              x="0"
+              y="0"
+              width="14"
+              height="14"
+              rx="1"
+            />
           </svg>
         </button>
       </div>
+
+      <span class="shelf-rule" />
+
+      <div class="shelf-controls">
+        <button
+          class="action-link"
+          :disabled="loadingFiles"
+          @click="handleRefresh"
+        >
+          {{ loadingFiles ? 'Refreshing…' : 'Refresh' }}
+        </button>
+
+        <MenuButton label="Sort">
+          <template #default="{ close }">
+            <p class="popover-head">
+              Reorder every photo by
+            </p>
+            <button
+              class="menu-item"
+              role="menuitem"
+              @click="close(); handleReorderByFilename()"
+            >
+              <span class="menu-item-label">Number in filename</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              @click="close(); handleReorderByExif()"
+            >
+              <span class="menu-item-label">Date the photo was taken</span>
+            </button>
+            <div class="popover-sep" />
+            <button
+              class="menu-item"
+              :class="{ 'menu-item--on': reorderModeActive }"
+              role="menuitem"
+              @click="close(); toggleReorderMode()"
+            >
+              <span class="menu-item-label">
+                {{ reorderModeActive ? 'Stop arranging by hand' : 'Arrange by hand' }}
+              </span>
+            </button>
+          </template>
+        </MenuButton>
+
+        <MenuButton
+          label="Tag all"
+          align="right"
+        >
+          <template #default="{ close }">
+            <p class="popover-head">
+              Every photo in this album
+            </p>
+            <p
+              v-if="enabledAlbumTags.length === 0"
+              class="popover-note"
+            >
+              No tags are enabled for this album yet. Enable some under Manage → Album tags.
+            </p>
+            <template v-else>
+              <div class="popover-field">
+                <label
+                  for="bulk-tag"
+                  class="popover-field-label"
+                >Tag</label>
+                <select
+                  id="bulk-tag"
+                  v-model="bulkTagName"
+                  class="shelf-select"
+                  :disabled="!!albumTagBusy"
+                >
+                  <option
+                    v-for="tag in enabledAlbumTags"
+                    :key="tag.id"
+                    :value="tag.name"
+                  >
+                    {{ tag.name }}
+                  </option>
+                </select>
+              </div>
+              <button
+                class="menu-item"
+                :disabled="albumTagDisabled"
+                :title="albumTagAddTitle"
+                @click="close(); handleAlbumTagAll('add')"
+              >
+                <span class="menu-item-label">
+                  {{ albumTagBusy === 'add' ? 'Working…' : 'Add to every photo' }}
+                </span>
+              </button>
+              <button
+                class="menu-item"
+                :disabled="albumTagDisabled"
+                :title="albumTagRemoveTitle"
+                @click="close(); handleAlbumTagAll('remove')"
+              >
+                <span class="menu-item-label">
+                  {{ albumTagBusy === 'remove' ? 'Working…' : 'Remove from every photo' }}
+                </span>
+              </button>
+            </template>
+          </template>
+        </MenuButton>
+
+        <button
+          class="new-album-btn"
+          title="Upload photos to this album"
+          @click="triggerFileUpload"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <line
+              x1="12"
+              y1="5"
+              x2="12"
+              y2="19"
+            />
+            <line
+              x1="5"
+              y1="12"
+              x2="19"
+              y2="12"
+            />
+          </svg>
+          <span>Upload photos</span>
+        </button>
+        <input
+          ref="fileInput"
+          type="file"
+          multiple
+          accept="image/*,video/*"
+          style="display: none"
+          @change="handleFileUpload"
+        >
+      </div>
     </div>
+
+    <!-- A mode gets its own strip while it is on, instead of leaving its controls lying around. -->
+    <div
+      v-if="!presentationMode && isLoggedIn && reorderModeActive"
+      class="mode-bar"
+    >
+      <span class="mode-bar-label">Arranging by hand</span>
+      <span class="mode-bar-hint">
+        {{ selectedForReorder.size > 0
+          ? `${selectedForReorder.size} selected — click the gap where they should go, or move them to the top.`
+          : 'Select the photos you want to move.' }}
+      </span>
+      <button
+        class="btn"
+        :disabled="selectedForReorder.size === 0"
+        @click="handleMoveSelectedToTop"
+      >
+        Move to top
+      </button>
+      <button
+        class="action-link"
+        @click="toggleReorderMode"
+      >
+        Done
+      </button>
+    </div>
+
+    <div
+      v-if="!presentationMode && isLoggedIn && duplicateFilterActive"
+      class="mode-bar"
+    >
+      <span class="mode-bar-label">Duplicate names</span>
+      <span class="mode-bar-hint">
+        {{ displayedFiles.length > 0
+          ? `${displayedFiles.length} files share a name with another file.`
+          : 'Every file in this album has a unique name.' }}
+      </span>
+      <button
+        class="btn-danger"
+        :disabled="selectedForDeletion.size === 0"
+        @click="handleDeleteSelected"
+      >
+        Delete selected ({{ selectedForDeletion.size }})
+      </button>
+      <button
+        class="action-link"
+        @click="toggleDuplicateFilter"
+      >
+        Done
+      </button>
+    </div>
+
 
     <div
       v-if="!presentationMode && isLoggedIn && tagPickerOpen"
@@ -770,7 +871,24 @@
         >
           <div class="region-header">
             <span class="region-name">
-              {{ cluster.located ? '📍' : '❓' }} {{ regionLabel(cluster.center) }}
+              <svg
+                v-if="cluster.located"
+                class="region-icon"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
+                <circle
+                  cx="12"
+                  cy="10"
+                  r="3"
+                />
+              </svg>
+              {{ regionLabel(cluster.center) }}
             </span>
             <span class="region-meta">
               {{ cluster.files.length }} {{ cluster.files.length === 1 ? 'photo' : 'photos' }}<template
@@ -884,7 +1002,12 @@
       :selected-count="selectedFileIds.size"
       :available-tags="enabledAlbumTags"
       :frequent-tags="frequentTags"
+      :rotatable-count="selectedRotatableFiles.length"
+      :busy="bulkActionBusy"
+      :busy-label="bulkActionLabel"
       @add-tag="handleBulkAddTag"
+      @rotate="handleBulkRotate"
+      @delete-selected="handleBulkDelete"
       @clear="clearSelection"
     />
 
@@ -916,10 +1039,9 @@ import { useSlideshow } from '../composables/useSlideshow'
 import { useSlideshowPlayback } from '../composables/useSlideshowPlayback'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
-import { useAnalytics } from '../composables/useAnalytics'
 import { useUpload } from '../composables/useUpload'
 import { usePresentationGroups } from '../composables/usePresentationGroups'
-import { formatBytes } from '../utils/format'
+import { formatBytes, isVideo } from '../utils/format'
 import { groupByDayAndRegion, formatDayLabel, formatDistance, DEFAULT_REGION_RADIUS_METERS } from '../utils/dayRegionGrouping'
 import { useRegionNames } from '../composables/useRegionNames'
 import { albumMapView } from '../types'
@@ -930,6 +1052,8 @@ import BulkTagBar from '../components/BulkTagBar.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
 import PresentationGroupDialog from '../components/PresentationGroupDialog.vue'
 import PhotoMap from '../components/PhotoMap.vue'
+import AccountMenu from '../components/AccountMenu.vue'
+import MenuButton from '../components/MenuButton.vue'
 import { useCapabilities } from '../composables/useCapabilities'
 
 export default {
@@ -941,7 +1065,9 @@ export default {
     BulkTagBar,
     PresentationGroupHeader,
     PresentationGroupDialog,
-    PhotoMap
+    PhotoMap,
+    AccountMenu,
+    MenuButton
   },
   props: {
     albumId: {
@@ -955,7 +1081,7 @@ export default {
   },
   setup(props) {
     const router = useRouter()
-    const { isLoggedIn, logout } = useAuth()
+    const { isLoggedIn } = useAuth()
     const { apiUrl, fetchWithAuth } = useApi()
     const { uploadFile } = useUpload()
     const { currentAlbum, loadAlbumById, updateAlbum, saveMapView, deleteAlbum } = useAlbums()
@@ -1021,7 +1147,6 @@ export default {
     } = usePresentationGroups()
     const { success, error, warning, info, removeNotification } = useNotifications()
     const { confirm: confirmDialog } = useConfirm()
-    const { getAlbumStatistics, resetAlbumAnalytics, setAnalyticsPaused } = useAnalytics()
 
     const isDeletingAlbum = ref(false)
     const album = computed(() => currentAlbum.value)
@@ -1067,9 +1192,6 @@ export default {
     const isEditingDescription = ref(false)
     const editedDescription = ref('')
     const descriptionInput = ref(null)
-    const showAnalytics = ref(false)
-    const loadingAnalytics = ref(false)
-    const analyticsStats = ref(null)
     const duplicateFilterActive = ref(false)
     const selectedForDeletion = ref(new Set())
     const reorderModeActive = ref(false)
@@ -1077,7 +1199,6 @@ export default {
     const tagPickerOpen = ref(false)
     const pickerSelectedTagIds = ref(new Set())
     const savingEnabledTags = ref(false)
-    const mobileActionsOpen = ref(false)
 
     const EXCLUDED_DUPLICATE_NAME = 'fullsizerender.heic'
 
@@ -1123,25 +1244,6 @@ export default {
       !props.presentationMode && mapsEnabled.value && hasLocatedFiles.value
     )
 
-    // Single <select> over two pieces of state. MAP_FILTER_VALUE cannot collide with a real tag
-    // name because tag names never contain a space or the surrounding markers.
-    const MAP_FILTER_VALUE = '__map__'
-    const filterSelection = computed({
-      get() {
-        return mapMode.value ? MAP_FILTER_VALUE : selectedTag.value
-      },
-      set(value) {
-        if (value === MAP_FILTER_VALUE) {
-          mapMode.value = true
-          // Clear the tag too: one dropdown means one active filter, and leaving a tag set
-          // would silently hide pins for photos outside it with nothing on screen saying so.
-          selectedTag.value = ''
-          return
-        }
-        mapMode.value = false
-        selectedTag.value = value
-      }
-    })
 
     // An album can lose its located photos (last one deleted) while the map is open.
     watch(mapFilterAvailable, available => {
@@ -1165,6 +1267,54 @@ export default {
     )
 
     const dayRegionActive = computed(() => dayRegionAvailable.value && dayRegionGrouping.value)
+
+    // Losing the tag drops grouping too, so the View control never claims a mode the page is
+    // not actually in.
+    watch(dayRegionAvailable, available => {
+      if (!available) dayRegionGrouping.value = false
+    })
+
+    // --- View mode -------------------------------------------------------------------------
+    // Grid / Days / Map used to share the tag dropdown, which meant a view was hiding in a list
+    // of filters. They are now their own control, over the same two flags as before: the map is
+    // still kept out of `selectedTag` (it feeds recordings, groups and analytics) and day
+    // grouping still needs a tag to group.
+    const viewMode = computed({
+      get() {
+        if (mapMode.value) return 'map'
+        return dayRegionActive.value ? 'days' : 'grid'
+      },
+      set(value) {
+        if (value === 'map') {
+          mapMode.value = true
+          dayRegionGrouping.value = false
+          // The map is fed the whole album rather than the filtered set, so a tag left set
+          // would claim to narrow something it does not. Clear it and disable the control.
+          selectedTag.value = ''
+          return
+        }
+        mapMode.value = false
+        dayRegionGrouping.value = value === 'days'
+      }
+    })
+
+    const viewModes = computed(() => {
+      const modes = [
+        { value: 'grid', label: 'Grid', disabled: false, hint: 'Every photo in one grid' },
+        {
+          value: 'days',
+          label: 'Days',
+          disabled: !dayRegionAvailable.value,
+          hint: dayRegionAvailable.value
+            ? 'Group by the day each photo was taken, then by place'
+            : 'Pick a tag first — day sections over a whole album are as long as the album'
+        }
+      ]
+      if (mapFilterAvailable.value) {
+        modes.push({ value: 'map', label: 'Map', disabled: false, hint: 'Show located photos on a map' })
+      }
+      return modes
+    })
 
     const dayRegionGroups = computed(() =>
       dayRegionActive.value
@@ -1424,14 +1574,47 @@ export default {
     const selectedFileIds = ref(new Set())
     const lastSelectedIndex = ref(null)
     const selectionActive = computed(() => selectedFileIds.value.size > 0)
+    // Guards the bulk bar while a rotate/delete run is in flight; the label doubles as the
+    // bar's progress text.
+    const bulkActionBusy = ref(false)
+    const bulkActionLabel = ref('')
     const ALL_TAG = 'all'
     const SYSTEM_TAGS = new Set(['no_tag', ALL_TAG])
-    const taggingAllFiles = ref(false)
-    // Drives the "Tag All"/"Untag All" label. Based on the loaded files, which is the whole album
-    // unless a tag filter is active — the button itself always acts on the whole album, and the
-    // reload after each run brings the label back in sync.
-    const allFilesHaveAllTag = computed(() =>
-      files.value.length > 0 && files.value.every(f => (f.tags || []).includes(ALL_TAG))
+    // Which tag the album-wide Add to All / Remove from All pair acts on.
+    const bulkTagName = ref('')
+    // 'add' | 'remove' | null — holds the mode so the spinner lands on the button that was clicked.
+    const albumTagBusy = ref(null)
+    const albumTagDisabled = computed(() =>
+      !!albumTagBusy.value
+      || !bulkTagName.value
+      || (files.value.length === 0 && !selectedTag.value)
+    )
+    // The bulk endpoints hit every file in the album, so the scope caption must show the
+    // album-wide count even when a tag filter is narrowing the grid. With no filter the loaded set
+    // *is* the album and stays live across uploads/deletes; with one, fall back to the album's own
+    // fileCount (AlbumService.convertToAlbumInfo counts the whole album), which can lag a little.
+    const albumFileCount = computed(() =>
+      selectedTag.value
+        ? (album.value?.fileCount ?? files.value.length)
+        : files.value.length
+    )
+    // No longer rendered in the bar — a second line under the segmented control made the row's
+    // baselines uneven. The count survives in the button tooltips and the confirm dialog.
+    // Deliberately avoids the word "all": `all` is itself a tag name here, so "add to all" reads
+    // as "add the all tag".
+    const albumTagScopeText = computed(() => {
+      const count = albumFileCount.value
+      return `${count} photo${count !== 1 ? 's' : ''} in this album`
+    })
+    const albumTagAddTitle = computed(() =>
+      bulkTagName.value
+        ? `Add "${bulkTagName.value}" to ${albumTagScopeText.value}`
+        : 'This album has no tags available yet'
+    )
+    const albumTagRemoveTitle = computed(() =>
+      bulkTagName.value
+        ? `Remove "${bulkTagName.value}" from ${albumTagScopeText.value}`
+        : 'This album has no tags available yet'
     )
     const togglableTags = computed(() =>
       availableTags.value.filter(t => !SYSTEM_TAGS.has(t.name))
@@ -1523,6 +1706,14 @@ export default {
       }
     })
 
+    // Keep the album-wide tag selector on a tag that still exists: the list changes when you
+    // switch albums or edit it in "Manage Album Tags", and a stale name would silently 404.
+    watch(enabledAlbumTags, (tags) => {
+      if (!tags.some(t => t.name === bulkTagName.value)) {
+        bulkTagName.value = tags.length > 0 ? tags[0].name : ''
+      }
+    }, { immediate: true })
+
     // Auto-select tag when there's only one tag in presentation mode
     watch(tagsUsedInAlbum, (tags) => {
       if (props.presentationMode && tags.length === 1) {
@@ -1606,10 +1797,6 @@ export default {
         }
       }
     })
-
-    function goBack() {
-      router.push({ name: 'Albums' })
-    }
 
     async function handleRefresh() {
       if (album.value) {
@@ -1718,46 +1905,66 @@ export default {
       }
     }
 
-    async function handleRotateImage(fileId) {
-      try {
-        info('Rotating image...')
-        const response = await fetchWithAuth(`${apiUrl}/api/files/${fileId}/rotate`, {
-          method: 'POST'
-        })
+    // Mirror the api-side state flip locally so GalleryItem's thumbnailReady computed flips to
+    // false and the "Processing…" spinner replaces the thumbnail while the worker rotates.
+    // awaitProcessingDone keeps it in sync afterwards (QUEUED → PROCESSING → DONE).
+    async function enqueueRotate(fileId) {
+      const response = await fetchWithAuth(`${apiUrl}/api/files/${fileId}/rotate`, {
+        method: 'POST'
+      })
+      if (!response.ok) {
+        throw new Error('Failed to rotate image')
+      }
+      const target = files.value.find(f => f.id === fileId)
+      if (target) {
+        target.processingStatus = 'QUEUED'
+      }
+    }
 
-        if (!response.ok) {
-          throw new Error('Failed to rotate image')
-        }
-
-        // Mirror the api-side state flip locally so GalleryItem's thumbnailReady computed flips
-        // to false and the "Processing…" spinner replaces the thumbnail while the worker rotates.
-        // The poll loop below keeps it in sync (QUEUED → PROCESSING → DONE).
-        const target = files.value.find(f => f.id === fileId)
-        if (target) {
-          target.processingStatus = 'QUEUED'
-        }
-
-        // Rotate is async since Phase 4.5: api returns 202 after enqueuing a worker job. Poll
-        // /api/assets/{id}/status until DONE before reloading, otherwise the gallery would show
-        // stale derivatives. Cap the wait so a stuck worker surfaces as a user-visible error
-        // instead of an infinite spinner.
-        const pollDeadline = Date.now() + 60_000
-        while (Date.now() < pollDeadline) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
+    /**
+     * Rotate is async since Phase 4.5: api returns 202 after enqueuing a worker job. Poll
+     * /api/assets/{id}/status until every id is DONE before reloading, otherwise the gallery would
+     * show stale derivatives. Cap the wait so a stuck worker surfaces as a user-visible error
+     * instead of an infinite spinner.
+     *
+     * Returns the ids the worker reported as FAILED/DEAD_LETTER, each with its message; callers
+     * decide whether one failure is fatal (single image) or partial (bulk).
+     */
+    async function awaitProcessingDone(fileIds, timeoutMs) {
+      const pending = new Set(fileIds)
+      const failures = []
+      const pollDeadline = Date.now() + timeoutMs
+      while (pending.size > 0 && Date.now() < pollDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        for (const fileId of [...pending]) {
           const statusRes = await fetchWithAuth(`${apiUrl}/api/assets/${fileId}/status`)
           if (!statusRes.ok) {
             throw new Error('Failed to read rotation status')
           }
           const status = await statusRes.json()
+          const target = files.value.find(f => f.id === fileId)
           if (target && status.processingStatus) {
             target.processingStatus = status.processingStatus
           }
           if (status.processingStatus === 'DONE') {
-            break
+            pending.delete(fileId)
+          } else if (status.processingStatus === 'FAILED' || status.processingStatus === 'DEAD_LETTER') {
+            pending.delete(fileId)
+            failures.push({ fileId, message: status.error || 'Rotation failed on the worker' })
           }
-          if (status.processingStatus === 'FAILED' || status.processingStatus === 'DEAD_LETTER') {
-            throw new Error(status.error || 'Rotation failed on the worker')
-          }
+        }
+      }
+      return failures
+    }
+
+    async function handleRotateImage(fileId) {
+      try {
+        info('Rotating image...')
+        await enqueueRotate(fileId)
+
+        const failures = await awaitProcessingDone([fileId], 60_000)
+        if (failures.length > 0) {
+          throw new Error(failures[0].message)
         }
 
         // Reload files to show the rotated image
@@ -1824,43 +2031,148 @@ export default {
       if (count > 0) success(`Tagged ${count} photo${count !== 1 ? 's' : ''} with "${tagName}"`)
     }
 
-    // Album-wide toggle for the `all` system tag: first click gives every photo/video the tag,
-    // clicking again takes it off every one of them.
-    async function handleToggleAllTag() {
-      if (!album.value || taggingAllFiles.value) return
-      const removing = allFilesHaveAllTag.value
+    // Videos have no rotate job, so the bulk rotate button acts on the image subset only.
+    const selectedRotatableFiles = computed(() =>
+      files.value.filter(f => selectedFileIds.value.has(f.id) && !isVideo(f))
+    )
+
+    async function handleBulkRotate() {
+      const targets = selectedRotatableFiles.value
+      if (targets.length === 0 || bulkActionBusy.value) return
+
+      bulkActionBusy.value = true
+      bulkActionLabel.value = `Rotating ${targets.length}…`
+      try {
+        // Enqueue everything first so the worker can chew through the jobs in parallel, then
+        // wait on the whole batch — polling one image at a time would serialise the wait.
+        const enqueued = []
+        const failures = []
+        for (const file of targets) {
+          try {
+            await enqueueRotate(file.id)
+            enqueued.push(file.id)
+          } catch (err) {
+            failures.push({ fileId: file.id, message: err.message })
+            console.error(`Failed to enqueue rotation for file ${file.id}:`, err)
+          }
+        }
+
+        if (enqueued.length > 0) {
+          // 60s each like the single-image path, but capped so a large selection can't hang the
+          // bar for the rest of the session.
+          const timeoutMs = Math.min(60_000 * enqueued.length, 600_000)
+          failures.push(...await awaitProcessingDone(enqueued, timeoutMs))
+        }
+
+        if (album.value) {
+          await loadAlbumFiles(album.value.id, props.presentationMode)
+        }
+
+        const rotated = targets.length - failures.length
+        if (failures.length === 0) {
+          success(`Rotated ${rotated} image${rotated !== 1 ? 's' : ''}!`)
+        } else if (rotated > 0) {
+          warning(`Rotated ${rotated} image${rotated !== 1 ? 's' : ''}, ${failures.length} failed.`)
+        } else {
+          error('Failed to rotate the selected images.')
+        }
+      } catch (err) {
+        error(`Error rotating images: ${err.message}`)
+      } finally {
+        bulkActionBusy.value = false
+        bulkActionLabel.value = ''
+      }
+    }
+
+    async function handleBulkDelete() {
+      const ids = [...selectedFileIds.value]
+      if (ids.length === 0 || bulkActionBusy.value) return
 
       const confirmed = await confirmDialog(
-        removing
-          ? 'Remove the "all" tag from every photo and video in this album?'
-          : 'Give every photo and video in this album the "all" tag?',
-        { type: 'warning', confirmText: removing ? 'Remove' : 'Tag All' }
+        `Delete ${ids.length} selected file${ids.length !== 1 ? 's' : ''}? This action cannot be undone.`,
+        { type: 'danger', confirmText: 'Delete' }
+      )
+      if (!confirmed) return
+
+      bulkActionBusy.value = true
+      bulkActionLabel.value = `Deleting ${ids.length}…`
+      let successCount = 0
+      const failedIds = []
+      try {
+        for (const id of ids) {
+          try {
+            await deleteFile(id)
+            successCount++
+          } catch (err) {
+            failedIds.push(id)
+            console.error(`Failed to delete file ${id}:`, err)
+          }
+        }
+      } finally {
+        bulkActionBusy.value = false
+        bulkActionLabel.value = ''
+      }
+
+      // deleteFile splices the row out of `files`, so only the selection needs updating. Keep
+      // the ids that failed selected so the user can retry them without reselecting.
+      selectedFileIds.value = new Set(failedIds)
+      lastSelectedIndex.value = null
+
+      if (failedIds.length === 0) {
+        success(`Successfully deleted ${successCount} file${successCount !== 1 ? 's' : ''}!`)
+      } else if (successCount > 0) {
+        warning(`Deleted ${successCount} file${successCount !== 1 ? 's' : ''}, ${failedIds.length} failed.`)
+      } else {
+        error('Failed to delete selected files.')
+      }
+    }
+
+    // Album-wide add/remove of the one tag picked in the dropdown. The api's bulk endpoints are
+    // per-tag, and they reject any tag outside the album's enabled list
+    // (FileStorageService.addTagToAllFilesInAlbum), which is why the dropdown is fed from
+    // `enabledAlbumTags` — the `all` system tag plus the album's enabled tags, `no_tag` excluded.
+    async function handleAlbumTagAll(mode) {
+      if (!album.value || albumTagBusy.value) return
+      const tagName = bulkTagName.value
+      if (!tagName) return
+      const removing = mode === 'remove'
+
+      // The endpoints sweep the whole album, so spell out the blast radius here — the bar itself
+      // no longer shows it.
+      const filterNote = selectedTag.value
+        ? ` This ignores the active "${selectedTag.value}" filter.`
+        : ''
+      const confirmed = await confirmDialog(
+        (removing
+          ? `Remove "${tagName}" from ${albumTagScopeText.value}?`
+          : `Add "${tagName}" to ${albumTagScopeText.value}?`) + filterNote,
+        { type: 'warning', confirmText: removing ? 'Remove everywhere' : 'Add everywhere' }
       )
 
       if (!confirmed) {
         return
       }
 
-      taggingAllFiles.value = true
+      albumTagBusy.value = mode
       try {
         const count = removing
-          ? await removeTagFromAllFiles(album.value.id, ALL_TAG)
-          : await addTagToAllFiles(album.value.id, ALL_TAG)
+          ? await removeTagFromAllFiles(album.value.id, tagName)
+          : await addTagToAllFiles(album.value.id, tagName)
         await loadAlbumFiles(album.value.id, props.presentationMode)
         if (count === 0) {
           info(removing
-            ? 'No photos had the "all" tag.'
-            : 'All photos already have the "all" tag.')
+            ? `No photos had the "${tagName}" tag.`
+            : `Every photo already has the "${tagName}" tag.`)
         } else {
           const plural = count !== 1 ? 's' : ''
           success(removing
-            ? `Removed "all" from ${count} photo${plural}`
-            : `Tagged ${count} photo${plural} with "all"`)
+            ? `Removed "${tagName}" from ${count} photo${plural}`
+            : `Tagged ${count} photo${plural} with "${tagName}"`)
         }
       } catch (err) {
-        error(`Error updating "all" tag: ${err.message}`)
+        error(`Error updating "${tagName}": ${err.message}`)
       } finally {
-        taggingAllFiles.value = false
+        albumTagBusy.value = null
       }
     }
 
@@ -2195,10 +2507,6 @@ export default {
       }
     }
 
-    function goToProfile() {
-      router.push({ name: 'Profile' })
-    }
-
     async function handleDeleteAlbum() {
       if (!album.value) return
 
@@ -2331,56 +2639,6 @@ export default {
       }
     }
 
-    // Analytics
-    async function toggleAnalytics() {
-      showAnalytics.value = !showAnalytics.value
-
-      // Load analytics when opening
-      if (showAnalytics.value && !analyticsStats.value) {
-        await loadAnalyticsStats()
-      }
-    }
-
-    async function loadAnalyticsStats() {
-      if (!album.value) return
-
-      loadingAnalytics.value = true
-      try {
-        analyticsStats.value = await getAlbumStatistics(album.value.id)
-      } catch (err) {
-        console.error('Error loading analytics:', err)
-        error('Failed to load analytics')
-      } finally {
-        loadingAnalytics.value = false
-      }
-    }
-
-    async function handleResetAnalytics() {
-      if (!album.value) return
-      if (!confirm('Reset all analytics data for this album? This cannot be undone.')) return
-      try {
-        await resetAlbumAnalytics(album.value.id)
-        await loadAnalyticsStats()
-        success('Analytics reset successfully')
-      } catch (err) {
-        console.error('Error resetting analytics:', err)
-        error('Failed to reset analytics')
-      }
-    }
-
-    async function handleToggleAnalyticsPaused() {
-      if (!album.value || !analyticsStats.value) return
-      const newPaused = !analyticsStats.value.analyticsPaused
-      try {
-        await setAnalyticsPaused(album.value.id, newPaused)
-        analyticsStats.value = { ...analyticsStats.value, analyticsPaused: newPaused }
-        success(newPaused ? 'Analytics paused' : 'Analytics resumed')
-      } catch (err) {
-        console.error('Error toggling analytics pause:', err)
-        error('Failed to update analytics state')
-      }
-    }
-
     return {
       isLoggedIn,
       album,
@@ -2398,6 +2656,11 @@ export default {
       handleSaveGroup,
       handleDeleteGroup,
       selectedFileIds,
+      selectedRotatableFiles,
+      bulkActionBusy,
+      bulkActionLabel,
+      handleBulkRotate,
+      handleBulkDelete,
       selectionActive,
       frequentTags,
       handleToggleSelect,
@@ -2416,8 +2679,8 @@ export default {
       formatDayLabel,
       formatDistance,
       albumIndexOf,
-      filterSelection,
-      MAP_FILTER_VALUE,
+      viewMode,
+      viewModes,
       albumMapViewValue,
       handleSaveMapView,
       handleClearMapView,
@@ -2426,16 +2689,18 @@ export default {
       enabledAlbumTags,
       togglableTags,
       tagPickerOpen,
-      mobileActionsOpen,
       pickerSelectedTagIds,
       savingEnabledTags,
       toggleTagPicker,
       closeTagPicker,
       togglePickerTag,
       saveEnabledTags,
-      allFilesHaveAllTag,
-      taggingAllFiles,
-      handleToggleAllTag,
+      bulkTagName,
+      albumTagBusy,
+      albumTagDisabled,
+      albumTagAddTitle,
+      albumTagRemoveTitle,
+      handleAlbumTagAll,
       selectedFile,
       draggingIndex,
       dragOverIndex,
@@ -2457,9 +2722,6 @@ export default {
       isEditingDescription,
       editedDescription,
       descriptionInput,
-      showAnalytics,
-      loadingAnalytics,
-      analyticsStats,
       duplicateFilterActive,
       selectedForDeletion,
       reorderModeActive,
@@ -2471,11 +2733,6 @@ export default {
       toggleReorderMode,
       handleMoveSelectedAfter,
       handleMoveSelectedToTop,
-      toggleAnalytics,
-      loadAnalyticsStats,
-      handleResetAnalytics,
-      handleToggleAnalyticsPaused,
-      goBack,
       handleRefresh,
       handleUpdateAlbumTitle,
       startEditDescription,
@@ -2506,7 +2763,6 @@ export default {
       closeLightbox,
       navigateNext,
       navigatePrevious,
-      goToProfile,
       isDeletingAlbum,
       handleDeleteAlbum,
       triggerFileUpload,

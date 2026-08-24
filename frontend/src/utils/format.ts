@@ -16,6 +16,9 @@ export function formatBytes(bytes: number): string {
  */
 export function formatDate(dateString: string): string {
   const date = new Date(dateString);
+  // A missing or unparseable timestamp used to reach the UI as the literal string
+  // "Invalid Date"; render nothing instead and let the caller omit the element.
+  if (Number.isNaN(date.getTime())) return "";
   const now = new Date();
   const diffTime = Math.abs(now.getTime() - date.getTime());
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));

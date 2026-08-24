@@ -3,27 +3,25 @@
     <router-view />
     <ToastNotifications />
     <ConfirmDialog />
-    <div
-      v-if="isLoggedIn"
-      class="footer-links"
-    >
-      <router-link to="/imprint">
-        Imprint
-      </router-link>
-      <span class="footer-separator">|</span>
-      <router-link to="/privacy">
-        Privacy Policy
-      </router-link>
-      <span class="footer-separator">|</span>
-      <router-link to="/terms">
-        Terms of Service
-      </router-link>
-    </div>
-    <div class="version-info">
-      <span>
-        Frontend v{{ frontendVersion }} ({{ frontendCommit }}) | Backend v{{ backendVersion }} ({{ backendCommit }})
+    <footer class="app-footer">
+      <template v-if="isLoggedIn">
+        <router-link to="/imprint">
+          Imprint
+        </router-link>
+        <span class="footer-separator">|</span>
+        <router-link to="/privacy">
+          Privacy Policy
+        </router-link>
+        <span class="footer-separator">|</span>
+        <router-link to="/terms">
+          Terms of Service
+        </router-link>
+        <span class="footer-separator">|</span>
+      </template>
+      <span class="version-info">
+        Frontend v{{ frontendVersion }} ({{ frontendCommit }}) &middot; Backend v{{ backendVersion }} ({{ backendCommit }})
       </span>
-    </div>
+    </footer>
   </div>
 </template>
 
