@@ -34,4 +34,15 @@ enum AppConfiguration {
     static var tusEndpointURL: URL {
         apiBaseURL.appendingPathComponent("files/")
     }
+
+    /// Public link for an album — the same URL the web app's share button copies:
+    /// `<baseURL>/public/album/<shareToken>`. Anyone holding it can view the album without
+    /// logging in, so it is only ever built from a token the server already handed out.
+    static func publicAlbumURL(shareToken: String) -> URL? {
+        guard !shareToken.isEmpty else { return nil }
+        return apiBaseURL
+            .appendingPathComponent("public")
+            .appendingPathComponent("album")
+            .appendingPathComponent(shareToken)
+    }
 }
