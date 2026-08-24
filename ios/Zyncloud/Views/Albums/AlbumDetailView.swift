@@ -1,4 +1,5 @@
 import AVKit
+import PhotosUI
 import SwiftUI
 
 struct AlbumDetailView: View {
@@ -16,6 +17,13 @@ struct AlbumDetailView: View {
         GridItem(.flexible(), spacing: 2),
     ]
 
+    /// Photos chosen in the system picker, cleared as soon as they are handed to the uploader.
+    @State private var pickedItems: [PhotosPickerItem] = []
+
+    /// Set when Delete was chosen on a tile but not yet confirmed. Deleting is irreversible —
+    /// the server drops the stored file, not just the row — so it always asks first.
+    @State private var pendingDelete: Photo?
+
     /// Set when a Sort menu item was picked but not yet confirmed. The web app puts the same
     /// warning behind these two actions because they rewrite the order of the whole album.
     @State private var pendingSort: AlbumSortAction?
@@ -32,7 +40,11 @@ struct AlbumDetailView: View {
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if viewModel.uploadsInFlight > 0 {
+                uploadBanner
+            }
+
             if viewModel.isArrangingByHand {
                 arrangeByHandList
             } else {
@@ -43,15 +55,62 @@ struct AlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
+                Button(
+                    action: { viewModel.requestUpload() },
+                    label: { Image(systemName: "plus") },
+                )
+                .disabled(viewModel.isArrangingByHand)
+                .accessibilityLabel("Upload photos")
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 sortMenu
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(
-                    action: { viewModel.fetchPhotos() },
+                    action: { viewModel.reloadPhotosAndImages() },
                     label: { Image(systemName: "arrow.clockwise") },
                 )
                 .disabled(viewModel.isLoading || viewModel.isArrangingByHand)
             }
+        }
+        // `photoLibrary: .shared()` is load-bearing, not a default: without it the picker runs
+        // out of process and the returned items carry no `itemIdentifier`, which is the only
+        // way back to the PHAsset the uploader needs.
+        .photosPicker(
+            isPresented: $viewModel.isPickerPresented,
+            selection: $pickedItems,
+            maxSelectionCount: nil,
+            matching: .any(of: [.images, .videos]),
+            photoLibrary: .shared(),
+        )
+        .onChange(of: pickedItems) { _, items in
+            guard !items.isEmpty else { return }
+            viewModel.upload(
+                assetIdentifiers: items.compactMap(\.itemIdentifier),
+                pickedCount: items.count,
+            )
+            pickedItems = []
+        }
+        .confirmationDialog(
+            "Delete photo",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { shown in
+                    if !shown {
+                        pendingDelete = nil
+                    }
+                },
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDelete,
+        ) { photo in
+            Button("Delete", role: .destructive) {
+                pendingDelete = nil
+                viewModel.delete(photo)
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { _ in
+            Text("This removes the photo from your server for good. It cannot be undone.")
         }
         .confirmationDialog(
             "Reorder album",
@@ -76,8 +135,33 @@ struct AlbumDetailView: View {
         .onAppear {
             if viewModel.photos.isEmpty {
                 viewModel.fetchPhotos()
+            } else {
+                // Coming back to a screen that already has its list: anything the worker was
+                // still busy with when we left needs watching again.
+                viewModel.startProcessingPollingIfNeeded()
             }
         }
+        .onDisappear {
+            viewModel.stopProcessingPolling()
+        }
+    }
+
+    // MARK: - Upload Banner
+
+    /// Uploads keep running on a background session after this screen closes, so the banner
+    /// says what is outstanding rather than pretending to be a blocking progress bar.
+    private var uploadBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(viewModel.uploadsInFlight == 1
+                ? "Uploading 1 photo…"
+                : "Uploading \(viewModel.uploadsInFlight) photos…")
+                .font(.footnote)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
     }
 
     // MARK: - Sort Menu
@@ -118,13 +202,19 @@ struct AlbumDetailView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(viewModel.photos) { photo in
-                        PhotoThumbnailView(photo: photo, viewModel: viewModel)
+                        PhotoThumbnailView(
+                            photo: photo,
+                            viewModel: viewModel,
+                            reloadToken: viewModel.imageReloadToken,
+                            isRotating: viewModel.rotatingPhotoIds.contains(photo.id),
+                            onDelete: { pendingDelete = photo },
+                        )
                     }
                 }
             }
         }
         .refreshable {
-            await viewModel.refreshPhotos()
+            await viewModel.reloadPhotosAndImagesAwaiting()
         }
     }
 
@@ -214,6 +304,18 @@ struct PhotoThumbnailView: View {
     let photo: Photo
     let viewModel: AlbumDetailViewModel
 
+    /// Passed down rather than read off the view model, which is held here as a plain `let`
+    /// and so does not re-render this cell on its own.
+    let reloadToken: Int
+
+    /// Also passed down, and for the same reason: a rotate is the view model's state, and this
+    /// cell does not observe it.
+    let isRotating: Bool
+
+    /// Raised to the album screen, which owns the confirmation dialog — a dialog presented from
+    /// inside a grid cell would go away with the cell.
+    let onDelete: () -> Void
+
     @State private var showingFullImage = false
 
     var body: some View {
@@ -221,8 +323,16 @@ struct PhotoThumbnailView: View {
             Rectangle()
                 .fill(Color.black)
 
-            if let thumbnailURL = viewModel.thumbnailURL(for: photo) {
-                AuthenticatedImage(url: thumbnailURL)
+            if !photo.isThumbnailReady {
+                // Do not even ask for the picture: the server answers 202 with nothing until
+                // the worker has made the thumbnail, and a freshly uploaded photo spends its
+                // first seconds here. Asking anyway is what used to show "Failed".
+                ProcessingPlaceholder(
+                    label: photo.processingFailed ? "Failed" : "Processing…",
+                    isFailure: photo.processingFailed,
+                )
+            } else if let thumbnailURL = viewModel.thumbnailURL(for: photo) {
+                AuthenticatedImage(url: thumbnailURL, reloadToken: reloadToken)
                     .scaledToFill()
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()
@@ -231,11 +341,17 @@ struct PhotoThumbnailView: View {
                     .foregroundColor(.gray)
             }
 
-            if photo.isVideo {
+            if photo.isVideo, photo.isThumbnailReady {
                 Image(systemName: "play.circle.fill")
                     .font(.title)
                     .foregroundColor(.white)
                     .shadow(radius: 3)
+            }
+
+            if isRotating {
+                Color.black.opacity(0.55)
+                ProgressView()
+                    .tint(.white)
             }
         }
         .aspectRatio(1.0, contentMode: .fit)
@@ -243,8 +359,36 @@ struct PhotoThumbnailView: View {
         .onTapGesture {
             showingFullImage = true
         }
+        .contextMenu {
+            PhotoActionButtons(photo: photo, viewModel: viewModel, onDelete: onDelete)
+        }
         .sheet(isPresented: $showingFullImage) {
-            PhotoDetailView(photo: photo, viewModel: viewModel)
+            PhotoDetailView(openedWith: photo, viewModel: viewModel)
+        }
+    }
+}
+
+// MARK: - Photo Action Buttons
+
+/// Rotate and Delete, shared by the grid's long-press menu and the full-screen view's menu so
+/// the two cannot drift apart. Delete only *asks* — the owner of the surrounding screen runs
+/// the confirmation, because that is where a dialog can outlive the thing being deleted.
+struct PhotoActionButtons: View {
+    let photo: Photo
+    let viewModel: AlbumDetailViewModel
+    let onDelete: () -> Void
+
+    var body: some View {
+        if !photo.isVideo {
+            Button {
+                viewModel.rotate(photo)
+            } label: {
+                Label("Rotate Left", systemImage: "rotate.left")
+            }
+        }
+
+        Button(role: .destructive, action: onDelete) {
+            Label("Delete", systemImage: "trash")
         }
     }
 }
@@ -252,10 +396,24 @@ struct PhotoThumbnailView: View {
 // MARK: - Photo Detail View
 
 struct PhotoDetailView: View {
-    let photo: Photo
-    let viewModel: AlbumDetailViewModel
+    /// The photo as it was when the sheet opened. A rotate replaces it with a new `publicToken`,
+    /// so what is actually rendered is ``photo`` — this is only the identity to look it up by,
+    /// and the fallback for the moment between a delete and the dismiss.
+    let openedWith: Photo
+
+    /// Observed, unlike in the grid: the sheet is the one place a photo can be rotated while
+    /// being looked at, and it has to show the result.
+    @ObservedObject var viewModel: AlbumDetailViewModel
+
+    private var photo: Photo {
+        viewModel.photos.first { $0.id == openedWith.id } ?? openedWith
+    }
 
     @Environment(\.dismiss) private var dismiss
+
+    /// The sheet runs its own confirmation rather than borrowing the album screen's: a dialog
+    /// presented behind a sheet never reaches the user.
+    @State private var confirmingDelete = false
 
     /// Owned by the view so the sheet keeps one player across body re-evaluations; the item is
     /// attached in `onAppear` because `photo` is not available at initialiser time here.
@@ -267,7 +425,14 @@ struct PhotoDetailView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if photo.isVideo, let videoURL = viewModel.videoURL(for: photo) {
+                if !photo.isThumbnailReady {
+                    ProcessingPlaceholder(
+                        label: photo.processingFailed
+                            ? "The server could not process this file."
+                            : "Processing on the server…",
+                        isFailure: photo.processingFailed,
+                    )
+                } else if photo.isVideo, let videoURL = viewModel.videoURL(for: photo) {
                     // A video must be played, not decoded. AVPlayer streams it; feeding the
                     // same bytes to AuthenticatedImage is what used to render "Failed".
                     VideoPlayer(player: player)
@@ -298,12 +463,39 @@ struct PhotoDetailView: View {
             .navigationTitle(photo.filename ?? photo.originalName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu {
+                        PhotoActionButtons(
+                            photo: photo,
+                            viewModel: viewModel,
+                            onDelete: { confirmingDelete = true },
+                        )
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .foregroundColor(.white)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
                     .foregroundColor(.white)
                 }
+            }
+            .confirmationDialog(
+                "Delete photo",
+                isPresented: $confirmingDelete,
+                titleVisibility: .visible,
+            ) {
+                Button("Delete", role: .destructive) {
+                    // Dismissed straight away: the photo it is showing is about to stop
+                    // existing, and the grid behind has already dropped it.
+                    viewModel.delete(photo)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes the photo from your server for good. It cannot be undone.")
             }
         }
     }

@@ -25,6 +25,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     // coordinator can spin up status polling for it.
     enum UploadOutcome {
         case success(serverAssetId: Int?)
+        case deduped           // server already holds this contentId; no bytes were sent
         case clientError       // non-retryable 4xx (except 429)
         case transport         // network / session error, system will retry
         case backpressure(TimeInterval) // HTTP 429/503, with retry delay
@@ -135,7 +136,11 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    func queueUpload(asset: PHAsset, api: APIClient, completion: ((Result<Void, Error>) -> Void)? = nil) {
+    /// - Parameter albumId: the album the asset must land in. Nil — the background-sync case —
+    ///   leaves the choice to the server, which uses the account's target album.
+    func queueUpload(asset: PHAsset, api: APIClient, albumId: Int? = nil,
+                     completion: ((Result<Void, Error>) -> Void)? = nil)
+    {
         // Mark as uploading BEFORE export to prevent race conditions
         UploadStore.shared.markAsUploading(asset.localIdentifier)
 
@@ -180,11 +185,20 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                                                filename: exp.filename,
                                                mimeType: exp.mimeType,
                                                boundary: boundary,
-                                               contentId: asset.localIdentifier)
+                                               contentId: asset.localIdentifier,
+                                               albumId: albumId)
 
                     let task = self.session.uploadTask(with: request, fromFile: multipartURL)
                     // Store localIdentifier, file paths, and checksum for cleanup and tracking
-                    task.taskDescription = [asset.localIdentifier, exp.fileURL.path, multipartURL.path, exp.checksum].joined(separator: "|")
+                    // Index 4 is the album asked for, so the completion can tell a real upload
+                    // from a duplicate the server answered with a file in some other album.
+                    task.taskDescription = [
+                        asset.localIdentifier,
+                        exp.fileURL.path,
+                        multipartURL.path,
+                        exp.checksum,
+                        albumId.map(String.init) ?? "",
+                    ].joined(separator: "|")
                     task.resume()
                     completion?(.success(()))
                 } catch {
@@ -244,10 +258,23 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
             if (200 ... 299).contains(code) {
                 let checksum = components.count > 3 ? components[3] : nil
                 UploadStore.shared.markUploaded(assetId, checksum: checksum)
-                SyncCoordinator.shared.onUploadedOne(assetId: assetId)
-                SyncLogger.shared.logUploadSuccess(assetId: assetId)
                 let serverAssetId = bufferedBody.flatMap(parseServerAssetId(from:))
-                onTaskFinished?(assetId, .success(serverAssetId: serverAssetId))
+
+                // The server dedupes by contentId across the whole account, and answers a
+                // duplicate with the row it already had — which sits in whatever album it was
+                // first filed under. So a 2xx naming a different album than the one we asked
+                // for means nothing was stored and nothing will appear here. Reporting that as
+                // a plain success is why an upload could silently do nothing.
+                let requestedAlbumId = components.count > 4 ? Int(components[4]) : nil
+                let storedAlbumId = bufferedBody.flatMap(parseServerAlbumId(from:))
+                if let requestedAlbumId, let storedAlbumId, storedAlbumId != requestedAlbumId {
+                    SyncLogger.shared.logUploadDeduped(assetId: assetId)
+                    onTaskFinished?(assetId, .deduped)
+                } else {
+                    SyncCoordinator.shared.onUploadedOne(assetId: assetId)
+                    SyncLogger.shared.logUploadSuccess(assetId: assetId)
+                    onTaskFinished?(assetId, .success(serverAssetId: serverAssetId))
+                }
             } else if code == 429 || code == 503 {
                 // Server backpressure — expected signal, not a failure. Log as
                 // informational so the user doesn't see a red error entry.
@@ -279,6 +306,17 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
               let id = file["id"] as? Int
         else { return nil }
         return id
+    }
+
+    // Pulls `file.albumId` out of the upload 202 body. Same defensive contract as
+    // ``parseServerAssetId(from:)``: anything unexpected reads as nil, which makes the caller
+    // treat the upload as an ordinary success rather than inventing a duplicate.
+    func parseServerAlbumId(from data: Data) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let file = json["file"] as? [String: Any],
+              let albumId = file["albumId"] as? Int
+        else { return nil }
+        return albumId
     }
 
     func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval? {

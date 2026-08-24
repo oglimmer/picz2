@@ -103,6 +103,25 @@ final class SyncCoordinator: ObservableObject {
     private var exportRetryPolicy = ExportRetryPolicy()
     private let maxInFlightUploads = 3
 
+    /// Destination album for assets the user picked by hand on an album screen, keyed by local
+    /// identifier. Everything absent from this map goes wherever the server's target-album
+    /// setting says, which is what background sync has always done. Touched only on syncQueue.
+    private var albumOverrides: [String: Int] = [:]
+
+    /// How many hand-picked uploads are still outstanding per album. The album screen shows it
+    /// and refreshes itself when its own count falls back to zero. Main queue only.
+    @Published private(set) var albumUploadsInFlight: [Int: Int] = [:]
+
+    /// Which of the current batch the server refused as duplicates, per album, as contentIds.
+    ///
+    /// The server dedupes by contentId across the whole account and a photo can belong to only
+    /// one album, so picking one it already holds stores nothing and adds nothing here. Kept as
+    /// ids rather than a count so the album screen can ask where each one actually lives, and
+    /// tell "it is already in this album" apart from "it is in a different one". Silently
+    /// reporting success and then showing an unchanged album is the worst of both. Reset when a
+    /// new batch starts. Main queue only.
+    @Published private(set) var albumUploadsRejectedAsDuplicate: [Int: [String]] = [:]
+
     private init() {
         // Drop the cached APIClient whenever the stored credentials change, so a sign-out
         // cannot leave an authenticated client behind and a sign-in is picked up immediately.
@@ -142,6 +161,8 @@ final class SyncCoordinator: ObservableObject {
                         )
                     }
                 }
+            case .deduped:
+                self.handleUploadFinished(assetId: assetId, outcome: .deduped)
             case .clientError:
                 self.handleUploadFinished(assetId: assetId, outcome: .clientError)
             case .transport:
@@ -214,9 +235,12 @@ final class SyncCoordinator: ObservableObject {
             self.uploadingAssets.removeAll()
             self.inFlightAssets.removeAll()
             self.exportRetryPolicy.reset()
+            self.albumOverrides.removeAll()
             DispatchQueue.main.async {
                 self.metrics.queued = 0
                 self.metrics.uploading = 0
+                self.albumUploadsInFlight.removeAll()
+                self.albumUploadsRejectedAsDuplicate.removeAll()
             }
         }
     }
@@ -434,6 +458,68 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Hand-picked album uploads
+
+    /// Uploads assets the user chose on an album screen straight into that album.
+    ///
+    /// Deliberately routed through the same queue as background sync rather than uploading
+    /// directly: that is where the concurrency cap, the export-retry policy, the size refusal
+    /// and the post-upload status polling live, and a second path would have none of them. The
+    /// only difference is ``albumOverrides``, which names the destination per asset.
+    ///
+    /// Unlike a scan this does **not** skip assets already marked uploaded — the user asked for
+    /// these files by hand. The server still dedupes by contentId, so an asset it already holds
+    /// stays where it is instead of being copied into this album; see the caller's message.
+    func uploadToAlbum(assets: [PHAsset], albumId: Int) {
+        guard !assets.isEmpty else { return }
+
+        uploader.configureSession()
+        tusUploader.configureSession()
+        ensureCapabilitiesLoaded()
+
+        syncQueue.async {
+            for asset in assets {
+                self.albumOverrides[asset.localIdentifier] = albumId
+            }
+
+            let accepted = self.enqueue(assets: assets)
+
+            // Count what was actually taken, not what was offered: an asset already in flight
+            // is filtered out by enqueue, and counting it here would leave the album screen
+            // waiting for an upload that is never going to report back.
+            let acceptedIds = Set(accepted.map(\.localIdentifier))
+            for asset in assets where !acceptedIds.contains(asset.localIdentifier) {
+                self.albumOverrides.removeValue(forKey: asset.localIdentifier)
+            }
+
+            guard !accepted.isEmpty else { return }
+            DispatchQueue.main.async {
+                self.albumUploadsRejectedAsDuplicate.removeValue(forKey: albumId)
+                self.albumUploadsInFlight[albumId, default: 0] += accepted.count
+            }
+        }
+    }
+
+    /// Drops one outstanding upload from the per-album counter. Called on every terminal
+    /// outcome so the album screen cannot be left showing an upload that has finished.
+    ///
+    /// The duplicate tally is raised *before* the in-flight count falls, because the album
+    /// screen reads it the moment that count reaches zero.
+    private func finishAlbumUpload(assetId: String, wasDuplicate: Bool = false) {
+        guard let albumId = albumOverrides.removeValue(forKey: assetId) else { return }
+        DispatchQueue.main.async {
+            if wasDuplicate {
+                self.albumUploadsRejectedAsDuplicate[albumId, default: []].append(assetId)
+            }
+            let remaining = (self.albumUploadsInFlight[albumId] ?? 1) - 1
+            if remaining > 0 {
+                self.albumUploadsInFlight[albumId] = remaining
+            } else {
+                self.albumUploadsInFlight.removeValue(forKey: albumId)
+            }
+        }
+    }
+
     // MARK: - Scanning
 
     private func scheduleInitialScan() {
@@ -473,8 +559,11 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
-    private func enqueue(assets: [PHAsset]) {
-        guard !assets.isEmpty else { return }
+    /// - Returns: the assets that actually joined the queue, so a caller that is tracking its
+    ///   own batch knows how many completions to expect.
+    @discardableResult
+    private func enqueue(assets: [PHAsset]) -> [PHAsset] {
+        guard !assets.isEmpty else { return [] }
 
         // Filter out assets that are already pending or currently uploading, plus any the
         // server has already refused for size under a cap that has not since been raised —
@@ -489,7 +578,7 @@ final class SyncCoordinator: ObservableObject {
 
         guard !newAssets.isEmpty else {
             print("SyncCoordinator: All \(assets.count) assets already queued or uploading, skipping")
-            return
+            return []
         }
 
         print("SyncCoordinator: Enqueuing \(newAssets.count) new assets (filtered from \(assets.count))")
@@ -498,6 +587,7 @@ final class SyncCoordinator: ObservableObject {
             self.metrics.queued = self.pendingAssets.count
         }
         drainQueue()
+        return newAssets
     }
 
     private func drainQueue() {
@@ -556,6 +646,7 @@ final class SyncCoordinator: ObservableObject {
                                 assetId: id,
                                 error: "Export failed \(attempts)× — giving up: \(error.localizedDescription)"
                             )
+                            self.finishAlbumUpload(assetId: id)
                             self.drainQueue()
                             return
                         }
@@ -568,11 +659,14 @@ final class SyncCoordinator: ObservableObject {
                     }
                 }
             }
+            let albumId = albumOverrides[asset.localIdentifier]
             if useTus {
                 tusUploader.queueUpload(asset: asset, api: api,
-                                        maxUploadBytes: uploadSizeLimit, completion: completion)
+                                        maxUploadBytes: uploadSizeLimit, albumId: albumId,
+                                        completion: completion)
             } else {
-                uploader.queueUpload(asset: asset, api: api, completion: completion)
+                uploader.queueUpload(asset: asset, api: api, albumId: albumId,
+                                     completion: completion)
             }
         }
     }
@@ -680,6 +774,7 @@ final class SyncCoordinator: ObservableObject {
 
             switch outcome {
             case let .success(serverAssetId):
+                self.finishAlbumUpload(assetId: assetId)
                 // Bytes landed; the worker pod still has thumbnail/transcode
                 // work to do. Poll /api/assets/{id}/status so we surface
                 // post-upload pipeline failures (FAILED / DEAD_LETTER) instead
@@ -688,8 +783,14 @@ final class SyncCoordinator: ObservableObject {
                     ProcessingStatusPoller.shared.poll(serverAssetId: serverAssetId, contentId: assetId, api: self.api)
                 }
                 self.drainQueue()
+            case .deduped:
+                // The server already had this photo, so nothing was stored. Nothing to poll and
+                // nothing to retry — but the album screen has to hear about it.
+                self.finishAlbumUpload(assetId: assetId, wasDuplicate: true)
+                self.drainQueue()
             case .clientError, .transport:
                 // clientError: permanent failure; transport: system-retried.
+                self.finishAlbumUpload(assetId: assetId)
                 self.refreshSkippedTooLargeMetric()
                 self.drainQueue()
             case let .backpressure(retryAfter):
