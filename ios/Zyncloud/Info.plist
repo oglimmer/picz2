@@ -29,6 +29,8 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Zyncloud needs the microphone so you can record spoken commentary over a slideshow of your photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Zyncloud needs access to your photo library to back up your photos and videos to your own server.</string>
 	<key>UIApplicationSceneManifest</key>

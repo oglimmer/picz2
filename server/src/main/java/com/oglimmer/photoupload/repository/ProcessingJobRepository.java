@@ -2,7 +2,9 @@
 package com.oglimmer.photoupload.repository;
 
 import com.oglimmer.photoupload.entity.JobStatus;
+import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingJob;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Pageable;
@@ -64,4 +66,11 @@ public interface ProcessingJobRepository extends JpaRepository<ProcessingJob, Lo
   List<Object[]> countAllByStatusGrouped();
 
   List<ProcessingJob> findByStatusOrderByCreatedAtDesc(JobStatus status, Pageable pageable);
+
+  /**
+   * Whether this recording already has a job of this type in one of the given states. Used to keep
+   * a polling client from queueing the same {@code TRANSCODE_AUDIO_AAC} work once per poll tick.
+   */
+  boolean existsByRecordingIdAndJobTypeAndStatusIn(
+      Long recordingId, JobType jobType, Collection<JobStatus> statuses);
 }

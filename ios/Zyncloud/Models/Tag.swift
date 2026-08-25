@@ -1,0 +1,66 @@
+import Foundation
+
+/// A user-level tag, mirroring `TagInfo` on the server.
+///
+/// `no_tag` and `all` are system tags the gallery relies on. The server keeps them, so the app
+/// shows them read-only rather than hiding them — a tag that exists but cannot be renamed is
+/// less confusing than one that silently is not listed.
+struct Tag: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let createdAt: String?
+
+    private static let systemNames: Set<String> = ["no_tag", "all"]
+
+    var isSystem: Bool {
+        Self.systemNames.contains(name)
+    }
+}
+
+struct TagsListResponse: Codable {
+    let success: Bool
+    let tags: [Tag]
+}
+
+struct TagResponse: Codable {
+    let success: Bool
+    let message: String?
+    let tag: Tag?
+}
+
+/// Answer to `GET /api/settings/languages`. The two narration languages are free-text names
+/// (e.g. "German", "English"), not locale codes — the server stores whatever the user typed.
+struct LanguageSettingsResponse: Codable {
+    let success: Bool
+    let language1: String?
+    let language2: String?
+}
+
+extension Tag {
+    /// True for the names the gallery owns. The server puts `no_tag` on and takes it off by
+    /// itself, so neither name is ever offered as something to pick.
+    static func isSystemName(_ name: String) -> Bool {
+        systemNames.contains(name)
+    }
+}
+
+/// Answer to the per-file tag endpoints (`POST`/`DELETE /api/files/{id}/tags`).
+///
+/// `tags` is the file's whole tag list after the change, so it replaces the local list rather
+/// than being merged into it — the server may have added or dropped `no_tag` on its own.
+struct FileTagsResponse: Codable {
+    let success: Bool
+    let message: String?
+    let tags: [String]
+}
+
+/// Answer to the album-wide tag endpoints (`POST`/`DELETE /api/albums/{id}/files/tags/{name}`).
+///
+/// `updatedCount` counts only the files that actually changed; files already in the wanted
+/// state are skipped server-side.
+struct BulkTagResponse: Codable {
+    let success: Bool
+    let message: String?
+    let tagName: String?
+    let updatedCount: Int
+}

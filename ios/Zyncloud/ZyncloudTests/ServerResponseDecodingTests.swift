@@ -100,6 +100,42 @@ struct ServerResponseDecodingTests {
         #expect(file.tags.isEmpty)
     }
 
+    /// The four fields the "By Day & Place" shelving reads. Their names have to match
+    /// `FileInfo.java` exactly — a typo here would silently put every photo in one nameless
+    /// place on the wrong day.
+    @Test func decodesTheCaptureDateAndPosition() throws {
+        let file = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7,
+          "exifDateTimeOriginal": "2024-05-31T18:20:00Z",
+          "captureUtcOffsetSeconds": 7200,
+          "gpsLatitude": 48.137, "gpsLongitude": 11.575
+        }
+        """)
+
+        #expect(file.captureUtcOffsetSeconds == 7200)
+        #expect(file.latLng == LatLng(lat: 48.137, lng: 11.575))
+        #expect(file.captureInstant == ISO8601.parse("2024-05-31T18:20:00Z"))
+    }
+
+    /// An older asset carries none of them, and must still decode — the grouping falls back to
+    /// the upload time and a "no place recorded" bucket.
+    @Test func decodesAFileWithNoCaptureDateOrPosition() throws {
+        let file = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7
+        }
+        """)
+
+        #expect(file.exifDateTimeOriginal == nil)
+        #expect(file.latLng == nil)
+        #expect(file.captureInstant == ISO8601.parse("2024-06-01T10:00:00Z"))
+    }
+
     /// Documents a fragility rather than endorsing it: `tags` is non-optional, so a server
     /// that omits the key for an untagged file breaks the whole album listing. If that ever
     /// happens, the fix is `[String]?` on the model, and this test should be inverted.

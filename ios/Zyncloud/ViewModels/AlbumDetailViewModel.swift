@@ -4,7 +4,16 @@ import Photos
 
 @MainActor
 class AlbumDetailViewModel: ViewModelProtocol {
-    @Published var photos: [Photo] = []
+    @Published var photos: [Photo] = [] {
+        didSet { dayGroups = groupByDayAndRegion(photos) }
+    }
+
+    /// The album re-shelved into day and place sections, for the "By Day & Place" layout.
+    ///
+    /// Rebuilt here rather than in the view: the clustering is O(n²) in the worst case, and a
+    /// SwiftUI body runs again for every tap, scroll and selection change while the photo list
+    /// itself only changes when the server says something new.
+    @Published private(set) var dayGroups: [DayGroup] = []
     @Published var isLoading: Bool = false
     @Published var alertState: AlertState?
     @Published var isLoadingMore: Bool = false
@@ -31,13 +40,41 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// is busy for the seconds in between — and refuse a second rotate on the same photo.
     @Published private(set) var rotatingPhotoIds: Set<Int> = []
 
+    // The four tag properties below are written only by `AlbumDetailViewModel+Tags.swift`.
+    // They are not `private(set)` because `private` in Swift means "this file", and that
+    // extension is a different one.
+
+    /// Tags this album accepts, straight from the server. Not the account's whole tag list:
+    /// the server refuses any tag that is not enabled for the album, so offering the others
+    /// would only produce failures.
+    @Published var albumTags: [Tag] = []
+
+    /// The account's whole tag list, needed only by the screen that says which of them this
+    /// album accepts.
+    @Published var accountTags: [Tag] = []
+
+    @Published var isLoadingTags: Bool = false
+
+    /// True while a tag change is in flight, so a second one cannot be started on top of it.
+    @Published var isApplyingTags: Bool = false
+
+    /// True while the grid picks photos instead of opening them.
+    @Published var isSelecting: Bool = false
+
+    /// The picked photos, held as ids because the photo list is replaced under it by every
+    /// reload — a stored `Photo` would go stale, an id does not.
+    @Published var selectedPhotoIds: Set<Int> = []
+
     /// Drives the system photo picker. Set by ``requestUpload()`` once library access is
     /// settled, never by the view directly — the picker can only name assets while access is
     /// granted, and asking afterwards would throw the user's choice away.
     @Published var isPickerPresented: Bool = false
 
     let album: Album
-    private var apiClient: APIClient?
+
+    /// Readable across the file boundary so the tag actions in `AlbumDetailViewModel+Tags.swift`
+    /// can use it; still only written here, by ``loadCredentials()``.
+    private(set) var apiClient: APIClient?
     private var currentPage: Int = 1
     private var hasMorePages: Bool = true
     private let syncCoordinator: SyncCoordinator

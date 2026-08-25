@@ -3,8 +3,10 @@ package com.oglimmer.photoupload.exception;
 
 import com.oglimmer.photoupload.model.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.catalina.connector.ClientAbortException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -150,10 +152,40 @@ public class GlobalExceptionHandler {
         "Client disconnected during response to {}: {}", request.getRequestURI(), ex.getMessage());
   }
 
+  /**
+   * The requested rendition is still being produced. 503 rather than 404 or 500: the resource will
+   * exist shortly, and {@code Retry-After} tells the client how long to wait before asking again.
+   */
+  @ExceptionHandler(AudioNotReadyException.class)
+  public ResponseEntity<ErrorResponse> handleAudioNotReady(
+      AudioNotReadyException ex, HttpServletRequest request) {
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.SERVICE_UNAVAILABLE.value(),
+            ex.isFailed() ? "Audio Unavailable" : "Audio Not Ready",
+            ex.getMessage(),
+            request.getRequestURI());
+
+    ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE);
+    if (!ex.isFailed()) {
+      builder.header(HttpHeaders.RETRY_AFTER, "5");
+    }
+    return builder.body(error);
+  }
+
   @ExceptionHandler(Exception.class)
   public ResponseEntity<ErrorResponse> handleGenericException(
-      Exception ex, HttpServletRequest request) {
+      Exception ex, HttpServletRequest request, HttpServletResponse response) {
     log.error("Unexpected error occurred", ex);
+
+    // Once bytes are on the wire the status and Content-Type are already fixed, and writing an
+    // ErrorResponse into e.g. a committed audio/mp4 response throws again from inside Tomcat's
+    // recycled header state — which is how one aborted media stream used to poison the next
+    // request on the same connection. Nothing can be reported at this point; log it and stop.
+    if (response.isCommitted()) {
+      log.debug("Response to {} already committed — no error body sent", request.getRequestURI());
+      return null;
+    }
 
     ErrorResponse error =
         ErrorResponse.of(

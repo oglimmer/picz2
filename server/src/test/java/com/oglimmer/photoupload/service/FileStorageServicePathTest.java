@@ -9,6 +9,7 @@ import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import java.nio.file.Path;
@@ -48,6 +49,7 @@ class FileStorageServicePathTest {
             cleanupSvc,
             jdbc,
             albumRepo,
+            Mockito.mock(SlideshowRecordingRepository.class),
             fileInfoMapper,
             userContext,
             txManager,

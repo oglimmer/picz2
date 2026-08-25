@@ -1,9 +1,7 @@
 import SwiftUI
 
 struct SyncOptionsView: View {
-    @EnvironmentObject private var sync: SyncCoordinator
     @StateObject private var viewModel = SyncOptionsViewModel()
-    @ObservedObject private var taskLog = BackgroundTaskLog.shared
     /// Observed directly, not reached through `sync.settings` (§5.5).
     ///
     /// `Settings` is an `ObservableObject` held inside another one. Mutating a property of the
@@ -13,55 +11,20 @@ struct SyncOptionsView: View {
     @ObservedObject private var settings = Settings.shared
     @Binding var isLoggedIn: Bool
 
-    /// "Never" is a real answer here, and the most important one to read at a glance — so it is
-    /// spelled out rather than shown as an empty value.
-    private static func stamp(_ date: Date?) -> String {
-        guard let date else { return "Never" }
-        return date.formatted(.relative(presentation: .named))
-    }
+    /// Step 1 of the account delete — the "are you sure" sheet.
+    @State private var showDeleteAccountConfirm = false
+    /// Step 2 — set only once step 1 was confirmed, which swaps the row for a final warning.
+    ///
+    /// The web app stacks two modal confirms here. On iOS the second one cannot be a second
+    /// `.alert`: this view already carries `.alert(item:)` for `alertState`, and two alert
+    /// modifiers on one view fight over the same presentation slot — the later one silently
+    /// wins. So the final warning is an inline armed state instead. Same two deliberate
+    /// destructive taps, one presenter.
+    @State private var deleteAccountArmed = false
 
     var body: some View {
         NavigationView {
             List {
-                // Sync status. §3.3 was undetectable in code and would have been obvious here:
-                // background tasks were only ever scheduled at launch, and the only symptom was
-                // sync quietly stopping. Scheduled and run are shown separately because "iOS has
-                // not granted us time yet" and "we never asked" are different faults.
-                Section(
-                    header: Text("Sync Status"),
-                    footer: sync.metrics.skippedTooLarge > 0
-                        ? Text("Some files are larger than this server accepts, so they were not backed up. Open the Sync Log to see which ones and how big they are.")
-                        : Text("")
-                ) {
-                    LabeledContent("Queued", value: "\(sync.metrics.queued)")
-                    LabeledContent("Uploading", value: "\(sync.metrics.uploading)")
-                    LabeledContent("Uploaded this session", value: "\(sync.metrics.uploaded)")
-                    LabeledContent("In scope", value: "\(sync.metrics.inScope)")
-                    LabeledContent("Last sync", value: Self.stamp(sync.metrics.lastSync))
-                    // Only shown when it is non-zero: a permanent "Too big: 0" row would train
-                    // the eye to skip the one line that means part of the library is unprotected.
-                    if sync.metrics.skippedTooLarge > 0 {
-                        LabeledContent("Too big to back up",
-                                       value: "\(sync.metrics.skippedTooLarge)")
-                            .foregroundColor(.orange)
-                    }
-                }
-
-                Section(
-                    header: Text("Background Tasks"),
-                    footer: Text(taskLog.hasScheduledButNeverRun
-                        ? "Scheduled, but iOS has not granted background time yet. This is normal for a while after install; if it persists for days, scheduling is broken."
-                        : "iOS decides when these run. Long gaps are normal; \"never\" is not.")
-                ) {
-                    LabeledContent("Last scheduled", value: Self.stamp(taskLog.lastScheduled))
-                    LabeledContent("Refresh last run",
-                                   value: Self.stamp(taskLog.lastRun(.refresh)))
-                    LabeledContent("Processing last run",
-                                   value: Self.stamp(taskLog.lastRun(.processing)))
-                    LabeledContent("Run count",
-                                   value: "\(taskLog.runCount(.refresh) + taskLog.runCount(.processing))")
-                }
-
                 // Photo Access Section
                 Section(header: Text("Permissions")) {
                     HStack {
@@ -129,6 +92,18 @@ struct SyncOptionsView: View {
                     }
                 }
 
+                // Account-level gallery settings. These live on the user, not on this
+                // device, so they are the same values the web app edits from its account menu.
+                Section(header: Text("Gallery Settings")) {
+                    NavigationLink("Narration Languages") {
+                        NarrationLanguagesView()
+                    }
+
+                    NavigationLink("Tags") {
+                        TagManagerView()
+                    }
+                }
+
                 // Account Section
                 Section(header: Text("Data Management")) {
                     Button("Sync Now") {
@@ -147,8 +122,55 @@ struct SyncOptionsView: View {
                     }
                     .foregroundColor(.red)
                 }
+
+                Section(
+                    header: Text("Danger Zone"),
+                    footer: Text("Deleting your account removes your albums, photos, tags and settings from the server for good. There is no undo and no export afterwards."),
+                ) {
+                    if viewModel.isDeletingAccount {
+                        HStack {
+                            Text("Deleting account…")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            ProgressView()
+                        }
+                    } else if deleteAccountArmed {
+                        Text("Final warning — this cannot be undone.")
+                            .font(.footnote)
+                            .foregroundColor(.red)
+
+                        Button("Yes, Delete Everything") {
+                            deleteAccountArmed = false
+                            viewModel.deleteAccount {
+                                isLoggedIn = false
+                            }
+                        }
+                        .foregroundColor(.red)
+
+                        Button("Cancel") {
+                            deleteAccountArmed = false
+                        }
+                    } else {
+                        Button("Delete Account") {
+                            showDeleteAccountConfirm = true
+                        }
+                        .foregroundColor(.red)
+                    }
+                }
             }
             .navigationTitle("Sync Options")
+            .confirmationDialog(
+                "Delete your account?",
+                isPresented: $showDeleteAccountConfirm,
+                titleVisibility: .visible,
+            ) {
+                Button("Delete My Account", role: .destructive) {
+                    deleteAccountArmed = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently deletes all your albums, all your photos, all your tags and all your settings. This action cannot be undone.")
+            }
             .alert(item: $viewModel.alertState) { alertState in
                 if let primaryButton = alertState.primaryButton,
                    let secondaryButton = alertState.secondaryButton

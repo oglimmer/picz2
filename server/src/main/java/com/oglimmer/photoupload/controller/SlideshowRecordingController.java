@@ -3,9 +3,11 @@ package com.oglimmer.photoupload.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oglimmer.photoupload.config.Profiles;
+import com.oglimmer.photoupload.exception.AudioNotReadyException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.RecordingAudioInfo;
+import com.oglimmer.photoupload.model.RecordingAudioStatus;
 import com.oglimmer.photoupload.model.RecordingInfo;
 import com.oglimmer.photoupload.model.RecordingRequest;
 import com.oglimmer.photoupload.model.RecordingResponse;
@@ -127,11 +129,17 @@ public class SlideshowRecordingController {
     return ResponseEntity.ok(response);
   }
 
+  /**
+   * @param format {@code m4a} asks for the AAC rendition instead of the Opus/WebM master. Apple's
+   *     media stack has no WebM demuxer, so every iOS client passes it; browsers pass nothing.
+   */
   @GetMapping("/recordings/{id}/audio")
   public ResponseEntity<StreamingResponseBody> getRecordingAudio(
-      @PathVariable Long id, @RequestHeader(value = "Range", required = false) String rangeHeader) {
+      @PathVariable Long id,
+      @RequestParam(required = false) String format,
+      @RequestHeader(value = "Range", required = false) String rangeHeader) {
     try {
-      RecordingAudioInfo audioInfo = slideshowRecordingService.getRecordingAudioInfo(id);
+      RecordingAudioInfo audioInfo = slideshowRecordingService.getRecordingAudioInfo(id, format);
       if (audioInfo.getStorageKey() != null) {
         return serveAudioFromS3(audioInfo, rangeHeader);
       }
@@ -140,6 +148,9 @@ public class SlideshowRecordingController {
           rangeHeader,
           contentTypeFor(audioInfo),
           audioInfo.getAudioFilename());
+    } catch (AudioNotReadyException e) {
+      // Not an error: the rendition is being made. Let the handler answer 503 + Retry-After.
+      throw e;
     } catch (Exception e) {
       log.error("Error serving recording audio", e);
       throw new RuntimeException("Error serving recording audio: " + e.getMessage(), e);
@@ -173,14 +184,19 @@ public class SlideshowRecordingController {
     return ResponseEntity.ok(response);
   }
 
+  /**
+   * @param format {@code m4a} asks for the AAC rendition instead of the Opus/WebM master. Apple's
+   *     media stack has no WebM demuxer, so every iOS client passes it; browsers pass nothing.
+   */
   @GetMapping("/r/{publicToken}/audio")
   public ResponseEntity<StreamingResponseBody> getRecordingAudioByPublicToken(
       @PathVariable String publicToken,
+      @RequestParam(required = false) String format,
       @RequestHeader(value = "Range", required = false) String rangeHeader,
       HttpServletRequest request) {
     try {
       RecordingAudioInfo audioInfo =
-          slideshowRecordingService.getRecordingAudioInfoByPublicToken(publicToken);
+          slideshowRecordingService.getRecordingAudioInfoByPublicToken(publicToken, format);
       if (audioInfo.getStorageKey() != null) {
         return serveAudioFromS3(audioInfo, rangeHeader);
       }
@@ -189,10 +205,24 @@ public class SlideshowRecordingController {
           rangeHeader,
           contentTypeFor(audioInfo),
           audioInfo.getAudioFilename());
+    } catch (AudioNotReadyException e) {
+      throw e;
     } catch (Exception e) {
       log.error("Error serving recording audio by public token", e);
       throw new RuntimeException("Error serving recording audio: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Whether this recording can be played right now in the requested format, queueing the work if
+   * not. iOS polls this before it hands the URL to {@code AVPlayer}, because {@code AVPlayer}
+   * reports an HTTP failure as an undifferentiated decode error — "still being made" and "broken"
+   * look identical to it, and only one of the two is worth waiting through.
+   */
+  @GetMapping("/r/{publicToken}/audio/status")
+  public ResponseEntity<RecordingAudioStatus> getRecordingAudioStatusByPublicToken(
+      @PathVariable String publicToken) {
+    return ResponseEntity.ok(slideshowRecordingService.audioStatusByPublicToken(publicToken));
   }
 
   /**
@@ -220,6 +250,13 @@ public class SlideshowRecordingController {
             while ((n = s.read(buf)) > 0) {
               out.write(buf, 0, n);
             }
+          } catch (IOException e) {
+            // AVPlayer opens a range request, reads what it wants and drops the connection — it
+            // does this constantly. Letting that reach Spring's async error handling made it try
+            // to render a JSON error into a response already committed as audio/mp4, which
+            // corrupted Tomcat's recycled header state and broke the NEXT request on that
+            // connection. Swallow it: the client is gone, there is nobody to tell.
+            log.debug("Audio stream ended early (client gone): {}", e.toString());
           }
         };
 
@@ -241,6 +278,9 @@ public class SlideshowRecordingController {
 
   private String contentTypeFor(RecordingAudioInfo audioInfo) {
     String name = audioInfo.getAudioFilename();
+    if (name != null && (name.endsWith(".m4a") || name.endsWith(".mp4"))) {
+      return "audio/mp4";
+    }
     if (name != null && name.endsWith(".ogg")) {
       return "audio/ogg";
     }

@@ -182,7 +182,7 @@ extension APIClient {
         performRequest(request, expecting: FilesResponse.self, completion: completion)
     }
 
-    // Backwards compatibility - fetchPhotos now calls fetchFiles
+    /// Backwards compatibility - fetchPhotos now calls fetchFiles
     func fetchPhotos(albumId: Int, page _: Int = 1, limit _: Int = 50, completion: @escaping (Result<PhotosResponse, Error>) -> Void) {
         fetchFiles(albumId: albumId, tag: nil, completion: completion)
     }
@@ -208,7 +208,7 @@ extension APIClient {
     /// Returns the body **and** the status code — the decode-failure path downstream reports the
     /// status alongside the decoding error, and dropping it would make that message less useful.
     static func validate(
-        data: Data?, response: URLResponse?, error: Error?
+        data: Data?, response: URLResponse?, error: Error?,
     ) -> Result<(body: Data, statusCode: Int), Error> {
         if let error {
             print("❌ Network Error: \(error)")
@@ -234,7 +234,6 @@ extension APIClient {
         return .success((data, httpResponse.statusCode))
     }
 
-
     /// For endpoints that answer with a status code and nothing worth decoding. Reuses the same
     /// error ladder — a 2xx is success, anything else is an ``AppError/api`` carrying the
     /// server's message when it sent one.
@@ -249,7 +248,6 @@ extension APIClient {
         }
         task.resume()
     }
-
 
     /// Internal rather than private so the endpoints in `APIClient.swift` can share it —
     /// they each used to re-implement this error ladder by hand.
@@ -457,6 +455,17 @@ extension APIClient {
                 completion(.failure(AppError.api(message: "Failed to decode response: \(error.localizedDescription)", statusCode: http.statusCode)))
             }
         }.resume()
+    }
+
+    /// Permanently delete the signed-in account and everything it owns — albums, files, tags
+    /// and settings. Irreversible; the server cascades the delete. The caller is responsible for
+    /// clearing local credentials and caches afterwards, exactly as logout does.
+    func deleteAccount(completion: @escaping (Result<Void, Error>) -> Void) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/users/account"))
+        request.httpMethod = "DELETE"
+        addBasicAuth(to: &request)
+
+        performRequestIgnoringBody(request, completion: completion)
     }
 
     /// Create a new account. Unauthenticated POST to `/api/users`. On success the server

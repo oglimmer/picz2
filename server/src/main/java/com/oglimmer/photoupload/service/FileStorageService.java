@@ -22,6 +22,7 @@ import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.StoragePaths;
@@ -108,6 +109,7 @@ public class FileStorageService {
   private final LocalFileCleanupService localFileCleanupService;
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
+  private final SlideshowRecordingRepository slideshowRecordingRepository;
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
@@ -126,6 +128,7 @@ public class FileStorageService {
       LocalFileCleanupService localFileCleanupService,
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
+      SlideshowRecordingRepository slideshowRecordingRepository,
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
@@ -140,6 +143,7 @@ public class FileStorageService {
     this.jdbcTemplate = jdbcTemplate;
     this.fileInfoMapper = fileInfoMapper;
     this.albumRepository = albumRepository;
+    this.slideshowRecordingRepository = slideshowRecordingRepository;
     this.userContext = userContext;
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -656,12 +660,24 @@ public class FileStorageService {
     return hex.toString();
   }
 
-  @Transactional
   /**
    * Compares every key in the S3 bucket against the paths recorded in the DB and deletes any key
    * that has no corresponding row. Pass {@code dryRun=true} to log what would be deleted without
    * touching MinIO — always run a dry-run first to sanity-check the numbers.
+   *
+   * <p><b>The known-key set must cover every table that owns bucket keys, not just {@code
+   * file_metadata}.</b> It did not, and it cost real data: slideshow narration audio lives in
+   * {@code slideshow_recordings.audio_path}, which this swept read as unowned, so one run of this
+   * endpoint deleted every commentary recorded before it — the rows survived, pointing at keys that
+   * no longer existed, which is why old commentaries later 404'd. The AAC siblings are derived
+   * rather than stored, so they are named here the same way the serving path names them.
+   *
+   * <p>{@code tus-uploads/} is skipped outright: those objects are owned by tusd and have no DB row
+   * at all until the post-finish hook moves them, so "no row" there means "in flight", not
+   * "garbage". {@link com.oglimmer.photoupload.service.RetentionService} reaps that prefix on a
+   * grace period instead, which is the only safe way to judge it.
    */
+  @Transactional
   public Map<String, Object> purgeOrphanedS3Objects(boolean dryRun) {
     if (objectStorage.isEmpty()) {
       throw new IllegalStateException("S3 storage is not enabled");
@@ -669,12 +685,21 @@ public class FileStorageService {
     ObjectStorageService s3 = objectStorage.get();
 
     Set<String> knownPaths = new HashSet<>(metadataRepository.findAllStoredPaths());
+    knownPaths.addAll(slideshowRecordingRepository.findAllAudioPaths());
+    for (String audioFilename : slideshowRecordingRepository.findAllAudioFilenames()) {
+      knownPaths.add(StoragePaths.audioAacKey(audioFilename));
+    }
     List<String> bucketKeys = s3.listKeys();
 
     int orphaned = 0;
     int deleted = 0;
     int failed = 0;
+    int skippedInFlight = 0;
     for (String key : bucketKeys) {
+      if (key.startsWith(StoragePaths.TUS_UPLOADS_PREFIX)) {
+        skippedInFlight++;
+        continue;
+      }
       if (!knownPaths.contains(key)) {
         orphaned++;
         if (dryRun) {
@@ -693,10 +718,11 @@ public class FileStorageService {
     }
 
     log.info(
-        "S3 orphan purge complete (dryRun={}): {} bucket keys, {} known DB paths, {} orphaned, {} deleted, {} failed",
+        "S3 orphan purge complete (dryRun={}): {} bucket keys, {} known DB paths, {} skipped in-flight, {} orphaned, {} deleted, {} failed",
         dryRun,
         bucketKeys.size(),
         knownPaths.size(),
+        skippedInFlight,
         orphaned,
         deleted,
         failed);
@@ -705,6 +731,7 @@ public class FileStorageService {
     result.put("dryRun", dryRun);
     result.put("totalBucketKeys", bucketKeys.size());
     result.put("knownDbPaths", knownPaths.size());
+    result.put("skippedInFlight", skippedInFlight);
     result.put("orphaned", orphaned);
     result.put("deleted", deleted);
     result.put("failed", failed);
