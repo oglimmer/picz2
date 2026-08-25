@@ -1,0 +1,369 @@
+import Foundation
+import Testing
+
+@testable import Zyncloud
+
+/// What the newer endpoints actually put on the wire.
+///
+/// Every one of these was written against a server that was in front of the author at the time
+/// and then never checked again. A wrong path, a wrong verb or a mis-spelled body key fails at
+/// runtime and only at runtime — and one of them, `deleteAccount`, deletes the account and
+/// everything in it, which is not a thing to find out about by trying it.
+///
+/// Serialized because the stub intercepts `URLSession.shared`, which is process-wide.
+@Suite(.serialized)
+struct EndpointShapeTests {
+    private var api: APIClient { APIClient.stubbed }
+
+    // MARK: - Account deletion
+
+    /// The irreversible one. Wrong verb on this path and the app would be *reading* the account
+    /// while telling the user it deleted it; wrong path and it would delete something else.
+    @Test func deleteAccountSendsADeleteToTheAccountEndpoint() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.deleteAccount(completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/users/account")
+        #expect(request?.headers["Authorization"] == APIClient.stubbedAuthHeader)
+        #expect(request?.body.isEmpty == true)
+    }
+
+    /// It has to be authenticated. An unauthenticated delete would either fail or — far worse
+    /// on a misconfigured server — delete the wrong account.
+    @Test func deleteAccountWithoutCredentialsSendsNoAuthorizationHeader() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in APIClient().deleteAccount(completion: done) }
+        }
+
+        #expect(request?.headers["Authorization"] == nil)
+    }
+
+    /// A refusal must surface as a failure, not be swallowed into "deleted" — the caller wipes
+    /// local credentials on success.
+    @Test func arefusedDeleteAccountIsAFailure() async {
+        var result: Result<Void, Error>?
+        _ = await StubServer.capture(status: 403, json: "{\"success\":false,\"message\":\"Not allowed\"}") {
+            result = await awaiting { done in api.deleteAccount(completion: done) }
+        }
+
+        guard case let .failure(error) = result else {
+            Issue.record("a 403 must not read as a successful delete")
+            return
+        }
+        #expect((error as? AppError)?.errorDescription?.contains("Not allowed") == true)
+    }
+
+    @Test func asuccessfulDeleteAccountReportsSuccess() async {
+        var result: Result<Void, Error>?
+        _ = await StubServer.capture(status: 204, json: "") {
+            result = await awaiting { done in api.deleteAccount(completion: done) }
+        }
+
+        #expect((try? result?.get()) != nil)
+    }
+
+    // MARK: - Tags on one file
+
+    @Test func addTagPostsTheTagNameToTheFile() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[\"beach\"]}") {
+            _ = await awaiting { done in api.addTag(fileId: 31, tagName: "beach", completion: done) }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/files/31/tags")
+        #expect(request?.headers["Content-Type"] == "application/json")
+        #expect(request?.json["tagName"] as? String == "beach")
+    }
+
+    /// The answer is the file's whole new tag list, which is what the caller writes back over
+    /// the photo — so it has to be read out of the response, not assumed.
+    @Test func addTagAnswersWithTheFilesWholeNewTagList() async {
+        var result: Result<[String], Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"tags\":[\"beach\",\"2024\"]}") {
+            result = await awaiting { done in api.addTag(fileId: 31, tagName: "beach", completion: done) }
+        }
+
+        #expect((try? result?.get()) == ["beach", "2024"])
+    }
+
+    /// Removal is a DELETE with the tag in the path, not in a body.
+    @Test func removeTagDeletesTheTagNamedInThePath() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[]}") {
+            _ = await awaiting { done in api.removeTag(fileId: 31, tagName: "beach", completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/files/31/tags/beach")
+        #expect(request?.body.isEmpty == true)
+    }
+
+    // MARK: - Tags on a whole album
+
+    @Test func addTagToAllFilesPostsToTheAlbumsBulkEndpoint() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"updatedCount\":12}") {
+            _ = await awaiting { done in
+                api.addTagToAllFiles(albumId: 7, tagName: "beach", completion: done)
+            }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/albums/7/files/tags/beach")
+    }
+
+    /// Same path, opposite verb. If these two ever converged, "remove from all" would add to
+    /// all — a silent, album-wide, wrong write.
+    @Test func removeTagFromAllFilesUsesTheSamePathWithDelete() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"updatedCount\":12}") {
+            _ = await awaiting { done in
+                api.removeTagFromAllFiles(albumId: 7, tagName: "beach", completion: done)
+            }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/albums/7/files/tags/beach")
+    }
+
+    /// The count of files that actually changed is what the confirmation message quotes.
+    @Test func abulkTagAnswersWithHowManyFilesChanged() async {
+        var result: Result<Int, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"updatedCount\":12}") {
+            result = await awaiting { done in
+                api.addTagToAllFiles(albumId: 7, tagName: "beach", completion: done)
+            }
+        }
+
+        #expect((try? result?.get()) == 12)
+    }
+
+    // MARK: - Which tags an album allows
+
+    @Test func fetchEnabledTagsGetsTheAlbumsList() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[]}") {
+            _ = await awaiting { done in api.fetchEnabledTags(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/albums/7/enabled-tags")
+    }
+
+    /// A whole-list write, not a toggle: the ids go up as an array under `tagIds`, and anything
+    /// left out is switched off. Sending the wrong key silently switches every tag off.
+    @Test func setEnabledTagsPutsTheWholeIdList() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[]}") {
+            _ = await awaiting { done in
+                api.setEnabledTags(albumId: 7, tagIds: [3, 1, 4], completion: done)
+            }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/albums/7/enabled-tags")
+        #expect(request?.headers["Content-Type"] == "application/json")
+        #expect(request?.json["tagIds"] as? [Int] == [3, 1, 4])
+    }
+
+    /// An empty list is a legitimate write — "this album accepts only the system tags" — and
+    /// must not be turned into a missing key.
+    @Test func setEnabledTagsCanSendAnEmptyList() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[]}") {
+            _ = await awaiting { done in api.setEnabledTags(albumId: 7, tagIds: [], completion: done) }
+        }
+
+        #expect(request?.json["tagIds"] as? [Int] == [])
+    }
+
+    // MARK: - Account-wide tags
+
+    @Test func fetchTagsGetsTheAccountList() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tags\":[]}") {
+            _ = await awaiting { done in api.fetchTags(completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/tags")
+    }
+
+    @Test func createTagPostsTheName() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tag\":null}") {
+            _ = await awaiting { done in api.createTag(name: "beach", completion: done) }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/tags")
+        #expect(request?.json["tagName"] as? String == "beach")
+    }
+
+    /// Rename is a PUT on the tag's own id — the *new* name in the body, the id in the path.
+    @Test func updateTagPutsTheNewNameOnTheIdsPath() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tag\":null}") {
+            _ = await awaiting { done in api.updateTag(id: 9, name: "seaside", completion: done) }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/tags/9")
+        #expect(request?.json["tagName"] as? String == "seaside")
+    }
+
+    @Test func deleteTagDeletesTheIdsPath() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.deleteTag(id: 9, completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/tags/9")
+    }
+
+    // MARK: - Narration languages
+
+    @Test func fetchLanguageSettingsGetsTheSettingsEndpoint() async {
+        let request = await StubServer.captureOne(
+            json: "{\"success\":true,\"language1\":\"German\",\"language2\":null}",
+        ) {
+            _ = await awaiting { done in api.fetchLanguageSettings(completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/settings/languages")
+    }
+
+    @Test func languageSettingsDecodeWithOneSlotUnset() async {
+        var result: Result<LanguageSettingsResponse, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"language1\":\"German\",\"language2\":null}") {
+            result = await awaiting { done in api.fetchLanguageSettings(completion: done) }
+        }
+
+        let settings = try? result?.get()
+        #expect(settings?.language1 == "German")
+        #expect(settings?.language2 == nil)
+    }
+
+    /// The slot is part of the path and the name goes up under `value` — the server has one
+    /// endpoint per slot rather than one payload carrying both.
+    @Test(arguments: [1, 2])
+    func setLanguageNamePutsTheNameOnTheSlotsPath(slot: Int) async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in
+                api.setLanguageName(slot: slot, name: "German", completion: done)
+            }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/settings/languages/\(slot)")
+        #expect(request?.headers["Content-Type"] == "application/json")
+        #expect(request?.json["value"] as? String == "German")
+    }
+
+    // MARK: - Recordings
+
+    @Test func fetchRecordingsGetsTheAlbumsRecordings() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"recordings\":[]}") {
+            _ = await awaiting { done in api.fetchRecordings(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/albums/7/recordings")
+    }
+
+    @Test func deleteRecordingDeletesTheIdsPath() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.deleteRecording(id: 42, completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/recordings/42")
+    }
+
+    /// The audio-status probe goes through the public-token route, which is unauthenticated on
+    /// purpose — a share link has to be able to poll it too.
+    @Test func recordingAudioStatusUsesThePublicTokenRoute() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"ready\":true}") {
+            _ = await awaitingValue { done in
+                api.fetchRecordingAudioStatus(publicToken: "tok_abc", completion: done)
+            }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/r/tok_abc/audio/status")
+        #expect(request?.headers["Authorization"] == nil, "the public-token route takes no credentials")
+    }
+
+    /// The readiness of the stubbed answer, for the four-state tests below.
+    ///
+    /// `RecordingAudioStatus` on the server is three Java primitives, so all three keys are
+    /// always on the wire — the fixtures here mirror that.
+    private func readiness(status: Int = 200, json: String) async -> RecordingAudioReadiness {
+        var answer: RecordingAudioReadiness = .unreachable
+        _ = await StubServer.capture(status: status, json: json) {
+            answer = await awaitingValue { done in
+                api.fetchRecordingAudioStatus(publicToken: "tok_abc", completion: done)
+            }
+        }
+        return answer
+    }
+
+    /// This endpoint folds failure into its answer rather than returning a `Result`, so the four
+    /// states are the whole contract. A poll that reads "not ready" for a rendition that has
+    /// failed spins for ever; one that reads "ready" too early hands `AVPlayer` a file that is
+    /// not there yet.
+    @Test func recordingAudioStatusMapsTheServersAnswerToTheFourStates() async {
+        #expect(await readiness(json: "{\"success\":true,\"ready\":true,\"failed\":false}") == .ready)
+        #expect(await readiness(json: "{\"success\":true,\"ready\":false,\"failed\":false}") == .notReady)
+        #expect(await readiness(json: "{\"success\":true,\"ready\":false,\"failed\":true}") == .failed)
+        #expect(await readiness(status: 500, json: "{}") == .unreachable)
+        #expect(await readiness(json: "not json") == .unreachable)
+    }
+
+    /// `ready` wins over `failed`. A rendition that failed once and was then made anyway is
+    /// playable, and refusing to play it would be wrong.
+    @Test func recordingAudioIsReadyEvenIfAnEarlierAttemptFailed() async {
+        #expect(await readiness(json: "{\"success\":true,\"ready\":true,\"failed\":true}") == .ready)
+    }
+
+    /// Documents a fragility rather than endorsing it: all three keys on
+    /// `RecordingAudioStatusResponse` are non-optional, so a server that stopped sending one of
+    /// them would make every poll read as `.unreachable` — the app would give up on a rendition
+    /// that is sitting there ready.
+    ///
+    /// Safe today because the server's `RecordingAudioStatus` holds Java `boolean` primitives,
+    /// which Jackson always writes. If that ever becomes a `Boolean`, this test fails first and
+    /// the fix is to default the field client-side.
+    @Test(arguments: [
+        "{\"ready\":true,\"failed\":false}",
+        "{\"success\":true,\"failed\":false}",
+        "{\"success\":true,\"ready\":true}",
+    ])
+    func amissingKeyMakesTheWholePollUnreachable(json: String) async {
+        #expect(await readiness(json: json) == .unreachable)
+    }
+
+    // MARK: - Errors reach the caller
+
+    /// Every one of these endpoints funnels through the same error ladder. Spot-check that the
+    /// server's own words survive the trip rather than being replaced by a generic message.
+    @Test func aserverErrorMessageReachesTheCaller() async {
+        var result: Result<[String], Error>?
+        _ = await StubServer.capture(status: 400, json: "{\"success\":false,\"message\":\"Tag not enabled for this album\"}") {
+            result = await awaiting { done in api.addTag(fileId: 31, tagName: "beach", completion: done) }
+        }
+
+        guard case let .failure(error) = result else {
+            Issue.record("a 400 must not read as success")
+            return
+        }
+        #expect(error.localizedDescription.contains("Tag not enabled for this album"))
+    }
+
+    /// A body that does not match the model is a failure, not an empty success — an "applied"
+    /// message over a change that never happened is the worst outcome.
+    @Test func anunreadableBodyIsAFailureRatherThanAnEmptyResult() async {
+        var result: Result<Int, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true}") {
+            result = await awaiting { done in
+                api.addTagToAllFiles(albumId: 7, tagName: "beach", completion: done)
+            }
+        }
+
+        #expect((try? result?.get()) == nil)
+    }
+}

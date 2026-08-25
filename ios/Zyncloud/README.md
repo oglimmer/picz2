@@ -65,6 +65,13 @@ like broken tests rather than a broken invocation.
 the first blocks on `DispatchQueue.sync` and wedges the run in parallel, the second mutates static
 seams.
 
+`EndpointShapeTests` is `@Suite(.serialized)` for a different reason: it stubs `URLSession.shared`
+through a registered `URLProtocol` (`StubServer.swift`), which is **process-wide**. `.serialized`
+orders the tests inside one suite, but two sibling suites still run alongside each other — so any
+new suite that uses `StubServer` must be nested *inside* `EndpointShapeTests`, as `TagNames` is.
+A sibling suite would unregister the stub mid-flight and send the other's request to the real
+network.
+
 ### Guard scripts
 
 Neither invariant is reachable from a unit test, so both are shell scripts — run them in CI:
