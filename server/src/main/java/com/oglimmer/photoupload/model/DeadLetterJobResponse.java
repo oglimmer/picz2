@@ -12,6 +12,10 @@ public class DeadLetterJobResponse {
 
   private Long jobId;
   private Long assetId;
+
+  /** Set instead of {@code assetId} for TRANSCODE_AUDIO_AAC, whose subject is a recording. */
+  private Long recordingId;
+
   private Integer attempts;
   private Integer maxAttempts;
   private String lastError;
@@ -23,6 +27,7 @@ public class DeadLetterJobResponse {
     return DeadLetterJobResponse.builder()
         .jobId(job.getId())
         .assetId(job.getAssetId())
+        .recordingId(job.getRecordingId())
         .attempts(job.getAttempts())
         .maxAttempts(job.getMaxAttempts())
         .lastError(job.getLastError())

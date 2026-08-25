@@ -31,6 +31,7 @@ public class JobDispatcher {
 
   private final JobLeaseService jobLeaseService;
   private final FileProcessingService fileProcessingService;
+  private final RecordingAudioService recordingAudioService;
   private final FileMetadataRepository fileMetadataRepository;
   private final JobsProperties jobsProperties;
   private final Semaphore semaphore = new Semaphore(1);
@@ -39,10 +40,12 @@ public class JobDispatcher {
   public JobDispatcher(
       JobLeaseService jobLeaseService,
       FileProcessingService fileProcessingService,
+      RecordingAudioService recordingAudioService,
       FileMetadataRepository fileMetadataRepository,
       JobsProperties jobsProperties) {
     this.jobLeaseService = jobLeaseService;
     this.fileProcessingService = fileProcessingService;
+    this.recordingAudioService = recordingAudioService;
     this.fileMetadataRepository = fileMetadataRepository;
     this.jobsProperties = jobsProperties;
     this.workerId = computeWorkerId();
@@ -73,10 +76,12 @@ public class JobDispatcher {
     }
     JobType jobType = job.getJobType() != null ? job.getJobType() : JobType.PROCESS;
     log.info(
-        "Leased {} job {} (asset {}, attempt {}/{})",
+        "Leased {} job {} (subject {}, attempt {}/{})",
         jobType,
         job.getId(),
-        job.getAssetId(),
+        jobType == JobType.TRANSCODE_AUDIO_AAC
+            ? "recording " + job.getRecordingId()
+            : "asset " + job.getAssetId(),
         job.getAttempts(),
         job.getMaxAttempts());
 
@@ -87,12 +92,20 @@ public class JobDispatcher {
         case REGEN_THUMBNAILS -> fileProcessingService.regenerateThumbnails(job.getAssetId());
         case EXTRACT_CAPTURE_DATE -> fileProcessingService.reextractCaptureDate(job.getAssetId());
         case EXTRACT_GPS -> fileProcessingService.reextractGps(job.getAssetId());
+        case TRANSCODE_AUDIO_AAC -> recordingAudioService.materialiseAac(job.getRecordingId());
       }
     } catch (Exception e) {
       // The service-layer methods catch their own exceptions today, but treat any leak
       // defensively so the lease is released cleanly.
       log.error("{} threw for asset {}: {}", jobType, job.getAssetId(), e.getMessage(), e);
       jobLeaseService.markFailedOrDeadLetter(job.getId(), e.toString());
+      return;
+    }
+
+    // TRANSCODE_AUDIO_AAC carries a recording_id rather than an asset_id, and the work either threw
+    // above or succeeded — there is no FileMetadata row to mirror. Settle it here instead.
+    if (jobType == JobType.TRANSCODE_AUDIO_AAC) {
+      jobLeaseService.markDone(job.getId());
       return;
     }
 

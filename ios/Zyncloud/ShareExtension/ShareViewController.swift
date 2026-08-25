@@ -288,7 +288,6 @@ class ShareViewController: UIViewController {
     private func presentInAppBrowser(_ url: URL) {
         let safari = SFSafariViewController(url: url)
         safari.modalPresentationStyle = .pageSheet
-        safari.preferredControlTintColor = .tintColor
         present(safari, animated: true)
     }
 

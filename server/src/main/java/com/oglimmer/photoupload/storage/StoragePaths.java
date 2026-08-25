@@ -22,6 +22,13 @@ public final class StoragePaths {
   public static final String DERIVATIVES_PREFIX = "derivatives/";
   public static final String AUDIO_PREFIX = "audio/";
 
+  /**
+   * In-flight TUS uploads. Owned by tusd, not by any DB row until the post-finish hook moves the
+   * object — so a sweep that reasons from DB rows must skip this prefix entirely rather than read
+   * it as garbage. {@code RetentionService} reaps it on a grace period instead.
+   */
+  public static final String TUS_UPLOADS_PREFIX = "tus-uploads/";
+
   private StoragePaths() {}
 
   public static boolean isS3Key(String path) {
@@ -37,6 +44,23 @@ public final class StoragePaths {
 
   public static String audioKey(String audioFilename) {
     return AUDIO_PREFIX + audioFilename;
+  }
+
+  /**
+   * Filename of the AAC sibling for a master audio file: same base name, {@code .m4a} extension.
+   *
+   * <p>Apple's media stack cannot open the Opus/WebM master at all, so every client on iOS asks for
+   * this rendition instead. Deriving the name rather than storing a second column keeps the sibling
+   * addressable from an existing row with no migration.
+   */
+  public static String aacFilename(String audioFilename) {
+    int lastDot = audioFilename.lastIndexOf('.');
+    String base = lastDot > 0 ? audioFilename.substring(0, lastDot) : audioFilename;
+    return base + ".m4a";
+  }
+
+  public static String audioAacKey(String audioFilename) {
+    return AUDIO_PREFIX + aacFilename(audioFilename);
   }
 
   /**

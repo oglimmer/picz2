@@ -26,8 +26,18 @@ public class ProcessingJob {
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private Long id;
 
-  @Column(name = "asset_id", nullable = false)
+  /**
+   * The asset this job works on. Null for {@link JobType#TRANSCODE_AUDIO_AAC}, which works on a
+   * recording instead — see {@link #recordingId}. Exactly one of the two is set.
+   */
+  @Column(name = "asset_id")
   private Long assetId;
+
+  /**
+   * The slideshow recording this job works on. Set only for {@link JobType#TRANSCODE_AUDIO_AAC}.
+   */
+  @Column(name = "recording_id")
+  private Long recordingId;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "job_type", nullable = false, length = 32)

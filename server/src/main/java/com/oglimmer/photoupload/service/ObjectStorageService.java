@@ -27,11 +27,14 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.MetadataDirective;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
@@ -182,6 +185,33 @@ public class ObjectStorageService {
       continuationToken = page.isTruncated() ? page.nextContinuationToken() : null;
     } while (continuationToken != null);
     return keys;
+  }
+
+  /**
+   * True when the bucket holds this key. Uses {@code HeadObject}, which fetches metadata only — no
+   * object bytes cross the wire. A missing key answers false rather than throwing; any other S3
+   * fault still propagates, because "cannot tell" must not read as "not there".
+   */
+  public boolean exists(String key) {
+    // The 404 is caught INSIDE the breaker's supplier on purpose. Catching it outside made every
+    // "not there" answer count as a MinIO failure, and enough of them in the sliding window
+    // tripped the breaker OPEN — which then failed unrelated storage calls for ten seconds.
+    // A key that is legitimately absent is a successful call, not a fault.
+    return withBreaker(
+        () -> {
+          try {
+            s3.headObject(
+                HeadObjectRequest.builder().bucket(properties.getBucket()).key(key).build());
+            return true;
+          } catch (NoSuchKeyException e) {
+            return false;
+          } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+              return false;
+            }
+            throw e;
+          }
+        });
   }
 
   public void delete(String key) {

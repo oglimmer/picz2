@@ -10,6 +10,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
     @Published var albums: [Album] = []
     @Published var selectedAlbum: Album?
     @Published var isLoadingAlbums: Bool = false
+    @Published var isDeletingAccount: Bool = false
 
     private let syncCoordinator: SyncCoordinator
     private var apiClient: APIClient?
@@ -204,6 +205,47 @@ class SyncOptionsViewModel: ViewModelProtocol {
                 completion()
             },
         )
+    }
+
+    /// Delete the account on the server, then tear down every local trace of it.
+    ///
+    /// The teardown is deliberately identical to ``logout(completion:)`` — credentials, upload
+    /// store, settings, queue and metrics — because leaving any of it behind after the account is
+    /// gone would let the next screen try to sync against a user the server no longer knows.
+    /// The local wipe only runs on a confirmed server-side delete; a failed request leaves the
+    /// signed-in session intact so the user can retry.
+    func deleteAccount(completion: @escaping () -> Void) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        isDeletingAccount = true
+
+        apiClient.deleteAccount { [weak self] result in
+            guard let self else { return }
+
+            DispatchQueue.main.async {
+                self.isDeletingAccount = false
+
+                switch result {
+                case .success:
+                    // Via CredentialsManager so the share extension is signed out too.
+                    CredentialsManager.clear()
+                    UploadStore.shared.clear()
+                    self.syncCoordinator.settings.clear()
+                    self.syncCoordinator.clearQueue()
+                    self.syncCoordinator.metrics = SyncCoordinator.Metrics()
+                    completion()
+
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
     }
 
     var photoAccessStatusText: String {

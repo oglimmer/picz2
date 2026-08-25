@@ -4,8 +4,13 @@ struct RegisterView: View {
     @StateObject private var viewModel = RegisterViewModel()
     @Environment(\.dismiss) private var dismiss
 
-    private var termsURL: URL? { URL(string: "\(AppConfiguration.baseURL)/terms") }
-    private var privacyURL: URL? { URL(string: "\(AppConfiguration.baseURL)/privacy") }
+    private var termsURL: URL? {
+        LegalPage.terms.url
+    }
+
+    private var privacyURL: URL? {
+        LegalPage.privacy.url
+    }
 
     var body: some View {
         Form {

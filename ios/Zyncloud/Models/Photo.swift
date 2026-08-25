@@ -11,7 +11,10 @@ struct FileInfo: Codable, Identifiable {
     let path: String? // Can be null in server response
     let uploadedAt: String
     let displayOrder: Int?
-    let tags: [String]
+    /// `var` for the same reason as ``processingStatus``: tagging one photo answers with that
+    /// photo's whole new tag list, and writing it back in place is cheaper and steadier than
+    /// reloading the album to learn one row changed.
+    var tags: [String]
     let albumId: Int
     let albumName: String?
 
@@ -38,7 +41,29 @@ struct FileInfo: Codable, Identifiable {
         case albumId
         case albumName
         case processingStatus
+        case exifDateTimeOriginal
+        case captureUtcOffsetSeconds
+        case gpsLatitude
+        case gpsLongitude
     }
+
+    /// When the shutter fired, as the server read it out of the file. An ISO-8601 instant, or
+    /// nil for an asset that carried no capture date.
+    ///
+    /// Declared after ``processingStatus`` on purpose: an optional `var` gets an implicit `nil`
+    /// in the memberwise initialiser, so appending fields at the end leaves every existing
+    /// `FileInfo(...)` call untouched.
+    var exifDateTimeOriginal: String?
+
+    /// UTC offset in seconds at the place the photo was taken, or nil when the server never
+    /// knew one. Added back to ``exifDateTimeOriginal`` it gives the wall clock the camera saw,
+    /// which is the only honest way to say which day a photo belongs to.
+    var captureUtcOffsetSeconds: Int?
+
+    /// Capture position in signed decimal degrees (WGS 84), or nil when the asset carries none.
+    var gpsLatitude: Double?
+
+    var gpsLongitude: Double?
 
     var processing: AssetProcessingStatus? {
         processingStatus.flatMap(AssetProcessingStatus.init(rawValue:))

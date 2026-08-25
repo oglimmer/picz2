@@ -12,12 +12,12 @@ struct MainTabView: View {
 
             SyncOptionsView(isLoggedIn: $isLoggedIn)
                 .tabItem {
-                    Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Options", systemImage: "gearshape")
                 }
 
             SyncLogView()
                 .tabItem {
-                    Label("Log", systemImage: "list.bullet.rectangle")
+                    Label("Status", systemImage: "chart.bar.doc.horizontal")
                 }
         }
     }
