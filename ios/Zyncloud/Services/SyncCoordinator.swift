@@ -92,16 +92,18 @@ final class SyncCoordinator: ObservableObject {
     private var credentialsObserver: NSObjectProtocol?
 
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
-    private var pendingAssets: [PHAsset] = []
-    private var uploadingAssets: Set<String> = [] // Track assets currently being uploaded
-    private var inFlightAssets: [String: PHAsset] = [:] // localId -> PHAsset, kept for 503 re-queue
+
+    /// What is waiting, what is in flight, and the cap on how much may be in flight at once.
+    /// Lives in ``UploadQueue`` rather than in three fields here so the rules — the cap itself,
+    /// the 503 re-queue, the export-failure re-queue — can be tested without a photo library.
+    /// Touched only on `syncQueue`.
+    private var queue = UploadQueue<PHAsset>(maxInFlight: 3)
 
     // An asset whose original cannot be produced at all (iCloud copy unavailable, corrupt
     // resource) used to be re-appended every 10 s for as long as the app ran, burning the
     // queue slot forever. The give-up rule lives in ExportRetryPolicy so it can be tested
     // without standing up a coordinator. Touched only on syncQueue.
     private var exportRetryPolicy = ExportRetryPolicy()
-    private let maxInFlightUploads = 3
 
     /// Destination album for assets the user picked by hand on an album screen, keyed by local
     /// identifier. Everything absent from this map goes wherever the server's target-album
@@ -231,9 +233,7 @@ final class SyncCoordinator: ObservableObject {
 
     func clearQueue() {
         syncQueue.async {
-            self.pendingAssets.removeAll()
-            self.uploadingAssets.removeAll()
-            self.inFlightAssets.removeAll()
+            self.queue.removeAll()
             self.exportRetryPolicy.reset()
             self.albumOverrides.removeAll()
             DispatchQueue.main.async {
@@ -565,16 +565,14 @@ final class SyncCoordinator: ObservableObject {
     private func enqueue(assets: [PHAsset]) -> [PHAsset] {
         guard !assets.isEmpty else { return [] }
 
-        // Filter out assets that are already pending or currently uploading, plus any the
-        // server has already refused for size under a cap that has not since been raised —
-        // re-exporting a 1.6 GB video on every scan to earn the same 413 helps nobody.
+        // Drop anything the server has already refused for size under a cap that has not since
+        // been raised — re-exporting a 1.6 GB video on every scan to earn the same 413 helps
+        // nobody. Assets already queued or uploading are the queue's own business.
         let sizeLimit = currentUploadSizeLimit()
-        let newAssets = assets.filter { asset in
-            let isAlreadyQueued = pendingAssets.contains(where: { $0.localIdentifier == asset.localIdentifier })
-            let isCurrentlyUploading = uploadingAssets.contains(asset.localIdentifier)
-            let isTooLarge = UploadStore.shared.shouldSkipForSize(asset.localIdentifier, currentLimit: sizeLimit)
-            return !isAlreadyQueued && !isCurrentlyUploading && !isTooLarge
+        let admissible = assets.filter {
+            !UploadStore.shared.shouldSkipForSize($0.localIdentifier, currentLimit: sizeLimit)
         }
+        let newAssets = queue.enqueue(admissible)
 
         guard !newAssets.isEmpty else {
             print("SyncCoordinator: All \(assets.count) assets already queued or uploading, skipping")
@@ -582,32 +580,31 @@ final class SyncCoordinator: ObservableObject {
         }
 
         print("SyncCoordinator: Enqueuing \(newAssets.count) new assets (filtered from \(assets.count))")
-        pendingAssets.append(contentsOf: newAssets)
-        DispatchQueue.main.async {
-            self.metrics.queued = self.pendingAssets.count
-        }
+        publishQueuedCount()
         drainQueue()
         return newAssets
+    }
+
+    /// Copies the queue depth over to the metrics.
+    ///
+    /// The count is read here, on `syncQueue`, and only the number crosses to the main queue —
+    /// reading the queue itself from inside the `main.async` block would be a second thread
+    /// touching it while this one mutates it.
+    private func publishQueuedCount() {
+        let queued = queue.pendingCount
+        DispatchQueue.main.async { self.metrics.queued = queued }
     }
 
     private func drainQueue() {
         // Only launch enough uploads to fill the concurrency cap. New uploads
         // are handed off one-per-completion (see handleUploadFinished) so the
-        // server never sees more than maxInFlightUploads at once.
-        let slotsFree = max(0, maxInFlightUploads - uploadingAssets.count)
-        guard slotsFree > 0 else { return }
-
-        let batch = Array(pendingAssets.prefix(slotsFree))
+        // server never sees more than the queue's maxInFlight at once.
+        let batch = queue.startNext()
         guard !batch.isEmpty else { return }
 
-        pendingAssets.removeFirst(batch.count)
-        for asset in batch {
-            uploadingAssets.insert(asset.localIdentifier)
-            inFlightAssets[asset.localIdentifier] = asset
-        }
-
+        let queued = queue.pendingCount
         DispatchQueue.main.async {
-            self.metrics.queued = self.pendingAssets.count
+            self.metrics.queued = queued
             self.metrics.uploading += batch.count
         }
 
@@ -633,8 +630,7 @@ final class SyncCoordinator: ObservableObject {
                     // Export / body-write failed — free the slot and try a replacement.
                     self.syncQueue.async {
                         let id = asset.localIdentifier
-                        self.uploadingAssets.remove(id)
-                        self.inFlightAssets.removeValue(forKey: id)
+                        self.queue.finish(id)
                         DispatchQueue.main.async {
                             self.metrics.uploading = max(0, self.metrics.uploading - 1)
                         }
@@ -652,8 +648,8 @@ final class SyncCoordinator: ObservableObject {
                         }
 
                         self.syncQueue.asyncAfter(deadline: .now() + 10) {
-                            self.pendingAssets.append(asset)
-                            DispatchQueue.main.async { self.metrics.queued = self.pendingAssets.count }
+                            self.queue.requeueBack(asset)
+                            self.publishQueuedCount()
                             self.drainQueue()
                         }
                     }
@@ -763,8 +759,7 @@ final class SyncCoordinator: ObservableObject {
 
     private func handleUploadFinished(assetId: String, outcome: Uploader.UploadOutcome) {
         syncQueue.async {
-            let asset = self.inFlightAssets.removeValue(forKey: assetId)
-            self.uploadingAssets.remove(assetId)
+            let asset = self.queue.finish(assetId)
 
             DispatchQueue.main.async {
                 self.metrics.uploading = max(0, self.metrics.uploading - 1)
@@ -798,8 +793,8 @@ final class SyncCoordinator: ObservableObject {
                 // draining for retryAfter seconds so we don't hammer the server.
                 if let asset {
                     print("SyncCoordinator: 503/429 on \(assetId), re-queueing after \(Int(retryAfter))s")
-                    self.pendingAssets.insert(asset, at: 0)
-                    DispatchQueue.main.async { self.metrics.queued = self.pendingAssets.count }
+                    self.queue.requeueFront(asset)
+                    self.publishQueuedCount()
                 }
                 self.syncQueue.asyncAfter(deadline: .now() + retryAfter) {
                     self.drainQueue()
