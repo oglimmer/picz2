@@ -30,6 +30,13 @@ enum UploadRouting {
         return capabilities.tus.enabled ? .tus : .multipart
     }
 
+    /// Album-screen uploads store the destination in `albumOverrides`; background sync does
+    /// not. The by-content lookup is scoped to `(albumId, contentId)`, so using the sync
+    /// target for a hand-picked upload 404s and status polling never starts.
+    static func lookupAlbumId(override: Int?, fallback: Int) -> Int {
+        override ?? fallback
+    }
+
     /// Routes a background session identifier handed back by the system on relaunch.
     ///
     /// An identifier we do not recognise — a session created by an older build, say — routes to

@@ -677,22 +677,21 @@ class ShareViewController: UIViewController {
                 self.progressView.setProgress(value, animated: value - self.progressView.progress > 0.05)
                 self.subtitleLabel.text = "Uploading… \(Int(progress * 100))%"
             }
-        } completion: { [weak self] result in
+        } completion: { [weak self] outcome in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.isUploading = false
                 self.cancelButton.isEnabled = true
+                self.subtitleLabel.text = outcome.userMessage
 
-                switch result {
-                case let .success(count):
-                    self.subtitleLabel.text = "Uploaded \(count) item\(count == 1 ? "" : "s")"
+                if outcome.allSucceeded {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                         self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
                     }
-                case let .failure(error):
+                } else {
                     self.progressView.isHidden = true
                     self.refreshUploadButton()
-                    self.showError("Upload failed: \(error.localizedDescription)")
+                    self.showError(outcome.userMessage)
                 }
             }
         }

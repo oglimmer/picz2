@@ -66,6 +66,7 @@
 				AttachmentLoading.swift,
 				Credentials.swift,
 				LastAlbumStore.swift,
+				TusChunking.swift,
 				UploadService.swift,
 			);
 			target = 4FCF81DB2EA2D6AC00FD14F6 /* ShareExtension */;
@@ -74,6 +75,13 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				KeychainHelper.swift,
+			);
+			target = 4FCF81DB2EA2D6AC00FD14F6 /* ShareExtension */;
+		};
+		4F525AC22EC346FA003F8EDD /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				UploadSizeLimit.swift,
 			);
 			target = 4FCF81DB2EA2D6AC00FD14F6 /* ShareExtension */;
 		};
@@ -91,7 +99,7 @@
 		4F525A892EC345D2003F8EDD /* ViewModels */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ViewModels; sourceTree = "<group>"; };
 		4F525A922EC345ED003F8EDD /* Utils */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4F525AC12EC346FA003F8EDD /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Utils; sourceTree = "<group>"; };
 		4F525A992EC34696003F8EDD /* Models */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Models; sourceTree = "<group>"; };
-		4F525A9E2EC346BA003F8EDD /* Services */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Services; sourceTree = "<group>"; };
+		4F525A9E2EC346BA003F8EDD /* Services */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4F525AC22EC346FA003F8EDD /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Services; sourceTree = "<group>"; };
 		4F525AB92EC346FA003F8EDD /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4F525AC02EC346FA003F8EDD /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Shared; sourceTree = "<group>"; };
 		4FCF81DD2EA2D6AC00FD14F6 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4FCF81F82EA2E2EB00FD14F6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
 		AA8888888888888888888802 /* ZyncloudTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ZyncloudTests; sourceTree = "<group>"; };

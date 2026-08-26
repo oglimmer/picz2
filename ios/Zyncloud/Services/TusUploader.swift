@@ -5,20 +5,12 @@ import Photos
 /// ``SyncCoordinator`` based on ``Settings/useTus`` and the server-advertised capabilities
 /// (``APIClient/fetchCapabilities``).
 ///
-/// V1 scope (R2 prep):
-///   * Foreground ``POST /files/`` to create the upload (small request, headers only).
-///   * Background ``PATCH /files/{id}`` carrying the entire file from offset 0.
-///   * Pre-create dedupe (HTTP 409) and backpressure (HTTP 503) surface as the same callback
-///     outcomes the multipart ``Uploader`` already produces, so ``SyncCoordinator`` doesn't
-///     need parallel handling logic.
-///
-/// V2 scope (intentionally deferred — needs Xcode + device verification):
-///   * Cross-launch resume via ``HEAD /files/{id}`` to discover the server-side offset, then
-///     PATCH from there using a sliced temp file. Today, an interrupted PATCH that's
-///     resurrected after an app relaunch restarts from offset 0 (same as multipart). The big
-///     resume win — recovering from a long network outage — already works automatically via
-///     the background ``URLSession`` on the same task.
-final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate {
+/// V1 shipped a single PATCH of the whole file from offset 0. Traefik's 60s `readTimeout`
+/// killed anything that took longer, and the next attempt started from byte 0 again. Chunked
+/// PATCH from the server's `Upload-Offset` (via HEAD) is what actually resumes.
+final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate,
+    URLSessionDownloadDelegate
+{
     static let shared = TusUploader()
 
     let sessionId = "com.oglimmer.photosync.tus"
@@ -38,6 +30,15 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
 
     var onTaskFinished: ((String, UploadOutcome) -> Void)?
     var onAllBackgroundEventsComplete: ((String) -> Void)?
+
+    /// Consecutive transport-error resumes per asset. Cleared every time the server's offset
+    /// actually advances — the budget is for a chunk that keeps dying on the ingress, not for a
+    /// 500-chunk video that hits three bad moments in an hour.
+    private let resumeBudget = TusResumeBudget()
+
+    /// Where chunks are cut. Never the URLSession delegate queue: a 4 MiB copy there blocks
+    /// every other callback the session owes us.
+    private let sliceQueue = DispatchQueue(label: "com.oglimmer.photosync.tus.slice", qos: .utility)
 
     override private init() { super.init() }
 
@@ -197,7 +198,18 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                                                  userInfo: [NSLocalizedDescriptionKey: "missing Location header"])))
                     return
                 }
-                self.startPatch(asset: asset, exp: exp, uploadURL: uploadURL, api: api, completion: completion)
+                // A freshly created TUS resource is empty by definition, so the offset is 0
+                // and a HEAD here would only cost a round-trip. HEAD is the *resume* path.
+                self.patchChunk(
+                    assetId: assetId,
+                    originalURL: exp.fileURL,
+                    uploadURL: uploadURL,
+                    checksum: exp.checksum,
+                    fileSize: fileSize,
+                    offset: 0,
+                    api: api,
+                    completion: completion,
+                )
             case 409:
                 // Pre-create dedupe — the server already has a row for this contentId, anywhere
                 // in the account, and refuses the bytes. Reported as its own outcome rather than
@@ -248,10 +260,153 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         }.resume()
     }
 
-    private func startPatch(
-        asset: PHAsset,
-        exp: Uploader.ExportResult,
+    /// HEADs the TUS resource on the **background** session, so a resume that starts while the
+    /// app is suspended still runs. A `URLSession.shared` request here would simply never
+    /// return once iOS suspends us after `urlSessionDidFinishEvents`, leaving the asset stuck
+    /// in `uploading` with no callback to clear it.
+    ///
+    /// Background sessions accept only upload/download tasks, so this is a download task whose
+    /// method is HEAD — the (empty) body is discarded and only `Upload-Offset` is read, in
+    /// ``handleHeadFinished(patch:originalURL:error:response:)``.
+    private func startHeadForResume(
+        assetId: String,
+        originalURL: URL,
         uploadURL: URL,
+        checksum: String,
+        fileSize: Int64
+    ) {
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "HEAD"
+        request.applyNetworkPolicy()
+        request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+        apiFromKeychain().addBasicAuth(to: &request)
+
+        let task = session.downloadTask(with: request)
+        // chunkPath == originalPath so the delegate does not delete anything when this ends.
+        task.taskDescription = TusTask(
+            assetId: assetId,
+            chunkPath: originalURL.path,
+            uploadURL: uploadURL,
+            checksum: checksum,
+            originalPath: originalURL.path,
+            fileSize: fileSize,
+            sentOffset: 0,
+            kind: .head,
+        ).description
+        task.resume()
+    }
+
+    /// The resume HEAD came back. Continue from the offset the server kept, or finish.
+    private func handleHeadFinished(
+        patch: TusTask,
+        originalURL: URL,
+        error: Error?,
+        response: URLResponse?
+    ) {
+        let assetId = patch.assetId
+        if let error {
+            failCreate(assetId: assetId, originalURL: originalURL,
+                       message: error.localizedDescription, completion: nil)
+            return
+        }
+        guard let http = response as? HTTPURLResponse else {
+            failCreate(assetId: assetId, originalURL: originalURL,
+                       message: "no response from HEAD", completion: nil)
+            return
+        }
+        // 404/410: tusd expired the incomplete upload. The next scan will POST a new one.
+        guard (200 ... 299).contains(http.statusCode) else {
+            failCreate(assetId: assetId, originalURL: originalURL,
+                       message: "HEAD /files/ returned \(http.statusCode)", completion: nil)
+            return
+        }
+        let offset = TusChunking.parseOffset(http.value(forHTTPHeaderField: "Upload-Offset")) ?? 0
+        let fileSize: Int64
+        if patch.fileSize > 0 {
+            fileSize = patch.fileSize
+        } else {
+            do {
+                let attrs = try fileManager.attributesOfItem(atPath: originalURL.path)
+                fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            } catch {
+                failCreate(assetId: assetId, originalURL: originalURL,
+                           message: error.localizedDescription, completion: nil)
+                return
+            }
+        }
+        guard TusChunking.nextChunk(offset: offset, fileSize: fileSize) != nil else {
+            finishSuccessfully(assetId: assetId, originalURL: originalURL,
+                               checksum: patch.checksum, completion: nil)
+            return
+        }
+        patchChunk(
+            assetId: assetId,
+            originalURL: originalURL,
+            uploadURL: patch.uploadURL,
+            checksum: patch.checksum,
+            fileSize: fileSize,
+            offset: offset,
+            api: apiFromKeychain(),
+            completion: nil,
+        )
+    }
+
+    private func patchChunk(
+        assetId: String,
+        originalURL: URL,
+        uploadURL: URL,
+        checksum: String,
+        fileSize: Int64,
+        offset: Int64,
+        api: APIClient,
+        completion: ((Result<Void, Error>) -> Void)?
+    ) {
+        guard let range = TusChunking.nextChunk(offset: offset, fileSize: fileSize) else {
+            finishSuccessfully(
+                assetId: assetId, originalURL: originalURL, checksum: checksum,
+                completion: completion,
+            )
+            return
+        }
+
+        // Slicing copies up to a chunk of bytes. `patchChunk` is called from the URLSession
+        // delegate queue when the previous chunk lands, and blocking that queue on file I/O
+        // stalls every other callback the session has to deliver — including other uploads'.
+        sliceQueue.async { [weak self] in
+            guard let self else { return }
+            let chunkURL: URL
+            let wholeFile = range.lowerBound == 0 && range.upperBound == fileSize
+            if wholeFile {
+                chunkURL = originalURL
+            } else {
+                chunkURL = self.fileManager.temporaryDirectory
+                    .appendingPathComponent("tus-chunk-\(UUID().uuidString)")
+                do {
+                    try TusChunking.writeSlice(from: originalURL, range: range, to: chunkURL)
+                } catch {
+                    self.failCreate(assetId: assetId, originalURL: originalURL,
+                                    message: error.localizedDescription, completion: completion)
+                    return
+                }
+            }
+            self.sendPatch(
+                assetId: assetId, originalURL: originalURL, uploadURL: uploadURL,
+                checksum: checksum, fileSize: fileSize, range: range, chunkURL: chunkURL,
+                api: api, completion: completion,
+            )
+        }
+    }
+
+    /// Puts one prepared chunk on the background session. Split from ``patchChunk`` only so the
+    /// slicing above can happen off the delegate queue.
+    private func sendPatch(
+        assetId: String,
+        originalURL: URL,
+        uploadURL: URL,
+        checksum: String,
+        fileSize: Int64,
+        range: Range<Int64>,
+        chunkURL: URL,
         api: APIClient,
         completion: ((Result<Void, Error>) -> Void)?
     ) {
@@ -259,19 +414,69 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         request.httpMethod = "PATCH"
         request.applyNetworkPolicy()
         request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-        request.setValue("0", forHTTPHeaderField: "Upload-Offset")
+        request.setValue(String(range.lowerBound), forHTTPHeaderField: "Upload-Offset")
         request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
         api.addBasicAuth(to: &request)
 
-        let task = session.uploadTask(with: request, fromFile: exp.fileURL)
-        task.taskDescription = [
-            asset.localIdentifier,
-            exp.fileURL.path,
-            uploadURL.absoluteString,
-            exp.checksum,
-        ].joined(separator: "|")
+        let task = session.uploadTask(with: request, fromFile: chunkURL)
+        task.taskDescription = TusTask(
+            assetId: assetId,
+            chunkPath: chunkURL.path,
+            uploadURL: uploadURL,
+            checksum: checksum,
+            originalPath: originalURL.path,
+            fileSize: fileSize,
+            sentOffset: range.lowerBound,
+            kind: .patch,
+        ).description
         task.resume()
         completion?(.success(()))
+    }
+
+    private func failCreate(
+        assetId: String,
+        originalURL: URL,
+        message: String,
+        completion: ((Result<Void, Error>) -> Void)?
+    ) {
+        try? fileManager.removeItem(at: originalURL)
+        clearResumeAttempts(for: assetId)
+        SyncLogger.shared.logUploadFailure(assetId: assetId, error: message)
+        UploadStore.shared.removeFromUploading(assetId)
+        // The queue-handoff completion already frees the slot. `onTaskFinished` is only for
+        // a chunk that died after that handoff (completion is nil).
+        if let completion {
+            completion(.failure(NSError(
+                domain: "TusUploader",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: message],
+            )))
+        } else {
+            onTaskFinished?(assetId, .transport)
+        }
+    }
+
+    private func finishSuccessfully(
+        assetId: String,
+        originalURL: URL,
+        checksum: String,
+        completion: ((Result<Void, Error>) -> Void)?
+    ) {
+        clearResumeAttempts(for: assetId)
+        try? fileManager.removeItem(at: originalURL)
+        UploadStore.shared.markUploaded(assetId, checksum: checksum)
+        SyncCoordinator.shared.onUploadedOne(assetId: assetId)
+        SyncLogger.shared.logUploadSuccess(assetId: assetId)
+        onTaskFinished?(assetId, .success(serverAssetId: nil))
+        completion?(.success(()))
+    }
+
+    private func clearResumeAttempts(for assetId: String) {
+        resumeBudget.clear(assetId)
+    }
+
+    private func consumeResumeAttempt(for assetId: String) -> Bool {
+        resumeBudget.consume(assetId)
     }
 
     /// Deletes the exported copy of an asset that will not be uploaded after all.
@@ -327,55 +532,192 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
     // MARK: - URLSession Delegate
 
     func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        defer {
-            if let desc = task.taskDescription {
-                let comps = desc.components(separatedBy: "|")
-                if comps.count > 1 {
-                    try? fileManager.removeItem(atPath: comps[1])
-                }
-            }
+        guard let desc = task.taskDescription, let patch = TusTask.parse(desc) else { return }
+        let assetId = patch.assetId
+        let originalURL = URL(fileURLWithPath: patch.originalPath)
+
+        // The slice is disposable as soon as this task ends. The original stays until the
+        // whole file has been accepted — later chunks still need it.
+        if patch.chunkPath != patch.originalPath {
+            try? fileManager.removeItem(atPath: patch.chunkPath)
         }
-        guard let desc = task.taskDescription else { return }
-        let comps = desc.components(separatedBy: "|")
-        guard let assetId = comps.first else { return }
-        let checksum = comps.count > 3 ? comps[3] : nil
+
+        if patch.kind == .head {
+            handleHeadFinished(patch: patch, originalURL: originalURL,
+                               error: error, response: task.response)
+            return
+        }
 
         if let error {
-            SyncLogger.shared.logUploadFailure(assetId: assetId, error: error.localizedDescription)
-            UploadStore.shared.removeFromUploading(assetId)
-            onTaskFinished?(assetId, .transport)
+            resumeOrFail(
+                assetId: assetId,
+                originalURL: originalURL,
+                uploadURL: patch.uploadURL,
+                checksum: patch.checksum,
+                fileSize: patch.fileSize,
+                message: error.localizedDescription,
+            )
             return
         }
         if let http = task.response as? HTTPURLResponse {
             let code = http.statusCode
             if (200 ... 299).contains(code) {
-                UploadStore.shared.markUploaded(assetId, checksum: checksum)
-                SyncCoordinator.shared.onUploadedOne(assetId: assetId)
-                SyncLogger.shared.logUploadSuccess(assetId: assetId)
-                // The PATCH response carries TUS headers only — the server-side asset id is
-                // resolved out-of-band by SyncCoordinator (lookup by contentId) when status
-                // polling is integrated. nil here is fine: it just disables polling for now.
-                onTaskFinished?(assetId, .success(serverAssetId: nil))
+                let reported = TusChunking.parseOffset(http.value(forHTTPHeaderField: "Upload-Offset"))
+                let newOffset = reported ?? patch.fileSize
+                if patch.fileSize > 0, newOffset < patch.fileSize {
+                    if newOffset <= patch.sentOffset {
+                        resumeOrFail(
+                            assetId: assetId,
+                            originalURL: originalURL,
+                            uploadURL: patch.uploadURL,
+                            checksum: patch.checksum,
+                            fileSize: patch.fileSize,
+                            message: "Upload-Offset did not advance",
+                        )
+                        return
+                    }
+                    // Bytes landed, so earlier transport errors are behind us: the resume budget
+                    // is for a chunk that keeps dying, not a lifetime cap on a 500-chunk video.
+                    clearResumeAttempts(for: assetId)
+                    patchChunk(
+                        assetId: assetId,
+                        originalURL: originalURL,
+                        uploadURL: patch.uploadURL,
+                        checksum: patch.checksum,
+                        fileSize: patch.fileSize,
+                        offset: newOffset,
+                        api: apiFromKeychain(),
+                        completion: nil,
+                    )
+                    return
+                }
+                finishSuccessfully(
+                    assetId: assetId, originalURL: originalURL, checksum: patch.checksum,
+                    completion: nil,
+                )
+            } else if code == 409 {
+                resumeOrFail(
+                    assetId: assetId,
+                    originalURL: originalURL,
+                    uploadURL: patch.uploadURL,
+                    checksum: patch.checksum,
+                    fileSize: patch.fileSize,
+                    message: "offset mismatch",
+                )
             } else if code == 429 || code == 503 {
+                try? fileManager.removeItem(at: originalURL)
+                clearResumeAttempts(for: assetId)
                 let retry = parseRetryAfter(from: http) ?? 30
                 SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
                 UploadStore.shared.removeFromUploading(assetId)
                 onTaskFinished?(assetId, .backpressure(retry))
             } else {
+                try? fileManager.removeItem(at: originalURL)
+                clearResumeAttempts(for: assetId)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(code)")
                 UploadStore.shared.removeFromUploading(assetId)
                 onTaskFinished?(assetId, .clientError)
             }
         } else {
-            UploadStore.shared.markUploaded(assetId, checksum: checksum)
-            SyncCoordinator.shared.onUploadedOne(assetId: assetId)
-            SyncLogger.shared.logUploadSuccess(assetId: assetId)
-            onTaskFinished?(assetId, .success(serverAssetId: nil))
+            finishSuccessfully(
+                assetId: assetId, originalURL: originalURL, checksum: patch.checksum,
+                completion: nil,
+            )
         }
+    }
+
+    /// A chunk died in transit. HEAD the resource and continue from whatever offset the
+    /// server kept, up to ``TusResumeBudget``'s cap of *consecutive* stalls — the budget is
+    /// refilled whenever the offset advances. Past that the next scan re-exports.
+    private func resumeOrFail(
+        assetId: String,
+        originalURL: URL,
+        uploadURL: URL,
+        checksum: String,
+        fileSize: Int64,
+        message: String
+    ) {
+        guard fileManager.fileExists(atPath: originalURL.path), consumeResumeAttempt(for: assetId) else {
+            try? fileManager.removeItem(at: originalURL)
+            clearResumeAttempts(for: assetId)
+            SyncLogger.shared.logUploadFailure(assetId: assetId, error: message)
+            UploadStore.shared.removeFromUploading(assetId)
+            onTaskFinished?(assetId, .transport)
+            return
+        }
+        print("TusUploader: resuming \(assetId) after transport error: \(message)")
+        startHeadForResume(
+            assetId: assetId,
+            originalURL: originalURL,
+            uploadURL: uploadURL,
+            checksum: checksum,
+            fileSize: fileSize,
+        )
+    }
+
+    private func apiFromKeychain() -> APIClient {
+        let credentials = KeychainHelper.shared.load()
+        return APIClient(username: credentials?.username, password: credentials?.password)
+    }
+
+    /// The resume HEAD is a download task, so the system insists on handing us a file for its
+    /// (empty) body. Everything that matters is read from `task.response` in
+    /// ``urlSession(_:task:didCompleteWithError:)``.
+    func urlSession(_: URLSession, downloadTask _: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        try? fileManager.removeItem(at: location)
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         onAllBackgroundEventsComplete?(session.configuration.identifier ?? "")
+    }
+}
+
+/// What kind of request a background task is. Only ``TusTask/kind`` distinguishes them once
+/// iOS hands the task back after a relaunch.
+private enum TusTaskKind: String {
+    case patch = "PATCH"
+    case head = "HEAD"
+}
+
+/// What a background task needs to carry on after a relaunch.
+///
+/// `taskDescription` is the only state iOS preserves across a kill. Four-field values from
+/// builds that sent the whole file in one PATCH still parse: the original path is the chunk
+/// path, a missing file size treats a 2xx as complete, and a missing kind is a PATCH.
+///
+/// `assetId` stays field 0 because ``TusUploader/getActiveUploadAssetIds(completion:)`` reads it
+/// straight off the raw string.
+private struct TusTask {
+    let assetId: String
+    let chunkPath: String
+    let uploadURL: URL
+    let checksum: String
+    let originalPath: String
+    let fileSize: Int64
+    let sentOffset: Int64
+    let kind: TusTaskKind
+
+    var description: String {
+        [
+            assetId, chunkPath, uploadURL.absoluteString, checksum,
+            originalPath, String(fileSize), String(sentOffset), kind.rawValue,
+        ]
+        .joined(separator: "|")
+    }
+
+    static func parse(_ raw: String) -> TusTask? {
+        let comps = raw.components(separatedBy: "|")
+        guard comps.count >= 4, let uploadURL = URL(string: comps[2]) else { return nil }
+        return TusTask(
+            assetId: comps[0],
+            chunkPath: comps[1],
+            uploadURL: uploadURL,
+            checksum: comps[3],
+            originalPath: comps.count > 4 ? comps[4] : comps[1],
+            fileSize: comps.count > 5 ? (Int64(comps[5]) ?? -1) : -1,
+            sentOffset: comps.count > 6 ? (Int64(comps[6]) ?? 0) : 0,
+            kind: comps.count > 7 ? (TusTaskKind(rawValue: comps[7]) ?? .patch) : .patch,
+        )
     }
 }
 

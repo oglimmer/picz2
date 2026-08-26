@@ -20,6 +20,14 @@ struct UploadRoutingTests {
         )
     }
 
+    /// Album-screen TUS uploads must be looked up in the album they were sent to, not the
+    /// background-sync target. `nil` override is the background-sync case.
+    @Test func lookupUsesTheOverrideWhenThereIsOne() {
+        #expect(UploadRouting.lookupAlbumId(override: 37, fallback: 1) == 37)
+        #expect(UploadRouting.lookupAlbumId(override: nil, fallback: 1) == 1)
+        #expect(UploadRouting.lookupAlbumId(override: nil, fallback: 9) == 9)
+    }
+
     // MARK: - Path selection: the full truth table
 
     /// Toggle × capability × not-yet-loaded. TUS requires *both* sides to say yes; every other

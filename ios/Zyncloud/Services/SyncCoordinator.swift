@@ -156,11 +156,23 @@ final class SyncCoordinator: ObservableObject {
                         outcome: .success(serverAssetId: serverAssetId),
                     )
                 } else {
-                    self.resolveTusUploadServerId(contentId: assetId) { [weak self] resolved in
-                        self?.handleUploadFinished(
-                            assetId: assetId,
-                            outcome: .success(serverAssetId: resolved),
+                    // albumOverrides is syncQueue-only. Snapshot it here so a hand-picked
+                    // album-screen upload is looked up in the album it was sent to, not the
+                    // background-sync target (default 1) — that 404s all 4 retries and
+                    // ProcessingStatusPoller never starts.
+                    self.syncQueue.async {
+                        let albumId = UploadRouting.lookupAlbumId(
+                            override: self.albumOverrides[assetId],
+                            fallback: self.settings.albumId,
                         )
+                        self.resolveTusUploadServerId(
+                            contentId: assetId, albumId: albumId,
+                        ) { [weak self] resolved in
+                            self?.handleUploadFinished(
+                                assetId: assetId,
+                                outcome: .success(serverAssetId: resolved),
+                            )
+                        }
                     }
                 }
             case .deduped:
@@ -703,11 +715,11 @@ final class SyncCoordinator: ObservableObject {
     /// for that asset; the upload itself is still recorded as success.
     private func resolveTusUploadServerId(
         contentId: String,
+        albumId: Int,
         attempt: Int = 0,
         completion: @escaping (Int?) -> Void,
     ) {
         let maxAttempts = 4
-        let albumId = settings.albumId
         api.lookupAssetByContentId(albumId: albumId, contentId: contentId) { [weak self] result in
             switch result {
             case let .success(id):
@@ -718,6 +730,7 @@ final class SyncCoordinator: ObservableObject {
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                     self?.resolveTusUploadServerId(
                         contentId: contentId,
+                        albumId: albumId,
                         attempt: attempt + 1,
                         completion: completion,
                     )

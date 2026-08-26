@@ -20,6 +20,32 @@ class UploadService: NSObject {
     /// Last value handed to ``progressHandler``, in per-mille. `didSendBodyData` fires once per
     /// socket write — thousands of times for a video — so we only forward visible changes.
     private var lastReportedPerMille = -1
+    /// Bytes already accepted by the server for the file in flight, so a chunked PATCH reports
+    /// `offset + bytesSent` rather than walking the bar backwards to 0 at every chunk.
+    private var currentFileOffset: Int64 = 0
+
+    /// Files that already landed in this share sheet. A mixed batch used to report total
+    /// failure and a retry re-POSTed them without `contentId`, which duplicated them.
+    private var succeededURLs = Set<URL>()
+    /// The exact file set of the batch ``succeededURLs`` belongs to. A retry re-sends the very
+    /// same items; anything else is a new share and must not inherit the skip list. Comparing
+    /// for *disjointness* was not enough — a partly overlapping share would mark the shared
+    /// files uploaded without sending a byte.
+    private var currentBatchURLs = Set<URL>()
+
+    /// How many times one file may re-HEAD and continue after a failed chunk. Spent per stall,
+    /// refilled whenever the server's offset advances.
+    private static let maxPatchAttempts = 3
+
+    /// The share sheet went away mid-upload. Reported rather than dropped: a swallowed
+    /// completion parks the batch forever with a spinner and no message.
+    private static let cancelledError = NSError(
+        domain: "UploadService", code: NSURLErrorCancelled,
+        userInfo: [NSLocalizedDescriptionKey: "Upload cancelled"],
+    )
+
+    /// Where chunks are cut, never the session's delegate queue.
+    private let sliceQueue = DispatchQueue(label: "com.oglimmer.zyncloud.share.slice", qos: .utility)
 
     /// The PATCH session. It cannot be `URLSession.shared`: a shared session has no delegate, so
     /// `didSendBodyData` is never delivered and the progress bar can only move once per file.
@@ -129,22 +155,49 @@ class UploadService: NSObject {
         mediaItems: [MediaItem],
         albumId: Int? = nil,
         progress: @escaping (Double) -> Void,
-        completion: @escaping (Result<Int, Error>) -> Void,
+        completion: @escaping (ShareUploadOutcome) -> Void,
     ) {
+        let incoming = Set(mediaItems.map(\.url))
+        if !ShareRetryBatch.isRetry(of: currentBatchURLs, incoming: incoming) {
+            succeededURLs.removeAll()
+            currentBatchURLs = incoming
+        }
         // One token for the whole share, minted before the first byte moves.
         fetchUploadToken { [weak self] in
-            self?.performUpload(mediaItems: mediaItems, albumId: albumId,
-                               progress: progress, completion: completion)
+            self?.fetchMaxUploadBytes { limit in
+                self?.performUpload(
+                    mediaItems: mediaItems, albumId: albumId, maxUploadBytes: limit,
+                    progress: progress, completion: completion,
+                )
+            }
         }
+    }
+
+    /// Unauthenticated; the same `/api/capabilities` the main app uses. Failure is not an
+    /// error — we let the server be the judge, matching ``UploadSizeLimit/check``.
+    private func fetchMaxUploadBytes(completion: @escaping (Int64?) -> Void) {
+        let url = AppConfiguration.apiBaseURL.appendingPathComponent("api/capabilities")
+        URLSession.shared.dataTask(with: url) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+                  let data,
+                  let decoded = try? JSONDecoder().decode(ShareCapabilitiesResponse.self, from: data)
+            else {
+                completion(nil)
+                return
+            }
+            completion(decoded.tus.maxSize)
+        }.resume()
     }
 
     private func performUpload(
         mediaItems: [MediaItem],
         albumId: Int?,
+        maxUploadBytes: Int64?,
         progress: @escaping (Double) -> Void,
-        completion: @escaping (Result<Int, Error>) -> Void
+        completion: @escaping (ShareUploadOutcome) -> Void
     ) {
         var uploadedCount = 0
+        var failedCount = 0
         var failedError: Error?
 
         // Sizes are read once, up front: they are both the `Upload-Length` header and the weights
@@ -157,11 +210,11 @@ class UploadService: NSObject {
             guard index < mediaItems.count else {
                 endProgress()
                 DispatchQueue.main.async {
-                    if let error = failedError {
-                        completion(.failure(error))
-                    } else {
-                        completion(.success(uploadedCount))
-                    }
+                    completion(ShareUploadOutcome(
+                        uploaded: uploadedCount,
+                        failed: failedCount,
+                        lastErrorDescription: failedError?.localizedDescription,
+                    ))
                 }
                 return
             }
@@ -170,17 +223,42 @@ class UploadService: NSObject {
 
             func advance(_ result: Result<Void, Error>) {
                 switch result {
-                case .success: uploadedCount += 1
-                case let .failure(error): if failedError == nil { failedError = error }
+                case .success:
+                    uploadedCount += 1
+                    succeededURLs.insert(item.url)
+                case let .failure(error):
+                    failedCount += 1
+                    if failedError == nil { failedError = error }
                 }
                 // Both outcomes retire this file's weight, so a failed item does not park the bar.
                 finishProgressItem()
                 uploadNext(index: index + 1)
             }
 
+            if succeededURLs.contains(item.url) {
+                advance(.success(()))
+                return
+            }
+
             switch sizes[index] {
             case let .success(fileSize):
-                uploadFile(item: item, albumId: albumId, fileSize: fileSize, completion: advance)
+                if case let .tooLarge(size, limit) = UploadSizeLimit.check(
+                    size: fileSize, limit: maxUploadBytes,
+                ) {
+                    let message = UploadSizeLimit.message(
+                        filename: item.filename, size: size, limit: limit,
+                    )
+                    advance(.failure(NSError(
+                        domain: "UploadService",
+                        code: 413,
+                        userInfo: [NSLocalizedDescriptionKey: message],
+                    )))
+                    return
+                }
+                uploadFile(
+                    item: item, albumId: albumId, fileSize: fileSize,
+                    maxUploadBytes: maxUploadBytes, completion: advance,
+                )
             case let .failure(error):
                 advance(.failure(error))
             }
@@ -205,6 +283,7 @@ class UploadService: NSObject {
         progressTracker = ShareUploadProgress(fileSizes: fileSizes)
         progressHandler = handler
         lastReportedPerMille = -1
+        currentFileOffset = 0
         progressLock.unlock()
     }
 
@@ -221,6 +300,9 @@ class UploadService: NSObject {
     }
 
     private func finishProgressItem() {
+        progressLock.lock()
+        currentFileOffset = 0
+        progressLock.unlock()
         emitProgress { $0.finishCurrentItem() }
     }
 
@@ -248,6 +330,7 @@ class UploadService: NSObject {
         item: MediaItem,
         albumId: Int?,
         fileSize: Int64,
+        maxUploadBytes: Int64?,
         completion: @escaping (Result<Void, Error>) -> Void,
     ) {
         // Auth via Upload-Metadata is required by the server (D26) — Authorization header is
@@ -288,9 +371,22 @@ class UploadService: NSObject {
                     completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Location header"])))
                     return
                 }
-                self.patchUpload(item: item, uploadURL: uploadURL, completion: completion)
+                // A freshly created TUS resource is empty, so the offset is 0 and a HEAD here
+                // would only cost a round-trip. HEAD is the *resume* path.
+                self.patchFromOffset(
+                    item: item, uploadURL: uploadURL, fileSize: fileSize, offset: 0,
+                    attemptsLeft: Self.maxPatchAttempts, completion: completion,
+                )
             case 401, 403:
                 completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Authentication failed"])))
+            case 413:
+                let message = UploadSizeLimit.message(
+                    filename: item.filename, size: fileSize, limit: maxUploadBytes,
+                )
+                completion(.failure(NSError(
+                    domain: "UploadService", code: 413,
+                    userInfo: [NSLocalizedDescriptionKey: message],
+                )))
             case 429, 503:
                 let retry = http.value(forHTTPHeaderField: "Retry-After") ?? "?"
                 completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server busy (retry after \(retry)s)"])))
@@ -301,34 +397,170 @@ class UploadService: NSObject {
         }.resume()
     }
 
-    private func patchUpload(
+    private func headAndPatch(
         item: MediaItem,
         uploadURL: URL,
+        fileSize: Int64,
+        attemptsLeft: Int = 3,
+        completion: @escaping (Result<Void, Error>) -> Void,
+    ) {
+        guard attemptsLeft > 0 else {
+            completion(.failure(NSError(
+                domain: "UploadService", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Upload stalled; try again"],
+            )))
+            return
+        }
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 30
+        request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+        if let auth = getAuthorizationHeader() {
+            request.setValue(auth, forHTTPHeaderField: "Authorization")
+        }
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            guard let self else {
+                completion(.failure(Self.cancelledError))
+                return
+            }
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                completion(.failure(NSError(
+                    domain: "UploadService", code: code,
+                    userInfo: [NSLocalizedDescriptionKey: "HEAD returned \(code)"],
+                )))
+                return
+            }
+            let offset = TusChunking.parseOffset(http.value(forHTTPHeaderField: "Upload-Offset")) ?? 0
+            self.patchFromOffset(
+                item: item, uploadURL: uploadURL, fileSize: fileSize, offset: offset,
+                attemptsLeft: attemptsLeft,
+                completion: completion,
+            )
+        }.resume()
+    }
+
+    private func patchFromOffset(
+        item: MediaItem,
+        uploadURL: URL,
+        fileSize: Int64,
+        offset: Int64,
+        attemptsLeft: Int,
+        completion: @escaping (Result<Void, Error>) -> Void,
+    ) {
+        guard let range = TusChunking.nextChunk(offset: offset, fileSize: fileSize) else {
+            completion(.success(()))
+            return
+        }
+
+        // Slicing copies up to a chunk of bytes, and this runs from the previous chunk's
+        // completion handler — the session's delegate queue. Cut the file off it.
+        sliceQueue.async { [weak self] in
+            guard let self else {
+                completion(.failure(Self.cancelledError))
+                return
+            }
+            let chunkURL: URL
+            let wholeFile = range.lowerBound == 0 && range.upperBound == fileSize
+            if wholeFile {
+                chunkURL = item.url
+            } else {
+                chunkURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("share-chunk-\(UUID().uuidString)")
+                do {
+                    try TusChunking.writeSlice(from: item.url, range: range, to: chunkURL)
+                } catch {
+                    completion(.failure(error))
+                    return
+                }
+            }
+            self.sendPatch(
+                item: item, uploadURL: uploadURL, fileSize: fileSize, range: range,
+                chunkURL: chunkURL, wholeFile: wholeFile, attemptsLeft: attemptsLeft,
+                completion: completion,
+            )
+        }
+    }
+
+    /// Sends one prepared chunk. Split from ``patchFromOffset`` only so the slicing above can
+    /// happen off the delegate queue.
+    private func sendPatch(
+        item: MediaItem,
+        uploadURL: URL,
+        fileSize: Int64,
+        range: Range<Int64>,
+        chunkURL: URL,
+        wholeFile: Bool,
+        attemptsLeft: Int,
         completion: @escaping (Result<Void, Error>) -> Void,
     ) {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "PATCH"
         request.timeoutInterval = 600
         request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-        request.setValue("0", forHTTPHeaderField: "Upload-Offset")
+        request.setValue(String(range.lowerBound), forHTTPHeaderField: "Upload-Offset")
         request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
         if let auth = getAuthorizationHeader() {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
+        progressLock.lock()
+        currentFileOffset = range.lowerBound
+        progressLock.unlock()
+
         // `uploadSession`, not `URLSession.shared` — see the property comment. The completion
         // handler still stands in for `didCompleteWithError`; `didSendBodyData` is delivered
         // alongside it, and that is where the bar gets its numbers.
-        let task = uploadSession.uploadTask(with: request, fromFile: item.url) { _, response, error in
+        let task = uploadSession.uploadTask(with: request, fromFile: chunkURL) { [weak self] _, response, error in
+            if !wholeFile {
+                try? FileManager.default.removeItem(at: chunkURL)
+            }
+            guard let self else {
+                completion(.failure(Self.cancelledError))
+                return
+            }
             if let error {
                 print("❌ TUS PATCH failed: \(item.filename) - \(error.localizedDescription)")
-                completion(.failure(error))
+                // The server may still have kept some of this chunk. HEAD and continue.
+                self.headAndPatch(
+                    item: item, uploadURL: uploadURL, fileSize: fileSize,
+                    attemptsLeft: attemptsLeft - 1, completion: completion,
+                )
                 return
             }
             if let http = response as? HTTPURLResponse {
                 if 200 ... 299 ~= http.statusCode {
-                    print("✅ Upload successful: \(item.filename)")
-                    completion(.success(()))
+                    let newOffset = TusChunking.parseOffset(http.value(forHTTPHeaderField: "Upload-Offset"))
+                        ?? range.upperBound
+                    if newOffset < fileSize {
+                        if newOffset <= range.lowerBound {
+                            self.headAndPatch(
+                                item: item, uploadURL: uploadURL, fileSize: fileSize,
+                                attemptsLeft: attemptsLeft - 1, completion: completion,
+                            )
+                            return
+                        }
+                        // Bytes landed, so earlier stalls are behind us. Without this refill the
+                        // budget is a per-file lifetime cap and a long video dies on its third
+                        // dropped chunk out of hundreds.
+                        self.patchFromOffset(
+                            item: item, uploadURL: uploadURL, fileSize: fileSize, offset: newOffset,
+                            attemptsLeft: Self.maxPatchAttempts,
+                            completion: completion,
+                        )
+                    } else {
+                        print("✅ Upload successful: \(item.filename)")
+                        completion(.success(()))
+                    }
+                } else if http.statusCode == 409 {
+                    self.headAndPatch(
+                        item: item, uploadURL: uploadURL, fileSize: fileSize,
+                        attemptsLeft: attemptsLeft - 1, completion: completion,
+                    )
                 } else {
                     let msg = "PATCH returned \(http.statusCode)"
                     print("❌ TUS PATCH failed: \(item.filename) - \(msg)")
@@ -388,8 +620,54 @@ extension UploadService: URLSessionTaskDelegate {
     ) {
         // Uploads run strictly one at a time (`uploadNext`), so the task firing here is always
         // the file the tracker considers current — no task-to-item bookkeeping is needed.
-        noteBytesSent(totalBytesSent)
+        progressLock.lock()
+        let offset = currentFileOffset
+        progressLock.unlock()
+        noteBytesSent(offset + totalBytesSent)
     }
+}
+
+/// Whether a second `uploadMediaItems` call is a retry of the batch before it, and may
+/// therefore inherit the "already landed, do not re-send" set.
+///
+/// Only an identical file set counts. Checking merely for *overlap* — or, worse, for
+/// disjointness — lets a partly overlapping share inherit the skip list, and the files it
+/// shares with the previous batch are then reported as uploaded without a byte being sent.
+enum ShareRetryBatch {
+    static func isRetry(of previous: Set<URL>, incoming: Set<URL>) -> Bool {
+        !previous.isEmpty && previous == incoming
+    }
+}
+
+/// Result of one share-sheet upload pass. A mixed batch is a partial success, not a
+/// total failure — retrying then skips files already in ``UploadService``'s succeeded set.
+struct ShareUploadOutcome: Equatable {
+    let uploaded: Int
+    let failed: Int
+    let lastErrorDescription: String?
+
+    var allSucceeded: Bool { failed == 0 }
+
+    var userMessage: String {
+        if failed == 0 {
+            return "Uploaded \(uploaded) item\(uploaded == 1 ? "" : "s")"
+        }
+        if uploaded == 0 {
+            return lastErrorDescription.map { "Upload failed: \($0)" } ?? "Upload failed"
+        }
+        let suffix = lastErrorDescription.map { ": \($0)" } ?? ""
+        return "Uploaded \(uploaded) of \(uploaded + failed). \(failed) failed\(suffix)"
+    }
+}
+
+/// `GET /api/capabilities`. Only `tus.maxSize` is used here; the rest of the payload is the
+/// main app's concern.
+private struct ShareCapabilitiesResponse: Decodable {
+    struct Tus: Decodable {
+        let maxSize: Int64
+    }
+
+    let tus: Tus
 }
 
 /// Byte-weighted progress across the files of one share.

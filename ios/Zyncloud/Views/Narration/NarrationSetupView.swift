@@ -31,6 +31,7 @@ struct NarrationSetupView: View {
         NavigationStack {
             content
         }
+        .interactiveDismissDisabled(viewModel.phase != .setup)
     }
 
     private var content: some View {
@@ -48,11 +49,12 @@ struct NarrationSetupView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Done") { dismiss() }
-                    // Closing mid-upload would take the alert that reports the outcome with it.
-                    .disabled(viewModel.phase == .saving)
+                    // Closing mid-upload would take the alert that reports the outcome with it,
+                    // and closing on a failed save would throw the audio away with no Retry.
+                    .disabled(viewModel.phase != .setup)
             }
         }
-        .disabled(viewModel.phase == .saving)
+        .disabled(viewModel.phase == .saving || viewModel.phase == .saveFailed)
         .overlay {
             if viewModel.phase == .saving {
                 savingOverlay
@@ -107,7 +109,18 @@ struct NarrationSetupView: View {
             Text("This removes the audio from your server for good. It cannot be undone.")
         }
         .alert(item: $viewModel.alertState) { state in
-            Alert(title: Text(state.title), message: Text(state.message))
+            if let primaryButton = state.primaryButton,
+               let secondaryButton = state.secondaryButton
+            {
+                Alert(
+                    title: Text(state.title),
+                    message: Text(state.message),
+                    primaryButton: .default(Text(primaryButton.title), action: primaryButton.action),
+                    secondaryButton: .destructive(Text(secondaryButton.title), action: secondaryButton.action),
+                )
+            } else {
+                Alert(title: Text(state.title), message: Text(state.message))
+            }
         }
         .onAppear { viewModel.load() }
     }
