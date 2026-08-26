@@ -16,6 +16,8 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
         case recording
         /// Recording stopped, upload in flight.
         case saving
+        /// Upload failed; the audio is still on disk so the user can retry.
+        case saveFailed
     }
 
     @Published private(set) var phase: Phase = .setup
@@ -73,6 +75,10 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
     private var recordingStartedAt: TimeInterval = 0
 
     private var tickTask: Task<Void, Never>?
+
+    /// Kept after a failed save so Retry can send the same file. Cleared on success or Discard.
+    private var pendingAudioURL: URL?
+    private var pendingPayload: RecordingUploadRequest?
 
     /// How many assets an unfiltered slideshow would walk. Shown next to the "All photos"
     /// option so the count is there before the option is chosen.
@@ -200,6 +206,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
     /// The caller has already dealt with an existing narration for this filter and language —
     /// the server keeps both, and the gallery would then have two rows to choose between.
     func startRecording() async {
+        guard phase == .setup else { return }
         guard !slides.isEmpty else {
             alertState = AlertState(
                 title: "Nothing to Show",
@@ -268,7 +275,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
             return
         }
 
-        guard let apiClient else {
+        guard apiClient != nil else {
             phase = .setup
             recorder.discard(audioURL)
             alertState = AlertState(title: "Error", message: "Not authenticated. Please log in again.")
@@ -283,21 +290,73 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
             images: timeline.timings,
         )
 
+        pendingAudioURL = audioURL
+        pendingPayload = payload
+        sendPendingSave()
+    }
+
+    /// Re-sends the audio kept after a failed save. No-op if there is nothing to send.
+    func retrySave() {
+        guard phase == .saveFailed, pendingAudioURL != nil, pendingPayload != nil else { return }
+        phase = .saving
+        sendPendingSave()
+    }
+
+    /// Throws away a failed recording. The user has to start over.
+    func discardFailedSave() {
+        if let pendingAudioURL {
+            recorder.discard(pendingAudioURL)
+        }
+        pendingAudioURL = nil
+        pendingPayload = nil
+        phase = .setup
+    }
+
+    private func sendPendingSave() {
+        guard let audioURL = pendingAudioURL, let payload = pendingPayload else {
+            phase = .setup
+            return
+        }
+        guard let apiClient else {
+            // Credentials went away between recording and sending. Say so rather than dropping
+            // back to setup with the recording silently stranded on disk.
+            recorder.discard(audioURL)
+            pendingAudioURL = nil
+            pendingPayload = nil
+            phase = .setup
+            alertState = AlertState(title: "Error", message: "Not authenticated. Please log in again.")
+            return
+        }
+
         apiClient.uploadRecording(albumId: album.id, audioFileURL: audioURL, request: payload) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                self.recorder.discard(audioURL)
-                self.phase = .setup
 
                 switch result {
                 case .success:
+                    self.recorder.discard(audioURL)
+                    self.pendingAudioURL = nil
+                    self.pendingPayload = nil
+                    self.phase = .setup
                     self.reloadRecordings()
+                    let totalMs = payload.durationMs
                     self.showSuccess(
                         title: "Narration Saved",
                         message: "\(self.slides.count) slides, \(Self.durationLabel(totalMs)) of audio.",
                     )
                 case let .failure(error):
-                    self.handleError(error)
+                    self.phase = .saveFailed
+                    let message = (error as? AppError)?.errorDescription ?? error.localizedDescription
+                    self.alertState = AlertState(
+                        title: "Couldn't Save Commentary",
+                        message: message,
+                        primaryButton: AlertState.AlertButton(title: "Retry") { [weak self] in
+                            self?.retrySave()
+                        },
+                        secondaryButton: AlertState.AlertButton(title: "Discard") { [weak self] in
+                            self?.discardFailedSave()
+                        },
+                    )
                 }
             }
         }
@@ -305,6 +364,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
 
     /// Backs out without saving. The audio is deleted — nothing was ever sent.
     func cancelRecording() {
+        guard phase == .recording else { return }
         stopTicking()
         recorder.cancel()
         timeline = NarrationTimeline(startedAt: recordingStartedAt)

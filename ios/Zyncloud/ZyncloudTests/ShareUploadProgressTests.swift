@@ -87,3 +87,67 @@ struct ShareUploadProgressTests {
         #expect(progress.fraction == 0)
     }
 }
+
+/// Mixed-batch reporting. A share that landed 2 of 3 used to complete as `.failure` and invite
+/// a full retry that duplicated the two that had already arrived.
+struct ShareUploadOutcomeTests {
+    @Test func aCleanShareReportsACount() {
+        let outcome = ShareUploadOutcome(uploaded: 3, failed: 0, lastErrorDescription: nil)
+        #expect(outcome.allSucceeded)
+        #expect(outcome.userMessage == "Uploaded 3 items")
+    }
+
+    @Test func aSingleItemDoesNotPluralize() {
+        let outcome = ShareUploadOutcome(uploaded: 1, failed: 0, lastErrorDescription: nil)
+        #expect(outcome.userMessage == "Uploaded 1 item")
+    }
+
+    @Test func aTotalFailureNamesTheError() {
+        let outcome = ShareUploadOutcome(
+            uploaded: 0, failed: 2, lastErrorDescription: "POST /files/ returned 413",
+        )
+        #expect(!outcome.allSucceeded)
+        #expect(outcome.userMessage == "Upload failed: POST /files/ returned 413")
+    }
+
+    @Test func aMixedBatchKeepsTheSuccessCount() {
+        let outcome = ShareUploadOutcome(
+            uploaded: 2, failed: 1, lastErrorDescription: "Too big to back up: clip.mov is 3 GB, the server accepts up to 2 GB",
+        )
+        #expect(!outcome.allSucceeded)
+        #expect(outcome.userMessage.contains("Uploaded 2 of 3"))
+        #expect(outcome.userMessage.contains("1 failed"))
+        #expect(outcome.userMessage.contains("clip.mov"))
+    }
+}
+
+/// The skip list may only carry over to a genuine retry — the same files again. A partly
+/// overlapping share that inherited it reported the shared files as uploaded without sending
+/// a byte.
+struct ShareRetryBatchTests {
+    private func urls(_ names: [String]) -> Set<URL> {
+        Set(names.map { URL(fileURLWithPath: "/tmp/\($0)") })
+    }
+
+    @Test func theSameFilesAgainIsARetry() {
+        #expect(ShareRetryBatch.isRetry(of: urls(["a", "b"]), incoming: urls(["b", "a"])))
+    }
+
+    @Test func aDisjointShareIsNotARetry() {
+        #expect(!ShareRetryBatch.isRetry(of: urls(["a", "b"]), incoming: urls(["c"])))
+    }
+
+    @Test func aPartlyOverlappingShareIsNotARetry() {
+        #expect(!ShareRetryBatch.isRetry(of: urls(["a", "b"]), incoming: urls(["a", "c"])))
+    }
+
+    @Test func aSubsetIsNotARetry() {
+        #expect(!ShareRetryBatch.isRetry(of: urls(["a", "b"]), incoming: urls(["a"])))
+        #expect(!ShareRetryBatch.isRetry(of: urls(["a"]), incoming: urls(["a", "b"])))
+    }
+
+    @Test func theFirstShareOfASessionIsNotARetry() {
+        #expect(!ShareRetryBatch.isRetry(of: [], incoming: urls(["a"])))
+        #expect(!ShareRetryBatch.isRetry(of: [], incoming: []))
+    }
+}
