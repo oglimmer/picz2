@@ -129,12 +129,25 @@ struct APIValidationTests {
             Issue.record("expected .api for HTTP \(status)")
             return
         }
-        #expect(message == "HTTP \(status)")
+        #expect(message == APIClient.plainMeaning(of: status))
+        #expect(message.contains("HTTP \(status)"))
         #expect(statusCode == status)
     }
 
+    /// The fallback message is for a person, so it is a sentence — but it still ends with the
+    /// code, because that is the half a bug report needs. Both halves are pinned: a rewrite that
+    /// drops the number would leave "The server had a problem." with nothing to chase.
+    @Test(arguments: [401, 403, 404, 409, 413, 429, 500, 503, 418])
+    func theFallbackMessageReadsAsASentenceAndKeepsTheCode(status: Int) {
+        let message = APIClient.plainMeaning(of: status)
+
+        #expect(message.hasSuffix("(HTTP \(status))"))
+        #expect(message.first?.isUppercase == true)
+        #expect(message != "(HTTP \(status))", "the sentence itself must not be empty")
+    }
+
     /// When the server bothered to explain itself, the user should read the server's words and
-    /// not "HTTP 409".
+    /// not a generic sentence.
     @Test func aServerErrorBodyReplacesTheGenericMessage() throws {
         let body = Data("{\"success\":false,\"message\":\"Album name already taken\"}".utf8)
         let result = validate(data: body, status: 409)
@@ -165,7 +178,7 @@ struct APIValidationTests {
             Issue.record("expected .api for body \(json)")
             return
         }
-        #expect(message == "HTTP 502")
+        #expect(message == APIClient.plainMeaning(of: 502))
         #expect(statusCode == 502)
     }
 

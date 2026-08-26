@@ -1,7 +1,12 @@
 import Foundation
 import Photos
+import os
 
-final class SyncCoordinator: ObservableObject {
+/// - Note: `@unchecked Sendable` — every stored property below says in its own comment which
+///   queue owns it: the `@Published` metrics are main-queue only, the queue/retry/override state
+///   is `syncQueue` only, and the capabilities pair is behind ``capabilitiesLock``. That
+///   discipline is what makes this safe; the compiler cannot check it, so it is asserted here.
+final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     static let shared = SyncCoordinator()
 
     @Published var metrics = Metrics()
@@ -51,32 +56,14 @@ final class SyncCoordinator: ObservableObject {
         capabilitiesLock.unlock()
     }
 
-    /// Cached rather than rebuilt per access (§5.10).
+    /// The client to talk to the server with.
     ///
-    /// This was a computed property doing a `KeychainHelper.load()` — a synchronous IPC to
-    /// securityd — on every read, and the upload path reads it several times per asset for a
-    /// value that changes twice in a whole session. `credentialsDidChange` is what makes the
-    /// cache safe: sign-in, sign-out and the legacy-format migration all drop it.
-    private var cachedApi: APIClient?
-    private let apiLock = NSLock()
-    private var api: APIClient {
-        apiLock.lock()
-        defer { apiLock.unlock() }
-        if let cachedApi { return cachedApi }
-        let credentials = KeychainHelper.shared.load()
-        let client = APIClient(
-            username: credentials?.username,
-            password: credentials?.password,
-        )
-        cachedApi = client
-        return client
-    }
-
-    private func invalidateCachedApi() {
-        apiLock.lock()
-        cachedApi = nil
-        apiLock.unlock()
-    }
+    /// Cached and invalidated on sign-out inside ``APIClientProvider`` — this class used to
+    /// keep its own copy of that cache, as did the TUS uploader and six view models.
+    ///
+    /// Anonymous rather than nil when signed out: sync runs with no screen in front of it, so
+    /// there is nobody to ask to sign in, and a logged 401 says more than doing nothing.
+    private var api: APIClient { APIClientProvider.shared.clientOrAnonymous }
 
     struct Metrics {
         var queued: Int = 0
@@ -88,8 +75,6 @@ final class SyncCoordinator: ObservableObject {
         /// backup with a silent hole in it is worse than one that says which files are missing.
         var skippedTooLarge: Int = 0
     }
-
-    private var credentialsObserver: NSObjectProtocol?
 
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
 
@@ -125,14 +110,6 @@ final class SyncCoordinator: ObservableObject {
     @Published private(set) var albumUploadsRejectedAsDuplicate: [Int: [String]] = [:]
 
     private init() {
-        // Drop the cached APIClient whenever the stored credentials change, so a sign-out
-        // cannot leave an authenticated client behind and a sign-in is picked up immediately.
-        credentialsObserver = NotificationCenter.default.addObserver(
-            forName: KeychainHelper.credentialsDidChange, object: nil, queue: nil,
-        ) { [weak self] _ in
-            self?.invalidateCachedApi()
-        }
-
         // Route actual upload completions through the coordinator so we can
         // free a slot, drain the next upload, and re-enqueue 503s with backoff.
         uploader.onTaskFinished = { [weak self] assetId, outcome in
@@ -163,12 +140,15 @@ final class SyncCoordinator: ObservableObject {
                     self.syncQueue.async {
                         let albumId = UploadRouting.lookupAlbumId(
                             override: self.albumOverrides[assetId],
-                            fallback: self.settings.albumId,
+                            fallback: self.settings.snapshot.albumId,
                         )
+                        // Not `[weak self]`: the `guard let self` above already made this whole
+                        // chain hold a strong reference, so a weak capture here would read as a
+                        // promise the surrounding block does not keep.
                         self.resolveTusUploadServerId(
                             contentId: assetId, albumId: albumId,
-                        ) { [weak self] resolved in
-                            self?.handleUploadFinished(
+                        ) { resolved in
+                            self.handleUploadFinished(
                                 assetId: assetId,
                                 outcome: .success(serverAssetId: resolved),
                             )
@@ -215,7 +195,7 @@ final class SyncCoordinator: ObservableObject {
                 // Check target album from server first
                 self.syncTargetAlbumFromServer { _ in
                     // Only start sync if an album has been selected
-                    guard self.settings.selectedAlbumName != nil else { return }
+                    guard self.settings.snapshot.selectedAlbumName != nil else { return }
 
                     // Reconcile with server before scanning
                     self.reconcileWithServer {
@@ -231,7 +211,7 @@ final class SyncCoordinator: ObservableObject {
     /// Nested rather than parallel: there are exactly two sessions, both answers are needed
     /// before the cleanup can run, and a nested pair of callbacks is easier to read than a
     /// DispatchGroup for two items.
-    private func activeUploadTaskAssetIds(completion: @escaping (Set<String>) -> Void) {
+    private func activeUploadTaskAssetIds(completion: @escaping @Sendable (Set<String>) -> Void) {
         uploader.getActiveUploadAssetIds { [weak self] multipartTasks in
             guard let self else {
                 completion(multipartTasks)
@@ -259,77 +239,68 @@ final class SyncCoordinator: ObservableObject {
 
     func handlePhotoLibraryDidChange() {
         // Only sync if an album has been selected
-        guard settings.selectedAlbumName != nil else { return }
+        guard settings.snapshot.selectedAlbumName != nil else { return }
 
         // New items may exist — schedule incremental scan
         scheduleIncrementalScan()
     }
 
-    func performManualSync(completion: @escaping () -> Void) {
-        let syncStartTime = Date()
-        print("SyncCoordinator: Manual sync started at \(syncStartTime)")
-        SyncLogger.shared.logManualSync(success: true, message: "Started")
+    /// What kicked a sync off. The two runs are the same work reported under different
+    /// headings — the sync log separates manual from background so the user can tell "I asked
+    /// for this" from "the system woke us up".
+    enum SyncTrigger {
+        case manual
+        case background
 
-        // Check if target album changed on server
-        syncTargetAlbumFromServer { targetAlbumChanged in
-            // If target album is now null on server, stop sync
-            guard self.settings.selectedAlbumName != nil else {
-                print("SyncCoordinator: Manual sync skipped - no target album selected")
-                SyncLogger.shared.logManualSync(success: false, message: "No album selected")
-                completion()
-                return
-            }
-
-            // If target album changed, log it
-            if targetAlbumChanged {
-                print("SyncCoordinator: Target album updated from server during manual sync")
-            }
-
-            // Check photo library authorization
-            let authStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-            guard authStatus == .authorized || authStatus == .limited else {
-                print("SyncCoordinator: Manual sync stopped - Photo library access not authorized (\(authStatus.rawValue))")
-                SyncLogger.shared.logManualSync(success: false, message: "Photo access denied")
-                completion()
-                return
-            }
-
-            // Reconcile with server before scanning
-            self.reconcileWithServer {
-                self.scheduleIncrementalScan {
-                    print("SyncCoordinator: Manual sync completed successfully")
-                    SyncLogger.shared.logManualSync(success: true, message: "Completed")
-                    completion()
-                }
+        /// Human-readable name for the diagnostic log.
+        var label: String {
+            switch self {
+            case .manual: "Manual sync"
+            case .background: "Background sync"
             }
         }
+
+        /// True for the entries the sync log renders as user-initiated.
+        var isManual: Bool { self == .manual }
     }
 
-    func performBackgroundSync(completion: @escaping () -> Void) {
-        let syncStartTime = Date()
-        print("SyncCoordinator: Background sync started at \(syncStartTime)")
-        SyncLogger.shared.logBackgroundSync(success: true, message: "Started")
+    func performManualSync(completion: @escaping @Sendable () -> Void) {
+        performSync(trigger: .manual, completion: completion)
+    }
+
+    func performBackgroundSync(completion: @escaping @Sendable () -> Void) {
+        performSync(trigger: .background, completion: completion)
+    }
+
+    /// The one sync run, told what to call itself.
+    ///
+    /// Manual and background used to be two copies of this function that differed only in the
+    /// word "Manual"/"Background" — so a fix to one silently skipped the other.
+    private func performSync(trigger: SyncTrigger, completion: @escaping @Sendable () -> Void) {
+        AppLog.sync.info("\(trigger.label, privacy: .public) started")
+        SyncLogger.shared.logSync(trigger: trigger, success: true, message: "Started")
 
         // Check if target album changed on server
         syncTargetAlbumFromServer { targetAlbumChanged in
             // If target album is now null on server, stop sync
-            guard self.settings.selectedAlbumName != nil else {
-                print("SyncCoordinator: Background sync skipped - no target album selected")
-                SyncLogger.shared.logBackgroundSync(success: false, message: "No album selected")
+            guard self.settings.snapshot.selectedAlbumName != nil else {
+                AppLog.sync.notice("\(trigger.label, privacy: .public) skipped — no target album selected")
+                SyncLogger.shared.logSync(trigger: trigger, success: false, message: "No album selected")
                 completion()
                 return
             }
 
             // If target album changed, log it
             if targetAlbumChanged {
-                print("SyncCoordinator: Target album updated from server during background sync")
+                AppLog.sync.info("Target album updated from server during \(trigger.label, privacy: .public)")
             }
 
             // Check photo library authorization
             let authStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             guard authStatus == .authorized || authStatus == .limited else {
-                print("SyncCoordinator: Background sync stopped - Photo library access not authorized (\(authStatus.rawValue))")
-                SyncLogger.shared.logBackgroundSync(success: false, message: "Photo access denied")
+                AppLog.sync.error(
+                    "\(trigger.label, privacy: .public) stopped — photo library access not authorized (\(authStatus.rawValue, privacy: .public))")
+                SyncLogger.shared.logSync(trigger: trigger, success: false, message: "Photo access denied")
                 completion()
                 return
             }
@@ -337,8 +308,8 @@ final class SyncCoordinator: ObservableObject {
             // Reconcile with server before scanning
             self.reconcileWithServer {
                 self.scheduleIncrementalScan {
-                    print("SyncCoordinator: Background sync completed successfully")
-                    SyncLogger.shared.logBackgroundSync(success: true, message: "Completed")
+                    AppLog.sync.info("\(trigger.label, privacy: .public) completed successfully")
+                    SyncLogger.shared.logSync(trigger: trigger, success: true, message: "Completed")
                     completion()
                 }
             }
@@ -347,7 +318,7 @@ final class SyncCoordinator: ObservableObject {
 
     // MARK: - Target Album Synchronization
 
-    private func syncTargetAlbumFromServer(completion: @escaping (Bool) -> Void) {
+    private func syncTargetAlbumFromServer(completion: @escaping @Sendable (Bool) -> Void) {
         api.getTargetAlbum { [weak self] result in
             guard let self else {
                 completion(false)
@@ -364,12 +335,12 @@ final class SyncCoordinator: ObservableObject {
                     // Otherwise it observes the stale non-nil value and proceeds with a
                     // scan that produces a batch of doomed-to-400 uploads (the server
                     // rejects them with "sync is paused").
-                    if settings.selectedAlbumName != nil {
+                    if settings.snapshot.selectedAlbumName != nil {
                         DispatchQueue.main.async {
                             self.settings.selectedAlbumName = nil
                             self.settings.albumId = 1
                             self.clearQueue()
-                            print("SyncCoordinator: Target album cleared from server - stopping sync")
+                            AppLog.sync.notice("Target album cleared on the server — stopping sync")
                             completion(true)
                         }
                     } else {
@@ -379,7 +350,7 @@ final class SyncCoordinator: ObservableObject {
                 }
 
                 // Check if target album changed
-                if albumId != settings.albumId {
+                if albumId != settings.snapshot.albumId {
                     // Fetch album details to get the name
                     api.fetchAlbums { [weak self] albumsResult in
                         guard let self else {
@@ -394,16 +365,16 @@ final class SyncCoordinator: ObservableObject {
                                 DispatchQueue.main.async {
                                     self.settings.albumId = album.id
                                     self.settings.selectedAlbumName = album.name
-                                    print("SyncCoordinator: Target album synced from server: \(album.name)")
+                                    AppLog.sync.info("Target album synced from server: \(album.name)")
                                 }
                                 completion(true)
                             } else {
-                                print("SyncCoordinator: Server target album ID \(albumId) not found in albums list")
+                                AppLog.sync.error("Server target album \(albumId, privacy: .public) is not in the albums list")
                                 completion(false)
                             }
 
                         case let .failure(error):
-                            print("SyncCoordinator: Failed to fetch albums: \(error)")
+                            AppLog.sync.error("Could not fetch albums: \(error.localizedDescription, privacy: .public)")
                             completion(false)
                         }
                     }
@@ -413,7 +384,7 @@ final class SyncCoordinator: ObservableObject {
                 }
 
             case let .failure(error):
-                print("SyncCoordinator: Failed to fetch target album: \(error)")
+                AppLog.sync.error("Could not fetch the target album: \(error.localizedDescription, privacy: .public)")
                 // Continue with existing settings on error
                 completion(false)
             }
@@ -441,28 +412,28 @@ final class SyncCoordinator: ObservableObject {
     ///
     /// Either request failing is non-fatal: reconciliation is an optimisation, and server-side
     /// dedupe is what actually prevents duplicate rows.
-    func reconcileWithServer(completion: (() -> Void)? = nil) {
+    func reconcileWithServer(completion: (@Sendable () -> Void)? = nil) {
         syncQueue.async {
             // N+1 days: the scan window plus a day of slack, so an asset taken just before the
             // boundary is not re-uploaded because the two windows disagree about "today".
-            let days = self.settings.syncLastDays + 1
+            let days = self.settings.snapshot.syncLastDays + 1
             self.api.fetchUploadedContentIds(days: days) { contentIdResult in
                 switch contentIdResult {
                 case let .success(contentIds):
-                    print("SyncCoordinator: Reconciled with server, found \(contentIds.count) uploaded contentIds")
+                    AppLog.sync.info("Reconciled: server holds \(contentIds.count, privacy: .public) contentIds")
                     UploadStore.shared.reconcileWithServerContentIds(contentIds)
                 case let .failure(error):
                     // An older server has no such endpoint; the checksum pass below still runs.
-                    print("SyncCoordinator: contentId reconciliation unavailable: \(error)")
+                    AppLog.sync.notice("contentId reconciliation unavailable: \(error.localizedDescription, privacy: .public)")
                 }
 
                 self.api.fetchUploadedChecksums(days: days) { checksumResult in
                     switch checksumResult {
                     case let .success(checksums):
-                        print("SyncCoordinator: Reconciled with server, found \(checksums.count) uploaded checksums")
+                        AppLog.sync.info("Reconciled: server holds \(checksums.count, privacy: .public) checksums")
                         UploadStore.shared.reconcileWithServerChecksums(checksums)
                     case let .failure(error):
-                        print("SyncCoordinator: Failed to reconcile with server: \(error)")
+                        AppLog.sync.error("Could not reconcile with the server: \(error.localizedDescription, privacy: .public)")
                     }
                     completion?()
                 }
@@ -536,9 +507,14 @@ final class SyncCoordinator: ObservableObject {
 
     private func scheduleInitialScan() {
         syncQueue.async {
-            let assets = self.photo.fetchAssets(lastDays: self.settings.syncLastDays)
+            let days = self.settings.snapshot.syncLastDays
+            let assets = self.photo.fetchAssets(lastDays: days)
             let filtered = assets.filter { !UploadStore.shared.isUploaded($0.localIdentifier) }
-            print("SyncCoordinator: Initial scan found \(assets.count) assets in last \(self.settings.syncLastDays) days, \(filtered.count) not yet uploaded")
+            AppLog.sync.info("""
+            Initial scan: \(assets.count, privacy: .public) assets in the last \
+            \(days, privacy: .public) days, \
+            \(filtered.count, privacy: .public) not yet uploaded
+            """)
 
             DispatchQueue.main.async {
                 self.metrics.inScope = assets.count
@@ -548,24 +524,28 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
-    private func scheduleIncrementalScan(onDone: (() -> Void)? = nil) {
+    private func scheduleIncrementalScan(onDone: (@Sendable () -> Void)? = nil) {
         syncQueue.async {
             // Calculate cutoff date based on syncLastDays
             let calendar = Calendar.current
             let now = Date()
-            let cutoffDate = calendar.date(byAdding: .day, value: -self.settings.syncLastDays, to: now) ?? .distantPast
+            let settings = self.settings.snapshot
+            let cutoffDate = calendar.date(byAdding: .day, value: -settings.syncLastDays, to: now) ?? .distantPast
 
             // Update in-scope count with all photos in the date range
-            let allInScope = self.photo.fetchAssets(lastDays: self.settings.syncLastDays)
+            let allInScope = self.photo.fetchAssets(lastDays: settings.syncLastDays)
             DispatchQueue.main.async {
                 self.metrics.inScope = allInScope.count
             }
 
             // Use the more recent of lastSyncDate or cutoffDate
-            let since = max(self.settings.lastSyncDate ?? .distantPast, cutoffDate)
+            let since = max(settings.lastSyncDate ?? .distantPast, cutoffDate)
             let assets = self.photo.fetchAssets(since: since)
             let filtered = assets.filter { !UploadStore.shared.isUploaded($0.localIdentifier) }
-            print("SyncCoordinator: Incremental scan found \(assets.count) assets since \(since), \(filtered.count) not yet uploaded")
+            AppLog.sync.info("""
+            Incremental scan: \(assets.count, privacy: .public) assets since \(since, privacy: .public), \
+            \(filtered.count, privacy: .public) not yet uploaded
+            """)
             self.enqueue(assets: filtered)
             onDone?()
         }
@@ -587,11 +567,11 @@ final class SyncCoordinator: ObservableObject {
         let newAssets = queue.enqueue(admissible)
 
         guard !newAssets.isEmpty else {
-            print("SyncCoordinator: All \(assets.count) assets already queued or uploading, skipping")
+            AppLog.sync.debug("All \(assets.count, privacy: .public) assets are already queued or uploading — skipping")
             return []
         }
 
-        print("SyncCoordinator: Enqueuing \(newAssets.count) new assets (filtered from \(assets.count))")
+        AppLog.sync.info("Enqueuing \(newAssets.count, privacy: .public) of \(assets.count, privacy: .public) assets")
         publishQueuedCount()
         drainQueue()
         return newAssets
@@ -627,7 +607,7 @@ final class SyncCoordinator: ObservableObject {
         let useTus = shouldUseTus()
         let uploadSizeLimit = currentUploadSizeLimit()
         for asset in batch {
-            let completion: ((Result<Void, Error>) -> Void) = { [weak self] result in
+            let completion: (@Sendable (Result<Void, Error>) -> Void) = { [weak self] result in
                 guard let self else { return }
                 switch result {
                 case .success:
@@ -690,7 +670,7 @@ final class SyncCoordinator: ObservableObject {
     /// otherwise the last one we persisted, otherwise nil for "unknown, let the server decide".
     private func currentUploadSizeLimit() -> Int64? {
         if let advertised = cachedCapabilities?.tus.maxSize, advertised > 0 { return advertised }
-        let remembered = Settings.shared.tusMaxUploadBytes
+        let remembered = Settings.shared.snapshot.tusMaxUploadBytes
         return remembered > 0 ? remembered : nil
     }
 
@@ -702,7 +682,7 @@ final class SyncCoordinator: ObservableObject {
 
     private func shouldUseTus() -> Bool {
         UploadRouting.selectPath(
-            userOptedIn: Settings.shared.useTus,
+            userOptedIn: Settings.shared.snapshot.useTus,
             capabilities: cachedCapabilities
         ) == .tus
     }
@@ -717,7 +697,7 @@ final class SyncCoordinator: ObservableObject {
         contentId: String,
         albumId: Int,
         attempt: Int = 0,
-        completion: @escaping (Int?) -> Void,
+        completion: @escaping @Sendable (Int?) -> Void,
     ) {
         let maxAttempts = 4
         api.lookupAssetByContentId(albumId: albumId, contentId: contentId) { [weak self] result in
@@ -727,8 +707,12 @@ final class SyncCoordinator: ObservableObject {
             case .failure where attempt < maxAttempts - 1:
                 // 200ms, 400ms, 800ms — covers the typical race + a comfortable safety margin.
                 let delay = 0.2 * pow(2.0, Double(attempt))
+                // Resolved to a strong reference here rather than writing `self?` inside the
+                // delayed block: `weak self` is a mutable variable, and reading it from a second,
+                // concurrently-running closure is the race the compiler is pointing at.
+                guard let self else { return }
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                    self?.resolveTusUploadServerId(
+                    self.resolveTusUploadServerId(
                         contentId: contentId,
                         albumId: albumId,
                         attempt: attempt + 1,
@@ -736,7 +720,10 @@ final class SyncCoordinator: ObservableObject {
                     )
                 }
             case .failure:
-                print("SyncCoordinator: gave up resolving asset id for contentId=\(contentId) after \(maxAttempts) attempts; status polling disabled for this upload")
+                AppLog.sync.error("""
+                Gave up resolving the server asset id after \(maxAttempts, privacy: .public) attempts — \
+                status polling is off for this upload
+                """)
                 SyncLogger.shared.logProcessingStatusUnavailable(assetId: contentId)
                 completion(nil)
             }
@@ -746,7 +733,7 @@ final class SyncCoordinator: ObservableObject {
     /// Lazy fetch + 1-hour cache. Called from start() and refreshed implicitly here when the
     /// cache has expired. Failure is non-fatal — we just leave the cache empty and fall back
     /// to the multipart path until the next attempt.
-    private func ensureCapabilitiesLoaded(completion: ((Capabilities?) -> Void)? = nil) {
+    private func ensureCapabilitiesLoaded(completion: (@Sendable (Capabilities?) -> Void)? = nil) {
         if let cached = freshCapabilities() {
             completion?(cached)
             return
@@ -764,7 +751,7 @@ final class SyncCoordinator: ObservableObject {
                 }
                 completion?(caps)
             case let .failure(err):
-                print("SyncCoordinator: capabilities fetch failed: \(err) — staying on multipart path")
+                AppLog.sync.notice("Capabilities fetch failed (\(err.localizedDescription, privacy: .public)) — staying on the multipart path")
                 completion?(nil)
             }
         }
@@ -805,7 +792,7 @@ final class SyncCoordinator: ObservableObject {
                 // Server asked us to back off. Re-enqueue this asset and pause
                 // draining for retryAfter seconds so we don't hammer the server.
                 if let asset {
-                    print("SyncCoordinator: 503/429 on \(assetId), re-queueing after \(Int(retryAfter))s")
+                    AppLog.sync.notice("Server asked us to back off — re-queueing after \(Int(retryAfter), privacy: .public)s")
                     self.queue.requeueFront(asset)
                     self.publishQueuedCount()
                 }

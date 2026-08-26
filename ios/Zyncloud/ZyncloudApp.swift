@@ -1,6 +1,7 @@
 import BackgroundTasks
 import SwiftUI
 import UserNotifications
+import os
 
 @main
 struct ZyncloudApp: App {
@@ -25,7 +26,7 @@ struct ZyncloudApp: App {
                 Task { @MainActor in
                     try? await UNUserNotificationCenter.current().setBadgeCount(0)
                     UNUserNotificationCenter.current().removeAllDeliveredNotifications()
-                    print("ZyncloudApp: Cleared badge and delivered notifications (scenePhase)")
+                    AppLog.app.debug("Cleared the badge and delivered notifications on scene phase change")
                 }
 
             case .background:

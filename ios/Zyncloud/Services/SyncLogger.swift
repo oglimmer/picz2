@@ -1,8 +1,11 @@
 import Combine
 import Foundation
 import SwiftUI
+import os
 
-class SyncLogger: ObservableObject {
+/// - Note: `@unchecked Sendable` — `logs` and `saveScheduled` are main-queue only (every path in
+///   goes through ``runOnMain(_:)``), and encoding happens on ``persistQueue`` over a snapshot.
+final class SyncLogger: ObservableObject, @unchecked Sendable {
     static let shared = SyncLogger()
 
     @Published var logs: [SyncLogEntry] = []
@@ -91,16 +94,16 @@ class SyncLogger: ObservableObject {
                message: UploadSizeLimit.message(filename: filename, size: size, limit: limit))
     }
 
-    func logBackgroundSync(success: Bool, message: String) {
-        addLog(isManual: false, success: success, message: "Background sync: \(message)")
+    /// One sync run's progress, headed by what kicked it off.
+    ///
+    /// Takes the trigger rather than existing twice, once per trigger — see
+    /// ``SyncCoordinator/performSync(trigger:completion:)``, which had the same problem.
+    func logSync(trigger: SyncCoordinator.SyncTrigger, success: Bool, message: String) {
+        addLog(isManual: trigger.isManual, success: success, message: "\(trigger.label): \(message)")
     }
 
     func logBackgroundTask(taskType: String, message: String) {
         addLog(isManual: false, success: true, message: "\(taskType): \(message)")
-    }
-
-    func logManualSync(success: Bool, message: String) {
-        addLog(isManual: true, success: success, message: "Manual sync: \(message)")
     }
 
     func clearLogs() {
@@ -129,11 +132,16 @@ class SyncLogger: ObservableObject {
     private func addLog(isManual: Bool, success: Bool, message: String) {
         let logEntry = SyncLogEntry(isManual: isManual, success: success, message: message)
 
-        // Print to console immediately so background-thread call sites still log
-        // synchronously even if the published mutation is hopped to main.
-        let prefix = isManual ? "Manual" : "Background"
-        let status = success ? "✓" : "✗"
-        print("[\(prefix)] \(status) \(message)")
+        // Mirror to the unified log immediately, so background-thread call sites still leave a
+        // trace synchronously even though the published mutation is hopped to main. Public: the
+        // whole point of this line is that it is readable in a sysdiagnose, and the messages are
+        // already truncated asset ids and status words.
+        let prefix = isManual ? "manual" : "background"
+        if success {
+            AppLog.sync.info("[\(prefix, privacy: .public)] \(message, privacy: .public)")
+        } else {
+            AppLog.sync.error("[\(prefix, privacy: .public)] \(message, privacy: .public)")
+        }
 
         runOnMain { [weak self] in
             guard let self else { return }
@@ -154,7 +162,7 @@ class SyncLogger: ObservableObject {
         }
     }
 
-    private func runOnMain(_ block: @escaping () -> Void) {
+    private func runOnMain(_ block: @escaping @Sendable () -> Void) {
         if Thread.isMainThread {
             block()
         } else {

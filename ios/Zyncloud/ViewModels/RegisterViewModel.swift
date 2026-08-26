@@ -48,7 +48,7 @@ class RegisterViewModel: ViewModelProtocol {
 
         APIClient.register(email: trimmedEmail, password: password) { [weak self] result in
             guard let self else { return }
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
                 switch result {
                 case .success:

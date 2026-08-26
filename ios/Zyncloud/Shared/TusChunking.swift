@@ -40,11 +40,7 @@ enum TusChunking {
     static func writeSlice(from source: URL, range: Range<Int64>, to destination: URL) throws {
         let length = range.upperBound - range.lowerBound
         guard length > 0 else {
-            throw NSError(
-                domain: "TusChunking",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "empty slice"],
-            )
+            throw AppError.storage("Asked for an empty slice of the file")
         }
 
         let fileManager = FileManager.default
@@ -65,11 +61,7 @@ enum TusChunking {
         while remaining > 0 {
             let n = Int(min(Int64(bufferSize), remaining))
             guard let data = try reader.read(upToCount: n), !data.isEmpty else {
-                throw NSError(
-                    domain: "TusChunking",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "short read while slicing"],
-                )
+                throw AppError.storage("The file ended earlier than expected while slicing")
             }
             try writer.write(contentsOf: data)
             remaining -= Int64(data.count)
@@ -86,7 +78,8 @@ enum TusChunking {
 ///
 /// Extracted from ``TusUploader`` for the same reason as ``TusChunking``: it is a decision with
 /// edge cases, and it should be testable without a `URLSession`.
-final class TusResumeBudget {
+/// - Note: `@unchecked Sendable` — see the lock this class is built around.
+final class TusResumeBudget: @unchecked Sendable {
     private var attempts: [String: Int] = [:]
     private let lock = NSLock()
     private let maxAttempts: Int

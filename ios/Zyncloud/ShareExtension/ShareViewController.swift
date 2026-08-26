@@ -2,6 +2,7 @@ import SafariServices
 import Social
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 class ShareViewController: UIViewController {
     // MARK: - State
@@ -52,7 +53,7 @@ class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        print("🟢 ShareExtension viewDidLoad (build with footer-link rework)")
+        AppLog.share.info("Share sheet opened")
         view.backgroundColor = .systemGroupedBackground
 
         setupUI()
@@ -542,20 +543,20 @@ class ShareViewController: UIViewController {
         guard let extensionContext,
               let items = extensionContext.inputItems as? [NSExtensionItem]
         else {
-            print("❌ No extension context or input items")
+            AppLog.share.error("No extension context or input items")
             showError("No items to share")
             return
         }
 
-        print("📦 Found \(items.count) extension items")
+        AppLog.share.debug("Found \(items.count, privacy: .public) extension items")
 
         let totalItemCount = items.reduce(0) { $0 + ($1.attachments?.count ?? 0) }
         tally = AttachmentLoadTally(total: totalItemCount)
 
-        print("📎 Total attachments: \(totalItemCount)")
+        AppLog.share.debug("Total attachments: \(totalItemCount, privacy: .public)")
 
         guard totalItemCount > 0 else {
-            print("❌ No attachments found")
+            AppLog.share.error("No attachments found")
             showError("No media items found")
             return
         }
@@ -564,15 +565,20 @@ class ShareViewController: UIViewController {
             guard let attachments = item.attachments else { continue }
 
             for (index, attachment) in attachments.enumerated() {
-                print("🔍 Processing attachment \(index + 1)/\(attachments.count)")
-                print("   Registered types: \(attachment.registeredTypeIdentifiers)")
+                AppLog.share.debug("Processing attachment \(index + 1, privacy: .public)/\(attachments.count, privacy: .public)")
+                AppLog.share.debug("Registered types: \(attachment.registeredTypeIdentifiers, privacy: .public)")
 
                 switch AttachmentRoute.route(for: attachment) {
                 case .fileURL:
-                    print("   ✅ Has file URL type - loading...")
+                    AppLog.share.debug("Attachment has a file URL — loading")
+                    // `NSItemProvider` is not `Sendable`, but the fallback path needs this exact
+                    // one — it asks the same provider for a different representation. Capturing it
+                    // is safe because `loadItem` is documented as callable from any thread and
+                    // nothing here mutates the provider.
+                    nonisolated(unsafe) let attachment = attachment
                     attachment.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] urlData, error in
                         if let error {
-                            print("   ❌ File URL load error: \(error.localizedDescription)")
+                            AppLog.share.error("Could not load the file URL: \(error.localizedDescription, privacy: .public)")
                         }
                         if let url = urlData as? URL {
                             self?.handleLoadedURL(url: url, error: error)
@@ -597,7 +603,7 @@ class ShareViewController: UIViewController {
                     // Matches none of the three types we handle. Without this branch the
                     // attachment is never accounted for, the tally never completes, and the
                     // UI sits on "Preparing media files…" with Upload disabled — forever.
-                    print("   ⚠️ Unsupported attachment, skipping: \(attachment.registeredTypeIdentifiers)")
+                    AppLog.share.notice("Skipping an unsupported attachment: \(attachment.registeredTypeIdentifiers, privacy: .public)")
                     noteUnusableAttachment()
                 }
             }
@@ -606,8 +612,10 @@ class ShareViewController: UIViewController {
 
     /// Counts an attachment we cannot use, and completes the batch if it was the last one.
     /// Must be called on the main queue, like the other two completion paths.
-    private func noteUnusableAttachment() {
-        DispatchQueue.main.async { [weak self] in
+    /// `nonisolated`: reached both from the main-actor scan loop and from an `NSItemProvider`
+    /// callback on an arbitrary thread. It hops before touching anything.
+    nonisolated private func noteUnusableAttachment() {
+        Task { @MainActor [weak self] in
             guard let self else { return }
             tally.noteSkipped()
             if tally.isComplete { updateMediaSummary() }
@@ -698,7 +706,7 @@ class ShareViewController: UIViewController {
     }
 
     @objc private func cancelTapped() {
-        extensionContext?.cancelRequest(withError: NSError(domain: "PhotoUploader", code: 0, userInfo: [NSLocalizedDescriptionKey: "User cancelled"]))
+        extensionContext?.cancelRequest(withError: AppError.cancelled("User cancelled"))
     }
 
     private func showError(_ message: String) {
@@ -726,7 +734,9 @@ extension ShareViewController: UITextFieldDelegate {
 // MARK: - Media loading callbacks
 
 extension ShareViewController {
-    func loadItemAlternative(attachment: NSItemProvider) {
+    /// `nonisolated` because `NSItemProvider` calls its completion on whichever thread it likes,
+    /// and this is called from one of those. It touches no view state.
+    nonisolated func loadItemAlternative(attachment: NSItemProvider) {
         switch AttachmentRoute.fallbackRoute(for: attachment) {
         case .image:
             attachment.loadItem(forTypeIdentifier: UTType.image.identifier, options: nil) { [weak self] item, error in
@@ -739,16 +749,21 @@ extension ShareViewController {
         case .fileURL, .unusable:
             // The file-URL load produced neither a URL nor URL-shaped Data, and the
             // attachment conforms to nothing else we handle. Nothing has counted it yet.
-            print("⚠️ No usable representation for attachment, skipping")
+            AppLog.share.notice("Skipping an attachment with no usable representation")
             noteUnusableAttachment()
         }
     }
 
-    func handleLoadedURL(url: URL, error: Error?) {
-        DispatchQueue.main.async { [weak self] in
+    /// `nonisolated`, and everything it sends to the main actor is a value type.
+    ///
+    /// The `Error` stays on this side of the hop: `any Error` is not `Sendable`, and all that is
+    /// wanted from it is a line for the log.
+    nonisolated func handleLoadedURL(url: URL, error: Error?) {
+        let errorText = error?.localizedDescription
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            if let error {
-                print("❌ Error loading URL: \(error.localizedDescription)")
+            if let errorText {
+                AppLog.share.error("Could not load the URL: \(errorText, privacy: .public)")
                 tally.noteSkipped()
                 if tally.isComplete { updateMediaSummary() }
                 return
@@ -770,23 +785,34 @@ extension ShareViewController {
         }
     }
 
-    func handleLoadedItem(item: NSSecureCoding?, error: Error?, type: MediaItem.MediaType) {
-        DispatchQueue.main.async { [weak self] in
+    /// `nonisolated`, like its two neighbours.
+    ///
+    /// The loaded item is unwrapped **here**, before the hop, so that only a `URL` and two
+    /// strings cross to the main actor. `NSSecureCoding` is not `Sendable` — handing one to
+    /// another thread is a real hazard rather than a paperwork one — and the two things this
+    /// method wants from it, "is it a file URL" and "what was it instead", are both answerable
+    /// on the thread it arrived on.
+    nonisolated func handleLoadedItem(item: NSSecureCoding?, error: Error?, type: MediaItem.MediaType) {
+        let errorText = error?.localizedDescription
+        let url = item as? URL
+        let describedType = String(describing: item.map { Swift.type(of: $0) })
+
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            if let error {
-                print("Error loading item: \(error.localizedDescription)")
+            if let errorText {
+                AppLog.share.error("Could not load the item: \(errorText, privacy: .public)")
                 tally.noteSkipped()
                 if tally.isComplete { updateMediaSummary() }
                 return
             }
-            if let url = item as? URL {
+            if let url {
                 mediaItems.append(MediaItem(url: url, type: type, filename: url.lastPathComponent))
                 tally.noteLoaded()
             } else {
                 // In-memory UIImage/Data rather than a file on disk. Uploading those means
                 // materialising them to a temp file first, which this extension does not do
                 // yet — so count it as skipped instead of dropping it without a trace.
-                print("⚠️ Item loaded as \(String(describing: item.map { Swift.type(of: $0) })), not a URL — skipping")
+                AppLog.share.notice("Item loaded as \(describedType, privacy: .public), not a URL — skipping")
                 tally.noteSkipped()
             }
             if tally.isComplete { updateMediaSummary() }
@@ -800,7 +826,7 @@ extension ShareViewController {
     func loadAlbums() {
         let apiUrl = uploadService.getApiBaseUrl()
         guard let url = URL(string: "\(apiUrl)/albums") else {
-            print("❌ Invalid albums API URL")
+            AppLog.share.error("Could not build the albums web address")
             setAlbumLoading(false)
             albumButton.configuration?.title = "Failed to load albums"
             return
@@ -817,7 +843,7 @@ extension ShareViewController {
                 self.setAlbumLoading(false)
 
                 if let error {
-                    print("❌ Error loading albums: \(error.localizedDescription)")
+                    AppLog.share.error("Could not load albums: \(error.localizedDescription, privacy: .public)")
                     self.albumButton.configuration?.title = "Failed to load albums"
                     return
                 }

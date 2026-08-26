@@ -9,8 +9,9 @@ import Foundation
 /// ``Settings/albumId``. So the two remember separately, which matches how they are used —
 /// the app syncs a camera roll, the share sheet files one-off items.
 enum LastAlbumStore {
-    /// Test seam only — production never assigns it. Same rationale as ``CredentialsManager/keychain``.
-    static var defaults = UserDefaults.standard
+    /// Test seam only — production never assigns it. Same rationale as
+    /// ``CredentialsManager/keychain``, including the `nonisolated(unsafe)`.
+    nonisolated(unsafe) static var defaults = UserDefaults.standard
 
     private static let key = "shareExtension.lastSelectedAlbumId"
 

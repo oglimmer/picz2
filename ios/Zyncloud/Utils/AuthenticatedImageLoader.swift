@@ -11,7 +11,10 @@ import SwiftUI
 ///
 /// Keyed by absolute URL, which already carries the size variant (`?size=thumbnail` vs `large`).
 enum ImageCache {
-    private static let cache: NSCache<NSURL, UIImage> = {
+    /// `nonisolated(unsafe)` because `NSCache` is not marked `Sendable`, even though it is
+    /// documented as thread-safe — you may read and write one from any thread. Nothing else here
+    /// is shared, so this is the one assertion the type needs.
+    nonisolated(unsafe) private static let cache: NSCache<NSURL, UIImage> = {
         let cache = NSCache<NSURL, UIImage>()
         cache.countLimit = 300
         return cache
@@ -52,7 +55,10 @@ enum ImageCache {
 /// under a red "Failed" icon while the thumbnail was merely still being made.
 private struct ImageNotReadyYet: Error {}
 
-class AuthenticatedImageLoader: ObservableObject {
+/// - Note: `@MainActor` — this is held in a `@StateObject` and every property it publishes drives
+///   one view. The Combine chain below already ends with `.receive(on: DispatchQueue.main)`.
+@MainActor
+final class AuthenticatedImageLoader: ObservableObject {
     @Published var image: UIImage?
     @Published var isLoading = false
     @Published var error: Error?
@@ -61,7 +67,10 @@ class AuthenticatedImageLoader: ObservableObject {
     /// same "Processing…" placeholder the file list's own status drives.
     @Published var isServerProcessing = false
 
-    private var cancellable: AnyCancellable?
+    /// `nonisolated(unsafe)` so ``cancel()`` can stay callable from `deinit`, which runs on
+    /// whichever thread drops the last reference. `AnyCancellable.cancel()` is safe to call from
+    /// anywhere; the reference itself is only ever assigned on the main actor.
+    nonisolated(unsafe) private var cancellable: AnyCancellable?
     private let url: URL
 
     /// Bounded self-retry for the 202 case, so a thumbnail that becomes ready a second after
@@ -105,6 +114,32 @@ class AuthenticatedImageLoader: ObservableObject {
         startRequest(bypassCaches: true)
     }
 
+    /// Turns one response into an image, or into the reason there is not one.
+    ///
+    /// A `nonisolated static` function, and passed to `tryMap` by name — **not** written inline
+    /// as a closure. This build has `SWIFT_APPROACHABLE_CONCURRENCY` on, under which a
+    /// non-`@Sendable` closure inherits the isolation of wherever it was written. Combine's
+    /// operator closures are not `@Sendable`, so writing this inline inside a `@MainActor` type
+    /// made it a main-actor closure — and Combine runs these operators on the
+    /// `NSURLSession-delegate` queue. The result was a main-actor check failing on a background
+    /// queue: `BUG IN CLIENT OF LIBDISPATCH: Assertion failed`, on the first thumbnail loaded.
+    ///
+    /// A named `nonisolated` function has no enclosing isolation to inherit, which is the point.
+    private nonisolated static func decode(
+        _ output: URLSession.DataTaskPublisher.Output,
+    ) throws -> UIImage? {
+        guard let http = output.response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if http.statusCode == 202 {
+            throw ImageNotReadyYet()
+        }
+        guard (200 ... 299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return UIImage(data: output.data)
+    }
+
     private func startRequest(bypassCaches: Bool) {
         isLoading = true
         error = nil
@@ -116,22 +151,12 @@ class AuthenticatedImageLoader: ObservableObject {
 
         // Load image
         cancellable = URLSession.shared.dataTaskPublisher(for: request)
-            .tryMap { output -> Data in
-                guard let http = output.response as? HTTPURLResponse else {
-                    throw URLError(.badServerResponse)
-                }
-                if http.statusCode == 202 {
-                    throw ImageNotReadyYet()
-                }
-                guard (200 ... 299).contains(http.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
-                return output.data
-            }
-            .map { UIImage(data: $0) }
-            .mapError { $0 }
+            .tryMap(Self.decode)
             .receive(on: DispatchQueue.main)
             .sink(receiveCompletion: { [weak self] completion in
+                // `.receive(on: DispatchQueue.main)` above guarantees this runs on the main
+                // queue; `assumeIsolated` tells the compiler what the operator already ensures.
+                MainActor.assumeIsolated {
                 guard let self, case let .failure(err) = completion else { return }
                 self.isLoading = false
 
@@ -146,11 +171,15 @@ class AuthenticatedImageLoader: ObservableObject {
                 self.isServerProcessing = true
                 guard self.notReadyRetries < self.maxNotReadyRetries else { return }
                 self.notReadyRetries += 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + self.notReadyRetryDelay) { [weak self] in
+                let delay = self.notReadyRetryDelay
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
                     guard let self, self.image == nil else { return }
                     self.startRequest(bypassCaches: true)
                 }
+                }
             }, receiveValue: { [weak self] loadedImage in
+                MainActor.assumeIsolated {
                 guard let self else { return }
                 self.image = loadedImage
                 self.isLoading = false
@@ -158,12 +187,13 @@ class AuthenticatedImageLoader: ObservableObject {
                 if let loadedImage {
                     ImageCache.store(loadedImage, for: self.url)
                 } else {
-                    self.error = NSError(domain: "AuthenticatedImageLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to load image"])
+                    self.error = AppError.api(message: "Could not load the picture", statusCode: nil)
+                }
                 }
             })
     }
 
-    func cancel() {
+    nonisolated func cancel() {
         cancellable?.cancel()
     }
 

@@ -485,7 +485,9 @@ enum SampleGallery {
     static let tickHz: Double = 15
     static let step: Double = total / loopSeconds / tickHz
 
-    static let ticker = Timer.publish(every: 1 / tickHz, on: .main, in: .common).autoconnect()
+    /// `nonisolated(unsafe)`: the publisher is created once and only ever subscribed to, and it
+    /// is scheduled `on: .main` — the animation this drives never runs anywhere else.
+    nonisolated(unsafe) static let ticker = Timer.publish(every: 1 / tickHz, on: .main, in: .common).autoconnect()
 
     static func clock(_ seconds: Double) -> String {
         let whole = Int(max(0, seconds))

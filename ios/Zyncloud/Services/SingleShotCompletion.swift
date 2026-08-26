@@ -12,12 +12,14 @@ import Foundation
 ///
 /// The normal finish and the expiration handler can both reach the completion at the same moment
 /// on different threads, so "have we finished?" needs a lock rather than a plain `Bool`.
-final class SingleShotCompletion {
+/// - Note: `@unchecked Sendable` — `hasFired` is only read or written while holding ``lock``,
+///   which is the entire point of the class.
+final class SingleShotCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var hasFired = false
-    private let action: (Bool) -> Void
+    private let action: @Sendable (Bool) -> Void
 
-    init(_ action: @escaping (Bool) -> Void) {
+    init(_ action: @escaping @Sendable (Bool) -> Void) {
         self.action = action
     }
 

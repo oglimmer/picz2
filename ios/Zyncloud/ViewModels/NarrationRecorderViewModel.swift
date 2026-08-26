@@ -61,7 +61,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
     let album: Album
 
     private let recorder = NarrationAudioRecorder()
-    private var apiClient: APIClient?
+    private let apiClient: APIClient?
 
     /// Every asset in the album, kept so switching the tag filter needs no round trip.
     private var allPhotos: [Photo] = []
@@ -117,11 +117,9 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
         existingRecording(for: selectedTag, language: selectedLanguage) != nil
     }
 
-    init(album: Album) {
+    init(album: Album, apiClient: APIClient? = APIClientProvider.shared.current) {
         self.album = album
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(username: credentials.username, password: credentials.password)
-        }
+        self.apiClient = apiClient
     }
 
     // MARK: - Loading
@@ -226,7 +224,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
         }
 
         do {
-            try recorder.start()
+            try await recorder.start()
         } catch {
             alertState = AlertState(title: "Could Not Record", message: error.localizedDescription)
             return

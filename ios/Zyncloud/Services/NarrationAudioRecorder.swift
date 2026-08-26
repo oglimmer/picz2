@@ -8,6 +8,10 @@ import Foundation
 /// regardless of what came in (`AudioReencodingService`), so the stored file ends up identical to
 /// a browser-made one. See ``NarrationAudioRecorder/uploadFilename`` for the naming that goes
 /// with that.
+/// - Note: `@MainActor` — one view model owns one of these and drives it from the recording
+///   screen. Only the audio-session call inside ``start()`` leaves the main thread, and it does
+///   so through ``AudioSessionConfigurator``, which is where that hop belongs.
+@MainActor
 final class NarrationAudioRecorder {
     enum RecorderError: LocalizedError {
         case permissionDenied
@@ -30,7 +34,9 @@ final class NarrationAudioRecorder {
     /// the real format from the content — so the extension describes the file after re-encoding
     /// (WebM/Opus), which is what every player then asks for. Naming it `.m4a` would leave an
     /// Opus stream in a container the web player will not touch.
-    static let uploadFilename = "recording.webm"
+    /// `nonisolated` because it is a constant string that the upload path reads while building
+    /// a multipart body on a background thread. Nothing about it needs the main actor.
+    nonisolated static let uploadFilename = "recording.webm"
 
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
@@ -52,14 +58,14 @@ final class NarrationAudioRecorder {
     /// The session is `.playAndRecord` rather than `.record` because the slideshow plays videos
     /// while this runs. They are muted, but a video item still wants a session that permits
     /// playback — `.record` alone stalls it.
-    func start() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
+    func start() async throws {
+        // Awaited rather than called inline: see ``AudioSessionConfigurator``. Recording must not
+        // begin before the route is up, so this one is waited for.
+        try await AudioSessionConfigurator.activate(
+            category: .playAndRecord,
             mode: .default,
             options: [.defaultToSpeaker, .allowBluetoothHFP],
         )
-        try session.setActive(true)
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("narration-\(UUID().uuidString).m4a")
@@ -113,6 +119,8 @@ final class NarrationAudioRecorder {
     /// Hands the audio route back. Without it the phone stays in the record category, which
     /// routes later playback to the earpiece.
     private func deactivateSession() {
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Fired and forgotten: nothing here waits on the route coming down, and blocking the
+        // caller — which is the main thread, mid-teardown — is the whole problem being avoided.
+        Task { await AudioSessionConfigurator.deactivate() }
     }
 }

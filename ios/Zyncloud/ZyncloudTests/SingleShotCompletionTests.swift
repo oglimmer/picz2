@@ -4,36 +4,58 @@ import Testing
 
 /// Found by the B5 device test: the app was `SIGKILL`ed ("code 9: killed") because the background
 /// task expiration handlers logged and returned without ever calling `setTaskCompleted`.
+/// Records what the completion was called with.
+///
+/// A class behind a lock rather than a local `var calls: [Bool]`: ``SingleShotCompletion`` takes
+/// a `@Sendable` action, because in production it is called from a background-task expiration
+/// handler, and a `@Sendable` closure cannot write to a local variable of the test that made it.
+private final class CallLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [Bool] = []
+
+    func append(_ value: Bool) {
+        lock.lock()
+        calls.append(value)
+        lock.unlock()
+    }
+
+    var recorded: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+}
+
 struct SingleShotCompletionTests {
     @Test func theActionRunsOnce() {
-        var calls: [Bool] = []
+        let calls = CallLog()
         let completion = SingleShotCompletion { calls.append($0) }
 
         #expect(completion.fire(success: true))
-        #expect(calls == [true])
+        #expect(calls.recorded == [true])
     }
 
     /// Completing a BGTask twice is a trap. Expiry and a normal finish are separate code paths
     /// that can both reach the completion.
     @Test func laterCallsAreIgnored() {
-        var calls: [Bool] = []
+        let calls = CallLog()
         let completion = SingleShotCompletion { calls.append($0) }
 
         #expect(completion.fire(success: true))
         #expect(!completion.fire(success: false))
         #expect(!completion.fire(success: true))
-        #expect(calls == [true])
+        #expect(calls.recorded == [true])
     }
 
     /// The whole reason this type exists: whoever gets there first wins, and expiry losing the
     /// race must not mean the task goes uncompleted.
     @Test func expiryWinsWhenItGetsThereFirst() {
-        var calls: [Bool] = []
+        let calls = CallLog()
         let completion = SingleShotCompletion { calls.append($0) }
 
         #expect(completion.fire(success: false))   // expiration handler
         #expect(!completion.fire(success: true))   // sync finishing afterwards
-        #expect(calls == [false])
+        #expect(calls.recorded == [false])
     }
 
     @Test func itReportsWhetherItHasCompleted() {

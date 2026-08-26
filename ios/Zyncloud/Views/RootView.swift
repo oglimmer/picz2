@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import os
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -47,7 +48,7 @@ struct RootView: View {
             // Also remove all pending notifications
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
 
-            print("RootView: Cleared badge, delivered notifications, and pending requests")
+            AppLog.app.debug("Cleared the badge, delivered notifications and pending requests")
         }
     }
 }

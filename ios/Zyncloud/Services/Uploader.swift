@@ -2,11 +2,16 @@ import CryptoKit
 import Foundation
 import Photos
 
-final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate {
+/// - Note: `@unchecked Sendable` — the delegate callbacks arrive on the session's own serial
+///   delegate queue, and everything mutable below is touched only from there or under a lock.
+final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate,
+    @unchecked Sendable
+{
     static let shared = Uploader()
 
     let sessionId = "com.oglimmer.photosync.upload"
-    private(set) var session: URLSession!
+    /// Assigned once by ``configureSession()`` before any callback can arrive, then never again.
+    nonisolated(unsafe) private(set) var session: URLSession!
     private let fileManager = FileManager.default
 
     // Buffered response bodies, keyed by URLSessionTask.taskIdentifier, used to
@@ -61,7 +66,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     /// could freeze for up to four seconds every time it came to the foreground. Two seconds is
     /// the timeout rather than the expected cost, but re-attaching to a background session after
     /// a relaunch is genuinely slow, and the launch screen is the worst place to spend it.
-    func getActiveUploadAssetIds(completion: @escaping (Set<String>) -> Void) {
+    func getActiveUploadAssetIds(completion: @escaping @Sendable (Set<String>) -> Void) {
         guard let session else {
             completion([])
             return
@@ -79,7 +84,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         let checksum: String
     }
 
-    func exportAssetToTempFile(_ asset: PHAsset, completion: @escaping (Result<ExportResult, Error>) -> Void) {
+    func exportAssetToTempFile(_ asset: PHAsset, completion: @escaping @Sendable (Result<ExportResult, Error>) -> Void) {
         let resources = PHAssetResource.assetResources(for: asset)
         // Prefer full size resource, else the first.
         guard let resource = resources.first(where: {
@@ -139,7 +144,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     /// - Parameter albumId: the album the asset must land in. Nil — the background-sync case —
     ///   leaves the choice to the server, which uses the account's target album.
     func queueUpload(asset: PHAsset, api: APIClient, albumId: Int? = nil,
-                     completion: ((Result<Void, Error>) -> Void)? = nil)
+                     completion: (@Sendable (Result<Void, Error>) -> Void)? = nil)
     {
         // Mark as uploading BEFORE export to prevent race conditions
         UploadStore.shared.markAsUploading(asset.localIdentifier)
@@ -175,7 +180,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                     else {
                         discardTempFiles()
                         UploadStore.shared.removeFromUploading(asset.localIdentifier)
-                        completion?(.failure(NSError(domain: "Uploader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to extract boundary"])))
+                        completion?(.failure(AppError.storage("Could not build the upload body")))
                         return
                     }
 
@@ -301,22 +306,23 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     // failure (truncated body in background relaunch, server schema change)
     // falls back to nil and just disables polling for that asset.
     func parseServerAssetId(from data: Data) -> Int? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let file = json["file"] as? [String: Any],
-              let id = file["id"] as? Int
-        else { return nil }
-        return id
+        parseUploadResponse(data)?.file.id
     }
 
     // Pulls `file.albumId` out of the upload 202 body. Same defensive contract as
     // ``parseServerAssetId(from:)``: anything unexpected reads as nil, which makes the caller
     // treat the upload as an ordinary success rather than inventing a duplicate.
     func parseServerAlbumId(from data: Data) -> Int? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let file = json["file"] as? [String: Any],
-              let albumId = file["albumId"] as? Int
-        else { return nil }
-        return albumId
+        parseUploadResponse(data)?.file.albumId
+    }
+
+    /// The 202 body, or nil if it is not the shape this client knows.
+    ///
+    /// `Codable` rather than digging through `[String: Any]` twice: the old pair each re-walked
+    /// the same two levels by hand with a string key and an `as?` per hop, so a renamed field
+    /// failed silently in two places instead of one.
+    private func parseUploadResponse(_ data: Data) -> UploadAcceptedResponse? {
+        try? JSONDecoder().decode(UploadAcceptedResponse.self, from: data)
     }
 
     func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval? {
@@ -335,4 +341,17 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         onAllBackgroundEventsComplete?(session.configuration.identifier ?? "")
     }
+}
+
+/// What `POST /api/upload` answers with on a 202.
+///
+/// Only the two fields this client reads are declared. Everything else the server sends is
+/// ignored, which is what makes adding a field on the server a non-event here.
+struct UploadAcceptedResponse: Decodable {
+    struct File: Decodable {
+        let id: Int?
+        let albumId: Int?
+    }
+
+    let file: File
 }

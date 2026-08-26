@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Holds the scoped upload token the TUS path authenticates with (§5.9).
 ///
@@ -12,7 +13,9 @@ import Foundation
 ///
 /// In memory only, deliberately. It is cheap to re-fetch, and a token on disk would be one more
 /// copy of a credential lying around — which is the problem this exists to reduce.
-final class UploadTokenStore {
+/// - Note: `@unchecked Sendable` — `token`, `expiresAt`, `waiters` and `fetching` are only ever
+///   touched while holding ``lock``.
+final class UploadTokenStore: @unchecked Sendable {
     static let shared = UploadTokenStore()
 
     /// Refresh this long before the token actually lapses.
@@ -54,7 +57,7 @@ final class UploadTokenStore {
     /// Completes with nil when the server has no token endpoint or the request fails. That is not
     /// an error the caller should surface — it means "fall back to the legacy credential path",
     /// which is what an older server still expects.
-    func token(api: APIClient, completion: @escaping (String?) -> Void) {
+    func token(api: APIClient, completion: @escaping @Sendable (String?) -> Void) {
         lock.lock()
         if !UploadTokenStore.needsRefresh(token: token, expiresAt: expiresAt, now: Date()) {
             let cached = token
@@ -83,7 +86,10 @@ final class UploadTokenStore {
             case let .failure(error):
                 token = nil
                 expiresAt = nil
-                print("UploadTokenStore: could not get an upload token (\(error.localizedDescription)); falling back to credentials")
+                AppLog.upload.notice("""
+                Could not get an upload token (\(error.localizedDescription, privacy: .public)) — \
+                falling back to credentials
+                """)
             }
             let answer = token
             let pending = waiters

@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import os
 
 struct APIClient {
     var baseURL = AppConfiguration.apiBaseURL
@@ -13,13 +14,154 @@ struct APIClient {
 
     func addBasicAuth(to request: inout URLRequest) {
         guard let username, let password else {
-            print("APIClient: WARNING - Cannot add authentication headers: credentials are nil")
+            AppLog.api.warning("Cannot add authentication headers: credentials are nil")
             return
         }
         let credentials = "\(username):\(password)"
         if let data = credentials.data(using: .utf8) {
             let base64Credentials = data.base64EncodedString()
             request.setValue("Basic \(base64Credentials)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    // MARK: - Request building
+
+    /// The verbs this client uses. An enum rather than the bare strings the endpoints used to
+    /// pass around, so a typo is a compile error instead of a 405 at runtime.
+    enum HTTPMethod: String {
+        case get = "GET"
+        case post = "POST"
+        case put = "PUT"
+        case delete = "DELETE"
+    }
+
+    /// Builds an authenticated request for `path` under ``baseURL``.
+    ///
+    /// Every endpoint used to open-code this: append the path, sometimes build `URLComponents`
+    /// for the query, sometimes force-unwrap the result, then remember to call
+    /// ``addBasicAuth(to:)``. Two of those force-unwraps would have crashed the app on a
+    /// malformed base URL, and forgetting the auth call fails as a 401 that looks like a
+    /// wrong password.
+    ///
+    /// - Throws: ``AppError/api(message:statusCode:)`` when path and query cannot form a URL.
+    func makeRequest(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        authenticated: Bool = true,
+    ) throws -> URLRequest {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false,
+        ) else {
+            throw AppError.api(message: "Could not build a web address for \(path)", statusCode: nil)
+        }
+        if !query.isEmpty {
+            components.queryItems = query
+        }
+        guard let url = components.url else {
+            throw AppError.api(message: "Could not build a web address for \(path)", statusCode: nil)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method.rawValue
+        if authenticated {
+            addBasicAuth(to: &request)
+        }
+        return request
+    }
+
+    /// The same, carrying a JSON body.
+    ///
+    /// Takes an `Encodable` rather than the `[String: Any]` the endpoints used to hand to
+    /// `JSONSerialization`. That dictionary could hold anything, so a wrong-typed value threw at
+    /// runtime and a misspelled key reached the server as valid JSON the server did not
+    /// understand. A struct makes both a compile error, and sets the content type for free.
+    func makeRequest(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: some Encodable,
+        authenticated: Bool = true,
+    ) throws -> URLRequest {
+        var request = try makeRequest(method, path, query: query, authenticated: authenticated)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return request
+    }
+
+    // MARK: - Build and send
+
+    /// Build a request and send it, decoding the reply as `T`.
+    ///
+    /// This is what an endpoint should call. Building can throw and endpoints are
+    /// completion-based, so without it every one of them carries the same
+    /// `do { … } catch { completion(.failure(error)); return }` — thirty copies of a block whose
+    /// only job is to move an error four lines sideways.
+    func send<T: Decodable & Sendable>(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        expecting: T.Type,
+        authenticated: Bool = true,
+        completion: @escaping @Sendable (Result<T, Error>) -> Void,
+    ) {
+        do {
+            let request = try makeRequest(method, path, query: query, authenticated: authenticated)
+            performRequest(request, expecting: expecting, completion: completion)
+        } catch {
+            completion(.failure(error))
+        }
+    }
+
+    /// The same, with a JSON body.
+    func send<T: Decodable & Sendable>(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: some Encodable,
+        expecting: T.Type,
+        authenticated: Bool = true,
+        completion: @escaping @Sendable (Result<T, Error>) -> Void,
+    ) {
+        do {
+            let request = try makeRequest(method, path, query: query, body: body, authenticated: authenticated)
+            performRequest(request, expecting: expecting, completion: completion)
+        } catch {
+            completion(.failure(error))
+        }
+    }
+
+    /// For endpoints whose reply is only a status code.
+    func send(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        authenticated: Bool = true,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
+    ) {
+        do {
+            let request = try makeRequest(method, path, query: query, authenticated: authenticated)
+            performRequestIgnoringBody(request, completion: completion)
+        } catch {
+            completion(.failure(error))
+        }
+    }
+
+    /// A JSON body in, a status code out.
+    func send(
+        _ method: HTTPMethod,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: some Encodable,
+        authenticated: Bool = true,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
+    ) {
+        do {
+            let request = try makeRequest(method, path, query: query, body: body, authenticated: authenticated)
+            performRequestIgnoringBody(request, completion: completion)
+        } catch {
+            completion(.failure(error))
         }
     }
 
@@ -91,32 +233,17 @@ struct APIClient {
         out.write(Data("--\(boundary)--\r\n".utf8))
     }
 
-    func fetchAlbums(completion: @escaping (Result<[Album], Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/albums"))
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: AlbumsResponse.self) { result in
+    func fetchAlbums(completion: @escaping @Sendable (Result<[Album], Error>) -> Void) {
+        send(.get, "api/albums", expecting: AlbumsResponse.self) { result in
             completion(result.map(\.albums))
         }
     }
 
-    func fetchUploadedChecksums(days: Int, completion: @escaping (Result<[String], Error>) -> Void) {
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent("api/sync/uploaded-checksums"),
-            resolvingAgainstBaseURL: false,
-        )
-        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
-        guard let url = components?.url else {
-            completion(.failure(AppError.api(message: "Invalid URL", statusCode: nil)))
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: SyncChecksumsResponse.self) { result in
+    func fetchUploadedChecksums(days: Int, completion: @escaping @Sendable (Result<[String], Error>) -> Void) {
+        send(.get, "api/sync/uploaded-checksums",
+             query: [URLQueryItem(name: "days", value: String(days))],
+             expecting: SyncChecksumsResponse.self)
+        { result in
             completion(result.map(\.checksums))
         }
     }
@@ -128,22 +255,11 @@ struct APIClient {
     /// against a local map that a fresh install has not built yet — so it was inert exactly
     /// where it was needed (§5.8). ContentIds are `PHAsset.localIdentifier` values, which belong
     /// to the photo library and still match after a delete-and-reinstall.
-    func fetchUploadedContentIds(days: Int, completion: @escaping (Result<[String], Error>) -> Void) {
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent("api/sync/uploaded-content-ids"),
-            resolvingAgainstBaseURL: false,
-        )
-        components?.queryItems = [URLQueryItem(name: "days", value: String(days))]
-        guard let url = components?.url else {
-            completion(.failure(AppError.api(message: "Invalid URL", statusCode: nil)))
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: SyncContentIdsResponse.self) { result in
+    func fetchUploadedContentIds(days: Int, completion: @escaping @Sendable (Result<[String], Error>) -> Void) {
+        send(.get, "api/sync/uploaded-content-ids",
+             query: [URLQueryItem(name: "days", value: String(days))],
+             expecting: SyncContentIdsResponse.self)
+        { result in
             completion(result.map(\.contentIds))
         }
     }
@@ -153,52 +269,34 @@ struct APIClient {
     /// Authenticated like any other call — the point is not to skip logging in, it is to keep the
     /// account password out of `Upload-Metadata`, which tusd persists to storage for the life of
     /// an upload. See ``UploadTokenStore``.
-    func fetchUploadToken(completion: @escaping (Result<UploadTokenResponse, Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/upload-tokens"))
-        request.httpMethod = "POST"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: UploadTokenResponse.self, completion: completion)
+    func fetchUploadToken(completion: @escaping @Sendable (Result<UploadTokenResponse, Error>) -> Void) {
+        send(.post, "api/upload-tokens", expecting: UploadTokenResponse.self, completion: completion)
     }
 
-    func getTargetAlbum(completion: @escaping (Result<Int?, Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/settings/target-album"))
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: TargetAlbumResponse.self) { result in
+    func getTargetAlbum(completion: @escaping @Sendable (Result<Int?, Error>) -> Void) {
+        send(.get, "api/settings/target-album", expecting: TargetAlbumResponse.self) { result in
             completion(result.map(\.albumId))
         }
     }
 
-    func setTargetAlbum(albumId: Int, completion: @escaping (Result<Void, Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/settings/target-album"))
-        request.httpMethod = "PUT"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addBasicAuth(to: &request)
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["albumId": albumId])
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        performRequestIgnoringBody(request, completion: completion)
+    func setTargetAlbum(albumId: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.put, "api/settings/target-album",
+             body: TargetAlbumBody(albumId: albumId), completion: completion)
     }
 
-    func clearTargetAlbum(completion: @escaping (Result<Void, Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/settings/target-album"))
-        request.httpMethod = "DELETE"
-        addBasicAuth(to: &request)
-
-        performRequestIgnoringBody(request, completion: completion)
+    func clearTargetAlbum(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.delete, "api/settings/target-album", completion: completion)
     }
 }
 
 struct TargetAlbumResponse: Codable {
     let success: Bool
     let albumId: Int?
+}
+
+/// The body of `PUT /api/settings/target-album`.
+struct TargetAlbumBody: Encodable {
+    let albumId: Int
 }
 
 extension Data {

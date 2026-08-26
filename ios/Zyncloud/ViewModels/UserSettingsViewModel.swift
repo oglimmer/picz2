@@ -25,15 +25,10 @@ class UserSettingsViewModel: ViewModelProtocol {
     private var savedLanguage1: String = ""
     private var savedLanguage2: String = ""
 
-    private var apiClient: APIClient?
+    private let apiClient: APIClient?
 
-    init() {
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(
-                username: credentials.username,
-                password: credentials.password,
-            )
-        }
+    init(apiClient: APIClient? = APIClientProvider.shared.current) {
+        self.apiClient = apiClient
     }
 
     private func requireClient() -> APIClient? {
