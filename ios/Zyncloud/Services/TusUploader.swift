@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import os
 
 /// Phase 5 — TUS resumable uploads. Drop-in alternative to ``Uploader`` selected at runtime by
 /// ``SyncCoordinator`` based on ``Settings/useTus`` and the server-advertised capabilities
@@ -8,13 +9,16 @@ import Photos
 /// V1 shipped a single PATCH of the whole file from offset 0. Traefik's 60s `readTimeout`
 /// killed anything that took longer, and the next attempt started from byte 0 again. Chunked
 /// PATCH from the server's `Upload-Offset` (via HEAD) is what actually resumes.
+/// - Note: `@unchecked Sendable` — same reasoning as ``Uploader``: the delegate callbacks arrive
+///   on the session's own serial delegate queue.
 final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLSessionDataDelegate,
-    URLSessionDownloadDelegate
+    URLSessionDownloadDelegate, @unchecked Sendable
 {
     static let shared = TusUploader()
 
     let sessionId = "com.oglimmer.photosync.tus"
-    private(set) var session: URLSession!
+    /// Assigned once by ``configureSession()`` before any callback can arrive, then never again.
+    nonisolated(unsafe) private(set) var session: URLSession!
     private let fileManager = FileManager.default
 
     /// Mirrors ``Uploader/UploadOutcome`` so ``SyncCoordinator`` can route either uploader's
@@ -63,7 +67,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
     /// could freeze for up to four seconds every time it came to the foreground. Two seconds is
     /// the timeout rather than the expected cost, but re-attaching to a background session after
     /// a relaunch is genuinely slow, and the launch screen is the worst place to spend it.
-    func getActiveUploadAssetIds(completion: @escaping (Set<String>) -> Void) {
+    func getActiveUploadAssetIds(completion: @escaping @Sendable (Set<String>) -> Void) {
         guard let session else {
             completion([])
             return
@@ -84,7 +88,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         api: APIClient,
         maxUploadBytes: Int64? = nil,
         albumId: Int? = nil,
-        completion: ((Result<Void, Error>) -> Void)? = nil
+        completion: (@Sendable (Result<Void, Error>) -> Void)? = nil
     ) {
         UploadStore.shared.markAsUploading(asset.localIdentifier)
         Uploader.shared.exportAssetToTempFile(asset) { [weak self] result in
@@ -107,7 +111,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         exp: Uploader.ExportResult,
         maxUploadBytes: Int64?,
         albumId: Int?,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         let tusURL = api.tusEndpointURL()
         let fileSize: Int64
@@ -153,7 +157,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         maxUploadBytes: Int64?,
         albumId: Int?,
         mayRetryWithFreshToken: Bool,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         var request = URLRequest(url: tusURL)
         request.httpMethod = "POST"
@@ -182,8 +186,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 self.discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "no response from server")
                 UploadStore.shared.removeFromUploading(assetId)
-                completion?(.failure(NSError(domain: "TusUploader", code: -1,
-                                             userInfo: [NSLocalizedDescriptionKey: "no http response"])))
+                completion?(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
                 return
             }
             switch http.statusCode {
@@ -194,8 +197,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                     self.discardExport(exp)
                     SyncLogger.shared.logUploadFailure(assetId: assetId, error: "missing Location header")
                     UploadStore.shared.removeFromUploading(assetId)
-                    completion?(.failure(NSError(domain: "TusUploader", code: -1,
-                                                 userInfo: [NSLocalizedDescriptionKey: "missing Location header"])))
+                    completion?(.failure(AppError.api(
+                        message: "The server did not say where to send the file.", statusCode: nil)))
                     return
                 }
                 // A freshly created TUS resource is empty by definition, so the offset is 0
@@ -228,7 +231,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 UploadTokenStore.shared.invalidate()
                 UploadTokenStore.shared.token(api: api) { [weak self] fresh in
                     guard let self else { return }
-                    print("TusUploader: upload token refused, retrying with a fresh one")
+                    AppLog.upload.notice("Upload token refused — retrying with a fresh one")
                     self.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
                                        tusURL: tusURL, authValue: fresh,
                                        maxUploadBytes: maxUploadBytes, albumId: albumId,
@@ -254,8 +257,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
                 UploadStore.shared.removeFromUploading(assetId)
                 self.onTaskFinished?(assetId, .clientError)
-                completion?(.failure(NSError(domain: "TusUploader", code: http.statusCode,
-                                             userInfo: [NSLocalizedDescriptionKey: "POST /files/ returned \(http.statusCode)"])))
+                completion?(.failure(AppError.api(message: APIClient.plainMeaning(of: http.statusCode),
+                                                  statusCode: http.statusCode)))
             }
         }.resume()
     }
@@ -359,7 +362,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         fileSize: Int64,
         offset: Int64,
         api: APIClient,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         guard let range = TusChunking.nextChunk(offset: offset, fileSize: fileSize) else {
             finishSuccessfully(
@@ -408,7 +411,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         range: Range<Int64>,
         chunkURL: URL,
         api: APIClient,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "PATCH"
@@ -437,7 +440,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         assetId: String,
         originalURL: URL,
         message: String,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         try? fileManager.removeItem(at: originalURL)
         clearResumeAttempts(for: assetId)
@@ -446,11 +449,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         // The queue-handoff completion already frees the slot. `onTaskFinished` is only for
         // a chunk that died after that handoff (completion is nil).
         if let completion {
-            completion(.failure(NSError(
-                domain: "TusUploader",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: message],
-            )))
+            completion(.failure(AppError.api(message: message, statusCode: nil)))
         } else {
             onTaskFinished?(assetId, .transport)
         }
@@ -460,7 +459,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         assetId: String,
         originalURL: URL,
         checksum: String,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         clearResumeAttempts(for: assetId)
         try? fileManager.removeItem(at: originalURL)
@@ -502,7 +501,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         exp: Uploader.ExportResult,
         size: Int64,
         limit: Int64?,
-        completion: ((Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?
     ) {
         let assetId = asset.localIdentifier
         discardExport(exp)
@@ -645,7 +644,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             onTaskFinished?(assetId, .transport)
             return
         }
-        print("TusUploader: resuming \(assetId) after transport error: \(message)")
+        AppLog.upload.notice("Resuming after a transport error: \(message, privacy: .public)")
         startHeadForResume(
             assetId: assetId,
             originalURL: originalURL,
@@ -655,9 +654,10 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         )
     }
 
+    /// The client to retry with, when a background-session callback arrives with no caller
+    /// left to hand one over. Anonymous when signed out — see ``SyncCoordinator/api``.
     private func apiFromKeychain() -> APIClient {
-        let credentials = KeychainHelper.shared.load()
-        return APIClient(username: credentials?.username, password: credentials?.password)
+        APIClientProvider.shared.clientOrAnonymous
     }
 
     /// The resume HEAD is a download task, so the system insists on handing us a file for its

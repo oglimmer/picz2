@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Photos
+import os
 
 @MainActor
 class AlbumDetailViewModel: ViewModelProtocol {
@@ -81,10 +82,12 @@ class AlbumDetailViewModel: ViewModelProtocol {
     private var uploadObserver: AnyCancellable?
     private var processingPollTask: Task<Void, Never>?
 
-    init(album: Album, syncCoordinator: SyncCoordinator = .shared) {
+    init(album: Album, syncCoordinator: SyncCoordinator = .shared,
+         apiClient: APIClient? = APIClientProvider.shared.current)
+    {
         self.album = album
         self.syncCoordinator = syncCoordinator
-        loadCredentials()
+        self.apiClient = apiClient
         observeUploads()
     }
 
@@ -112,15 +115,6 @@ class AlbumDetailViewModel: ViewModelProtocol {
             }
     }
 
-    private func loadCredentials() {
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(
-                username: credentials.username,
-                password: credentials.password,
-            )
-        }
-    }
-
     func fetchPhotos() {
         guard let apiClient else {
             alertState = AlertState(
@@ -137,7 +131,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         apiClient.fetchFiles(albumId: album.id) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
 
                 switch result {
@@ -163,7 +157,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
                     return
                 }
 
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     switch result {
                     case let .success(response):
                         self.photos = response.files
@@ -376,7 +370,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         }
 
         apiClient.deleteFile(id: photo.id) { [weak self] result in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard let self else { return }
                 switch result {
                 case .success:
@@ -529,7 +523,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         apiClient.reorderAlbum(albumId: album.id, by: action) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 switch result {
                 case let .success(count):
                     Task { @MainActor in
@@ -564,7 +558,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         apiClient.reorderFiles(fileIds: fileIds) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isReordering = false
 
                 if case let .failure(error) = result {
@@ -585,10 +579,10 @@ class AlbumDetailViewModel: ViewModelProtocol {
         components?.queryItems = [URLQueryItem(name: "size", value: "thumbnail")]
 
         if let url = components?.url {
-            print("🖼️  Thumbnail URL for \(photo.originalName): \(url.absoluteString)")
+            AppLog.api.debug("Thumbnail URL for \(photo.originalName): \(url.absoluteString)")
             return url
         } else {
-            print("❌ Failed to create thumbnail URL for \(photo.originalName)")
+            AppLog.api.error("Could not build a thumbnail URL for \(photo.originalName)")
             return nil
         }
     }
@@ -617,7 +611,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
     /// Deletes the whole album, exactly as the web app's album delete does. The view asks for
     /// confirmation first and closes the screen on success — what it was showing is gone.
-    func deleteAlbum(completion: @escaping (Bool) -> Void) {
+    func deleteAlbum(completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -630,7 +624,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         isLoading = true
 
         apiClient.deleteAlbum(id: album.id) { [weak self] result in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard let self else { return }
                 self.isLoading = false
                 switch result {

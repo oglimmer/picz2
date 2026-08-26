@@ -1,68 +1,67 @@
 import UIKit
-import UserNotifications
+// `@preconcurrency`: `UNNotificationSettings` is not `Sendable`, and `getNotificationSettings`
+// hands one to a `@Sendable` completion. Apple's shape, not ours.
+@preconcurrency import UserNotifications
+import os
 
-class PushNotificationManager: NSObject, ObservableObject {
+/// - Note: `@MainActor` — the two `@Published` properties drive the settings screen, and every
+///   entry point is already either a UIKit callback on main or hops to main by hand. Saying so
+///   lets the compiler check it instead of the comments.
+@MainActor
+final class PushNotificationManager: NSObject, ObservableObject {
     static let shared = PushNotificationManager()
 
     @Published var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published var deviceToken: String?
 
-    /// Cached, and dropped when the stored credentials change — same reasoning as
-    /// ``SyncCoordinator``: a keychain read is a synchronous IPC to securityd, and this was
-    /// doing one per access for a value that changes twice in a session (§5.10).
-    private var cachedApiClient: APIClient?
-    private var credentialsObserver: NSObjectProtocol?
-    private var apiClient: APIClient {
-        if let cachedApiClient { return cachedApiClient }
-        let credentials = KeychainHelper.shared.load()
-        let client = APIClient(
-            username: credentials?.username,
-            password: credentials?.password,
-        )
-        cachedApiClient = client
-        return client
-    }
+    /// Cached and invalidated on sign-out inside ``APIClientProvider``. This class used to keep
+    /// its own copy of that cache; there were nine such copies.
+    private var apiClient: APIClient { APIClientProvider.shared.clientOrAnonymous }
 
     override private init() {
         super.init()
-        credentialsObserver = NotificationCenter.default.addObserver(
-            forName: KeychainHelper.credentialsDidChange, object: nil, queue: .main,
-        ) { [weak self] _ in
-            self?.cachedApiClient = nil
-        }
         checkAuthorizationStatus()
     }
 
+    /// Both of these use `await` rather than the completion-handler spellings, deliberately.
+    ///
+    /// `UserNotifications` is imported `@preconcurrency` (see the top of the file), which strips
+    /// `@Sendable` off its completion handlers. Combined with `SWIFT_APPROACHABLE_CONCURRENCY`,
+    /// that means a handler written inline inside this `@MainActor` class inherits main-actor
+    /// isolation — and the framework then calls it on its own queue, which trips a main-actor
+    /// check and crashes. The `async` spellings hop properly and have no such trap.
     func checkAuthorizationStatus() {
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-            DispatchQueue.main.async {
-                self.authorizationStatus = settings.authorizationStatus
-            }
+        Task { @MainActor in
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            authorizationStatus = settings.authorizationStatus
         }
     }
 
-    func requestPermission(completion: @escaping (Bool) -> Void) {
-        print("PushNotificationManager: Requesting notification permission...")
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            DispatchQueue.main.async {
-                self.authorizationStatus = granted ? .authorized : .denied
-                completion(granted)
+    func requestPermission(completion: @escaping @Sendable @MainActor (Bool) -> Void) {
+        AppLog.app.info("Requesting notification permission")
+        Task { @MainActor in
+            let granted: Bool
+            do {
+                granted = try await UNUserNotificationCenter.current()
+                    .requestAuthorization(options: [.alert, .sound, .badge])
+            } catch {
+                AppLog.app.error("Permission request failed: \(error.localizedDescription, privacy: .public)")
+                authorizationStatus = .denied
+                completion(false)
+                return
             }
 
-            if let error {
-                print("PushNotificationManager: Permission request error: \(error)")
-            }
-
-            print("PushNotificationManager: Permission granted: \(granted)")
+            authorizationStatus = granted ? .authorized : .denied
+            AppLog.app.info("Notification permission granted: \(granted, privacy: .public)")
 
             if granted {
-                print("PushNotificationManager: Registering for remote notifications...")
-                DispatchQueue.main.async {
-                    UIApplication.shared.registerForRemoteNotifications()
-                }
+                AppLog.app.info("Registering for remote notifications")
+                UIApplication.shared.registerForRemoteNotifications()
             } else {
-                print("PushNotificationManager: Permission denied, not registering for remote notifications")
+                AppLog.app.notice("Notifications denied — not registering for remote notifications")
             }
+
+            completion(granted)
         }
     }
 
@@ -72,21 +71,18 @@ class PushNotificationManager: NSObject, ObservableObject {
         // The token prefix and the account e-mail used to be printed unconditionally, so both
         // sat in the device console of every release build for anyone with the phone plugged in
         // (§5.10). A device token is a push address; an e-mail identifies the person. Neither
-        // belongs in a shipping log, and neither is needed to debug this path — "did we get one"
-        // and "did we have credentials" are the only questions it answers.
-        #if DEBUG
-            print("PushNotificationManager: Device token received: \(String(token.prefix(8)))…")
-        #else
-            print("PushNotificationManager: Device token received")
-        #endif
+        // belongs in a shipping log. `Logger` enforces that without a `#if DEBUG` around a
+        // second, quieter line: the prefix is readable with a debugger attached and shows as
+        // `<private>` in a shipped build.
+        AppLog.app.info("Device token received: \(String(token.prefix(8)))…")
 
         // Send to backend
         guard let credentials = KeychainHelper.shared.load() else {
-            print("PushNotificationManager: ERROR - No credentials, cannot register token")
+            AppLog.app.error("No credentials — cannot register the device token")
             return
         }
 
-        print("PushNotificationManager: Sending token to backend…")
+        AppLog.app.info("Sending the device token to the server")
         sendTokenToBackend(token: token, email: credentials.username)
     }
 
@@ -95,21 +91,20 @@ class PushNotificationManager: NSObject, ObservableObject {
         let osVersion = UIDevice.current.systemVersion
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
 
-        let body: [String: Any] = [
-            "deviceToken": token,
-            "email": email,
-            "appVersion": appVersion,
-            "deviceModel": deviceModel,
-            "osVersion": osVersion,
-        ]
+        let body = DeviceTokenBody(
+            deviceToken: token,
+            email: email,
+            appVersion: appVersion,
+            deviceModel: deviceModel,
+            osVersion: osVersion,
+        )
 
-        print("PushNotificationManager: Calling API to register token...")
-        apiClient.registerDeviceToken(body: body) { result in
+        apiClient.registerDeviceToken(body) { result in
             switch result {
             case .success:
-                print("PushNotificationManager: ✅ Device token registered successfully with backend")
+                AppLog.app.info("Device token registered with the server")
             case let .failure(error):
-                print("PushNotificationManager: ❌ Failed to register token with backend: \(error)")
+                AppLog.app.error("Could not register the device token: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -117,13 +112,16 @@ class PushNotificationManager: NSObject, ObservableObject {
     func unregisterDeviceToken() {
         guard let token = deviceToken else { return }
 
-        apiClient.unregisterDeviceToken(token: token) { result in
+        apiClient.unregisterDeviceToken(token: token) { [weak self] result in
             switch result {
             case .success:
-                print("PushNotificationManager: Device token unregistered")
-                self.deviceToken = nil
+                AppLog.app.info("Device token unregistered")
+                // The completion arrives on a URLSession thread, and `deviceToken` is a
+                // `@Published` the settings screen observes. It was being written straight from
+                // here — a real data race that only the actor annotation made visible.
+                Task { @MainActor in self?.deviceToken = nil }
             case let .failure(error):
-                print("PushNotificationManager: Failed to unregister: \(error)")
+                AppLog.app.error("Could not unregister the device token: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

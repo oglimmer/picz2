@@ -1,33 +1,111 @@
 import Foundation
+import os
 
-final class Settings: ObservableObject {
+/// The user's sync preferences, and the app's memory of what the server last said.
+///
+/// ## Reading these from a background thread
+///
+/// The `@Published` properties are **main-queue only**, like any `ObservableObject`. Every write
+/// in the app already happens on main; the reads did not, and that was a real data race — the
+/// scan queue reads ``syncLastDays`` and ``lastSyncDate`` while the main queue may be writing
+/// them, with nothing in between.
+///
+/// ``snapshot`` is the fix. It is a plain value holding the same seven settings, kept in step by
+/// every `didSet` and guarded by a lock, so a background reader gets one coherent set of values
+/// rather than a torn read of a property mid-write. **Off the main queue, read ``snapshot``.**
+///
+/// - Note: `@unchecked Sendable` — the `@Published` storage is main-queue-confined by
+///   convention, and the only cross-thread door, ``snapshot``, is behind ``snapshotLock``.
+final class Settings: ObservableObject, @unchecked Sendable {
     static let shared = Settings()
 
+    /// Every setting, as one value that can be read from any thread.
+    ///
+    /// A struct rather than seven individually-locked properties, so a reader that wants two of
+    /// them cannot catch the pair mid-change and act on half an update.
+    struct Snapshot: Sendable, Equatable {
+        var wifiOnly: Bool
+        var lastSyncDate: Date?
+        var albumId: Int
+        var selectedAlbumName: String?
+        var syncLastDays: Int
+        var useTus: Bool
+        var tusMaxUploadBytes: Int64
+    }
+
+    private let snapshotLock = NSLock()
+    private var storedSnapshot = Snapshot(
+        wifiOnly: true, lastSyncDate: nil, albumId: 1, selectedAlbumName: nil,
+        syncLastDays: 3, useTus: true, tusMaxUploadBytes: 0,
+    )
+
+    /// The settings as they stood a moment ago. Safe from any thread.
+    var snapshot: Snapshot {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return storedSnapshot
+    }
+
+    /// Copies the published values into ``storedSnapshot``. Called from every `didSet`, and once
+    /// at the end of `init` — a `didSet` does not run during initialisation, so without that
+    /// last call the snapshot would hold the defaults above instead of what was on disk.
+    private func refreshSnapshot() {
+        snapshotLock.lock()
+        storedSnapshot = Snapshot(
+            wifiOnly: wifiOnly,
+            lastSyncDate: lastSyncDate,
+            albumId: albumId,
+            selectedAlbumName: selectedAlbumName,
+            syncLastDays: syncLastDays,
+            useTus: useTus,
+            tusMaxUploadBytes: tusMaxUploadBytes,
+        )
+        snapshotLock.unlock()
+    }
+
     @Published var wifiOnly: Bool {
-        didSet { defaults.set(wifiOnly, forKey: Keys.wifiOnly) }
+        didSet {
+            defaults.set(wifiOnly, forKey: Keys.wifiOnly)
+            refreshSnapshot()
+        }
     }
 
     @Published var lastSyncDate: Date? {
-        didSet { defaults.set(lastSyncDate, forKey: Keys.lastSyncDate) }
+        didSet {
+            defaults.set(lastSyncDate, forKey: Keys.lastSyncDate)
+            refreshSnapshot()
+        }
     }
 
     @Published var albumId: Int {
-        didSet { defaults.set(albumId, forKey: Keys.albumId) }
+        didSet {
+            defaults.set(albumId, forKey: Keys.albumId)
+            refreshSnapshot()
+        }
     }
 
     @Published var selectedAlbumName: String? {
-        didSet { defaults.set(selectedAlbumName, forKey: Keys.selectedAlbumName) }
+        didSet {
+            defaults.set(selectedAlbumName, forKey: Keys.selectedAlbumName)
+            refreshSnapshot()
+        }
     }
 
     @Published var syncLastDays: Int {
-        didSet { defaults.set(syncLastDays, forKey: Keys.syncLastDays) }
+        didSet {
+            defaults.set(syncLastDays, forKey: Keys.syncLastDays)
+            refreshSnapshot()
+        }
     }
 
     // Phase 5 — TUS resumable uploads. Hidden TestFlight toggle. SyncCoordinator picks the
     // upload path by combining this flag with /api/capabilities.tus.enabled returned from the
     // server. R2 lights up server-side capabilities; flipping this flag opts a build into TUS.
     @Published var useTus: Bool {
-        didSet { defaults.set(useTus, forKey: Keys.useTus) }
+        didSet {
+            defaults.set(useTus, forKey: Keys.useTus)
+            refreshSnapshot()
+        }
     }
 
     /// Last `tus.maxSize` the server advertised, in bytes; 0 means "never asked yet".
@@ -38,7 +116,10 @@ final class Settings: ObservableObject {
     /// already know the server will refuse — for a 1.6 GB video that is minutes of work and
     /// battery for a guaranteed failure.
     @Published var tusMaxUploadBytes: Int64 {
-        didSet { defaults.set(tusMaxUploadBytes, forKey: Keys.tusMaxUploadBytes) }
+        didSet {
+            defaults.set(tusMaxUploadBytes, forKey: Keys.tusMaxUploadBytes)
+            refreshSnapshot()
+        }
     }
 
     private let defaults: UserDefaults
@@ -67,6 +148,7 @@ final class Settings: ObservableObject {
         // written, so a user who explicitly toggled OFF still gets `false` and is respected.
         useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? true
         tusMaxUploadBytes = (defaults.object(forKey: Keys.tusMaxUploadBytes) as? NSNumber)?.int64Value ?? 0
+        refreshSnapshot()
     }
 
     func clear() {
@@ -100,7 +182,9 @@ extension URLRequest {
     /// unsupported by URLSession. Per-request flags are honoured by background tasks and
     /// take effect immediately.
     mutating func applyNetworkPolicy() {
-        let allowsCellular = !Settings.shared.wifiOnly
+        // `snapshot`, not the published property: this runs on whichever thread is building
+        // the request, which for an upload is never the main queue.
+        let allowsCellular = !Settings.shared.snapshot.wifiOnly
         allowsCellularAccess = allowsCellular
         allowsExpensiveNetworkAccess = allowsCellular
         allowsConstrainedNetworkAccess = allowsCellular
@@ -137,7 +221,9 @@ struct UploadStoreState: Codable {
 /// Durability is therefore best-effort by design. ``flushPendingWrites()`` forces the write, and
 /// the app calls it when it goes to the background; a hard kill inside the delay window can lose
 /// the last second of bookkeeping, which costs a re-upload that server-side dedupe absorbs.
-final class UploadStore {
+/// - Note: `@unchecked Sendable` — `state` and `dirty` are only touched inside ``queue``, and
+///   every write goes through a `.barrier` block.
+final class UploadStore: @unchecked Sendable {
     static let shared = UploadStore()
 
     private let fileURL: URL
@@ -209,7 +295,7 @@ final class UploadStore {
             .flatMap { try? JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
 
         if completed.isEmpty, uploading.isEmpty, checksums.isEmpty, skipped.isEmpty { return nil }
-        print("UploadStore: migrating \(completed.count) completed ids out of UserDefaults")
+        AppLog.store.info("Migrating \(completed.count, privacy: .public) completed ids out of UserDefaults")
         return UploadStoreState(completed: Set(completed), uploading: Set(uploading),
                                 checksumToLocalId: checksums, skippedTooLarge: skipped)
     }
@@ -321,10 +407,10 @@ final class UploadStore {
             state.uploading.subtract(stale)
 
             if !stale.isEmpty {
-                print("UploadStore: Cleaned up \(stale.count) stale uploading entries")
+                AppLog.store.info("Cleaned up \(stale.count, privacy: .public) stale uploading entries")
             }
             if !activeTasks.isEmpty {
-                print("UploadStore: Preserved \(activeTasks.count) active upload tasks")
+                AppLog.store.info("Preserved \(activeTasks.count, privacy: .public) active upload tasks")
             }
         }
     }
@@ -342,7 +428,7 @@ final class UploadStore {
         }
     }
 
-    private func mutate(_ body: @escaping (inout UploadStoreState) -> Void) {
+    private func mutate(_ body: @escaping @Sendable (inout UploadStoreState) -> Void) {
         queue.async(flags: .barrier) {
             body(&self.state)
             self.dirty = true
@@ -370,13 +456,13 @@ final class UploadStore {
     /// that decodes as "nothing has ever been uploaded".
     private func write(_ state: UploadStoreState) {
         guard let data = try? JSONEncoder().encode(state) else {
-            print("UploadStore: failed to encode state")
+            AppLog.store.error("Could not encode the upload store")
             return
         }
         do {
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            print("UploadStore: failed to write state: \(error.localizedDescription)")
+            AppLog.store.error("Could not write the upload store: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

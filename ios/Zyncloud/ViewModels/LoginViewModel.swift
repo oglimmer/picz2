@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 @MainActor
 class LoginViewModel: ViewModelProtocol {
@@ -15,7 +16,7 @@ class LoginViewModel: ViewModelProtocol {
             !password.isEmpty
     }
 
-    func login(completion: @escaping (Bool) -> Void) {
+    func login(completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard isFormValid else {
             alertState = AlertState(
                 title: "Invalid Input",
@@ -34,13 +35,13 @@ class LoginViewModel: ViewModelProtocol {
         api.checkAuth { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
 
                 switch result {
                 case let .success(authResponse):
                     if KeychainHelper.shared.save(username: trimmedEmail, password: self.password) {
-                        print("LoginViewModel: Login successful, credentials saved (verified=\(authResponse.emailVerified))")
+                        AppLog.store.info("Signed in, credentials saved (verified: \(authResponse.emailVerified, privacy: .public))")
 
                         if !authResponse.emailVerified {
                             self.alertState = AlertState(

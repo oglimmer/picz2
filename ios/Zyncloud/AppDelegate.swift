@@ -1,6 +1,9 @@
-import BackgroundTasks
+// `@preconcurrency`: `BGTask` and its subclasses are not `Sendable`, and the expiration
+// handler is a `@Sendable` closure that must capture the task. That is the API's own shape.
+@preconcurrency import BackgroundTasks
 import UIKit
 import UserNotifications
+import os
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
     private static let processTaskId = "com.oglimmer.photosync.process"
@@ -11,19 +14,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static func registerBackgroundTasksEarly() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: processTaskId, using: nil) { task in
             guard let processingTask = task as? BGProcessingTask else {
-                print("AppDelegate: Failed to cast task to BGProcessingTask")
+                AppLog.app.error("Background task was not a BGProcessingTask")
                 return
             }
             AppDelegate.handleProcessing(task: processingTask)
         }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskId, using: nil) { task in
             guard let refreshTask = task as? BGAppRefreshTask else {
-                print("AppDelegate: Failed to cast task to BGAppRefreshTask")
+                AppLog.app.error("Background task was not a BGAppRefreshTask")
                 return
             }
             AppDelegate.handleRefresh(task: refreshTask)
         }
-        print("AppDelegate: Background tasks registered early")
+        AppLog.app.info("Background tasks registered")
     }
 
     func application(_: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -55,9 +58,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         processingReq.requiresExternalPower = false
         do {
             try BGTaskScheduler.shared.submit(processingReq)
-            print("AppDelegate: Successfully scheduled processing task")
+            AppLog.app.info("Scheduled the processing task")
         } catch {
-            print("AppDelegate: Processing task failed: \(error.localizedDescription)")
+            AppLog.app.error("Could not schedule the processing task: \(error.localizedDescription, privacy: .public)")
         }
 
         BackgroundTaskLog.shared.recordScheduled()
@@ -67,14 +70,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         refreshReq.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do {
             try BGTaskScheduler.shared.submit(refreshReq)
-            print("AppDelegate: Successfully scheduled refresh task for 15 min from now")
+            AppLog.app.info("Scheduled the refresh task for 15 minutes from now")
         } catch {
-            print("AppDelegate: Refresh task failed: \(error.localizedDescription)")
+            AppLog.app.error("Could not schedule the refresh task: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private static func handleProcessing(task: BGProcessingTask) {
-        print("AppDelegate: BGProcessingTask started")
+        AppLog.app.info("BGProcessingTask started")
         BackgroundTaskLog.shared.recordRun(.processing)
         SyncLogger.shared.logBackgroundTask(taskType: "Processing Task", message: "Started")
 
@@ -98,7 +101,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         task.expirationHandler = {
-            print("AppDelegate: BGProcessingTask expired")
+            AppLog.app.notice("BGProcessingTask expired")
             SyncLogger.shared.logBackgroundTask(taskType: "Processing Task", message: "Expired")
             queue.cancelAllOperations()
             // Cancelling is not enough: the operation blocks on `group.wait()`, so its
@@ -109,7 +112,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
         op.completionBlock = {
             let success = !op.isCancelled
-            print("AppDelegate: BGProcessingTask completed - success: \(success)")
+            AppLog.app.info("BGProcessingTask finished, success: \(success, privacy: .public)")
             SyncLogger.shared.logBackgroundTask(taskType: "Processing Task", message: success ? "Completed" : "Cancelled")
             completion.fire(success: success)
         }
@@ -118,7 +121,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private static func handleRefresh(task: BGAppRefreshTask) {
-        print("AppDelegate: BGAppRefreshTask started")
+        AppLog.app.info("BGAppRefreshTask started")
         BackgroundTaskLog.shared.recordRun(.refresh)
         SyncLogger.shared.logBackgroundTask(taskType: "Refresh Task", message: "Started")
 
@@ -132,7 +135,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         task.expirationHandler = {
-            print("AppDelegate: BGAppRefreshTask expired")
+            AppLog.app.notice("BGAppRefreshTask expired")
             SyncLogger.shared.logBackgroundTask(taskType: "Refresh Task", message: "Expired")
             // Without this the app is SIGKILLed for letting the task expire uncompleted.
             completion.fire(success: false)
@@ -140,7 +143,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Perform background sync - refresh tasks run more frequently than processing tasks
         SyncCoordinator.shared.performBackgroundSync {
-            print("AppDelegate: Refresh task completed")
+            AppLog.app.info("BGAppRefreshTask finished")
             SyncLogger.shared.logBackgroundTask(taskType: "Refresh Task", message: "Completed")
             completion.fire(success: true)
         }
@@ -186,18 +189,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     // MARK: - Remote Notifications
 
     func application(_: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        print("AppDelegate: Registered for remote notifications")
+        AppLog.app.info("Registered for remote notifications")
         PushNotificationManager.shared.registerDeviceToken(deviceToken)
     }
 
     func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("AppDelegate: Failed to register for remote notifications: \(error.localizedDescription)")
+        AppLog.app.error("Could not register for remote notifications: \(error.localizedDescription, privacy: .public)")
     }
 }
 
 // MARK: - UNUserNotificationCenterDelegate
 
-extension AppDelegate: UNUserNotificationCenterDelegate {
+/// `@preconcurrency`: `UNNotification` and `UNNotificationResponse` are not `Sendable`, and the
+/// protocol is declared without actor isolation even though the system always calls it on main.
+extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
     // Handle notification when app is in foreground
     func userNotificationCenter(_: UNUserNotificationCenter,
                                 willPresent _: UNNotification,
@@ -218,7 +223,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             try? await UNUserNotificationCenter.current().setBadgeCount(0)
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-            print("AppDelegate: Cleared badge and all notifications after tap")
+            AppLog.app.debug("Cleared the badge and all notifications after a tap")
         }
 
         if let shareToken = userInfo["albumShareToken"] as? String {

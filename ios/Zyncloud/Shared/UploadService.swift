@@ -1,6 +1,10 @@
 import Foundation
+import os
 
-class UploadService: NSObject {
+/// - Note: `@unchecked Sendable` — the extension is one process serving one share sheet, so the
+///   credential fields are written once at start-up and only read afterwards. Everything that is
+///   genuinely touched from the session's delegate queue sits behind ``progressLock``.
+final class UploadService: NSObject, @unchecked Sendable {
     static let shared = UploadService()
 
     private var email: String?
@@ -16,7 +20,7 @@ class UploadService: NSObject {
     /// Written when a share starts, read on ``uploadSession``'s delegate queue — hence the lock.
     private let progressLock = NSLock()
     private var progressTracker: ShareUploadProgress?
-    private var progressHandler: ((Double) -> Void)?
+    private var progressHandler: (@Sendable (Double) -> Void)?
     /// Last value handed to ``progressHandler``, in per-mille. `didSendBodyData` fires once per
     /// socket write — thousands of times for a video — so we only forward visible changes.
     private var lastReportedPerMille = -1
@@ -39,10 +43,7 @@ class UploadService: NSObject {
 
     /// The share sheet went away mid-upload. Reported rather than dropped: a swallowed
     /// completion parks the batch forever with a spinner and no message.
-    private static let cancelledError = NSError(
-        domain: "UploadService", code: NSURLErrorCancelled,
-        userInfo: [NSLocalizedDescriptionKey: "Upload cancelled"],
-    )
+    private static let cancelledError = AppError.cancelled("Upload cancelled")
 
     /// Where chunks are cut, never the session's delegate queue.
     private let sliceQueue = DispatchQueue(label: "com.oglimmer.zyncloud.share.slice", qos: .utility)
@@ -85,10 +86,10 @@ class UploadService: NSObject {
     }
 
     /// Verify credentials via /auth/check
-    func checkAuth(completion: @escaping (Result<String, Error>) -> Void) {
+    func checkAuth(completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         let urlString = getApiBaseUrl() + "/auth/check"
         guard let url = URL(string: urlString) else {
-            completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid auth URL"])))
+            completion(.failure(AppError.api(message: "Could not build the sign-in web address", statusCode: nil)))
             return
         }
         var request = URLRequest(url: url)
@@ -101,12 +102,11 @@ class UploadService: NSObject {
                 return
             }
             guard let http = response as? HTTPURLResponse else {
-                completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response"])))
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
                 return
             }
             guard 200 ... 299 ~= http.statusCode, let data else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                completion(.failure(NSError(domain: "UploadService", code: code, userInfo: [NSLocalizedDescriptionKey: "Auth failed"])))
+                completion(.failure(AppError.authentication("Your email or password was not accepted.")))
                 return
             }
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let email = obj["email"] as? String {
@@ -128,7 +128,7 @@ class UploadService: NSObject {
     ///
     /// Failure is not an error: an older server has no such endpoint, and the upload proceeds on
     /// the legacy credential value instead.
-    private func fetchUploadToken(completion: @escaping () -> Void) {
+    private func fetchUploadToken(completion: @escaping @Sendable () -> Void) {
         guard let url = URL(string: getApiBaseUrl() + "/upload-tokens"),
               let authorization = getAuthorizationHeader()
         else {
@@ -154,8 +154,8 @@ class UploadService: NSObject {
     func upload(
         mediaItems: [MediaItem],
         albumId: Int? = nil,
-        progress: @escaping (Double) -> Void,
-        completion: @escaping (ShareUploadOutcome) -> Void,
+        progress: @escaping @Sendable (Double) -> Void,
+        completion: @escaping @Sendable (ShareUploadOutcome) -> Void,
     ) {
         let incoming = Set(mediaItems.map(\.url))
         if !ShareRetryBatch.isRetry(of: currentBatchURLs, incoming: incoming) {
@@ -164,8 +164,12 @@ class UploadService: NSObject {
         }
         // One token for the whole share, minted before the first byte moves.
         fetchUploadToken { [weak self] in
-            self?.fetchMaxUploadBytes { limit in
-                self?.performUpload(
+            // Resolved once here rather than written `self?` twice: `weak self` is a variable,
+            // and reading it again from the inner closure — which runs on a different thread —
+            // is the race the compiler flags.
+            guard let self else { return }
+            self.fetchMaxUploadBytes { limit in
+                self.performUpload(
                     mediaItems: mediaItems, albumId: albumId, maxUploadBytes: limit,
                     progress: progress, completion: completion,
                 )
@@ -175,7 +179,7 @@ class UploadService: NSObject {
 
     /// Unauthenticated; the same `/api/capabilities` the main app uses. Failure is not an
     /// error — we let the server be the judge, matching ``UploadSizeLimit/check``.
-    private func fetchMaxUploadBytes(completion: @escaping (Int64?) -> Void) {
+    private func fetchMaxUploadBytes(completion: @escaping @Sendable (Int64?) -> Void) {
         let url = AppConfiguration.apiBaseURL.appendingPathComponent("api/capabilities")
         URLSession.shared.dataTask(with: url) { data, response, _ in
             guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
@@ -193,12 +197,14 @@ class UploadService: NSObject {
         mediaItems: [MediaItem],
         albumId: Int?,
         maxUploadBytes: Int64?,
-        progress: @escaping (Double) -> Void,
-        completion: @escaping (ShareUploadOutcome) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        completion: @escaping @Sendable (ShareUploadOutcome) -> Void
     ) {
-        var uploadedCount = 0
-        var failedCount = 0
-        var failedError: Error?
+        // A box rather than three local `var`s. The upload chain is strictly sequential — each
+        // file's completion is what starts the next — but every link runs on a different
+        // URLSession callback thread, so the compiler sees three variables being read and written
+        // from concurrently-executing closures and cannot tell that they never overlap.
+        let tally = BatchTally()
 
         // Sizes are read once, up front: they are both the `Upload-Length` header and the weights
         // the progress bar is drawn from. A share of one 200 MB video and one 2 MB photo must not
@@ -206,29 +212,25 @@ class UploadService: NSObject {
         let sizes = mediaItems.map { Self.fileSize(of: $0.url) }
         beginProgress(fileSizes: sizes.map { (try? $0.get()) ?? 0 }, handler: progress)
 
-        func uploadNext(index: Int) {
+        @Sendable func uploadNext(index: Int) {
             guard index < mediaItems.count else {
                 endProgress()
+                let outcome = tally.outcome
                 DispatchQueue.main.async {
-                    completion(ShareUploadOutcome(
-                        uploaded: uploadedCount,
-                        failed: failedCount,
-                        lastErrorDescription: failedError?.localizedDescription,
-                    ))
+                    completion(outcome)
                 }
                 return
             }
 
             let item = mediaItems[index]
 
-            func advance(_ result: Result<Void, Error>) {
+            @Sendable func advance(_ result: Result<Void, Error>) {
                 switch result {
                 case .success:
-                    uploadedCount += 1
-                    succeededURLs.insert(item.url)
+                    tally.noteUploaded()
+                    self.succeededURLs.insert(item.url)
                 case let .failure(error):
-                    failedCount += 1
-                    if failedError == nil { failedError = error }
+                    tally.noteFailed(error)
                 }
                 // Both outcomes retire this file's weight, so a failed item does not park the bar.
                 finishProgressItem()
@@ -248,11 +250,7 @@ class UploadService: NSObject {
                     let message = UploadSizeLimit.message(
                         filename: item.filename, size: size, limit: limit,
                     )
-                    advance(.failure(NSError(
-                        domain: "UploadService",
-                        code: 413,
-                        userInfo: [NSLocalizedDescriptionKey: message],
-                    )))
+                    advance(.failure(AppError.api(message: message, statusCode: 413)))
                     return
                 }
                 uploadFile(
@@ -278,7 +276,7 @@ class UploadService: NSObject {
 
     // MARK: - Progress plumbing
 
-    private func beginProgress(fileSizes: [Int64], handler: @escaping (Double) -> Void) {
+    private func beginProgress(fileSizes: [Int64], handler: @escaping @Sendable (Double) -> Void) {
         progressLock.lock()
         progressTracker = ShareUploadProgress(fileSizes: fileSizes)
         progressHandler = handler
@@ -331,12 +329,12 @@ class UploadService: NSObject {
         albumId: Int?,
         fileSize: Int64,
         maxUploadBytes: Int64?,
-        completion: @escaping (Result<Void, Error>) -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
         // Auth via Upload-Metadata is required by the server (D26) — Authorization header is
         // sent too as belt-and-braces, but tusd does not forward arbitrary headers to hooks.
         guard email != nil, password != nil else {
-            completion(.failure(NSError(domain: "UploadService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])))
+            completion(.failure(AppError.authentication("Not signed in")))
             return
         }
 
@@ -351,16 +349,16 @@ class UploadService: NSObject {
             request.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
-        print("📤 Creating TUS upload: \(item.filename) (\(fileSize) bytes)")
+        AppLog.upload.info("Creating a TUS upload: \(item.filename) (\(fileSize, privacy: .public) bytes)")
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
             guard let self else { return }
             if let error {
-                print("❌ TUS create failed: \(item.filename) - \(error.localizedDescription)")
+                AppLog.upload.error("TUS create failed for \(item.filename): \(error.localizedDescription, privacy: .public)")
                 completion(.failure(error))
                 return
             }
             guard let http = response as? HTTPURLResponse else {
-                completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response"])))
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
                 return
             }
             switch http.statusCode {
@@ -368,7 +366,7 @@ class UploadService: NSObject {
                 guard let location = http.value(forHTTPHeaderField: "Location"),
                       let uploadURL = self.resolveLocation(location, against: tusURL)
                 else {
-                    completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Location header"])))
+                    completion(.failure(AppError.api(message: "The server did not say where to send the file.", statusCode: nil)))
                     return
                 }
                 // A freshly created TUS resource is empty, so the offset is 0 and a HEAD here
@@ -378,21 +376,18 @@ class UploadService: NSObject {
                     attemptsLeft: Self.maxPatchAttempts, completion: completion,
                 )
             case 401, 403:
-                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Authentication failed"])))
+                completion(.failure(AppError.authentication("Your email or password was not accepted.")))
             case 413:
                 let message = UploadSizeLimit.message(
                     filename: item.filename, size: fileSize, limit: maxUploadBytes,
                 )
-                completion(.failure(NSError(
-                    domain: "UploadService", code: 413,
-                    userInfo: [NSLocalizedDescriptionKey: message],
-                )))
+                completion(.failure(AppError.api(message: message, statusCode: 413)))
             case 429, 503:
                 let retry = http.value(forHTTPHeaderField: "Retry-After") ?? "?"
-                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server busy (retry after \(retry)s)"])))
+                completion(.failure(AppError.api(message: "Server busy — try again in \(retry)s", statusCode: http.statusCode)))
             default:
-                let body = "POST /files/ returned \(http.statusCode)"
-                completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: body])))
+                completion(.failure(AppError.api(message: "The server refused the upload.",
+                                                 statusCode: http.statusCode)))
             }
         }.resume()
     }
@@ -402,13 +397,10 @@ class UploadService: NSObject {
         uploadURL: URL,
         fileSize: Int64,
         attemptsLeft: Int = 3,
-        completion: @escaping (Result<Void, Error>) -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
         guard attemptsLeft > 0 else {
-            completion(.failure(NSError(
-                domain: "UploadService", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Upload stalled; try again"],
-            )))
+            completion(.failure(AppError.api(message: "Upload stalled; try again", statusCode: nil)))
             return
         }
         var request = URLRequest(url: uploadURL)
@@ -429,10 +421,8 @@ class UploadService: NSObject {
             }
             guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                completion(.failure(NSError(
-                    domain: "UploadService", code: code,
-                    userInfo: [NSLocalizedDescriptionKey: "HEAD returned \(code)"],
-                )))
+                completion(.failure(AppError.api(message: "Could not check how much had arrived.",
+                                                 statusCode: code)))
                 return
             }
             let offset = TusChunking.parseOffset(http.value(forHTTPHeaderField: "Upload-Offset")) ?? 0
@@ -450,7 +440,7 @@ class UploadService: NSObject {
         fileSize: Int64,
         offset: Int64,
         attemptsLeft: Int,
-        completion: @escaping (Result<Void, Error>) -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
         guard let range = TusChunking.nextChunk(offset: offset, fileSize: fileSize) else {
             completion(.success(()))
@@ -496,7 +486,7 @@ class UploadService: NSObject {
         chunkURL: URL,
         wholeFile: Bool,
         attemptsLeft: Int,
-        completion: @escaping (Result<Void, Error>) -> Void,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "PATCH"
@@ -524,7 +514,7 @@ class UploadService: NSObject {
                 return
             }
             if let error {
-                print("❌ TUS PATCH failed: \(item.filename) - \(error.localizedDescription)")
+                AppLog.upload.error("TUS PATCH failed for \(item.filename): \(error.localizedDescription, privacy: .public)")
                 // The server may still have kept some of this chunk. HEAD and continue.
                 self.headAndPatch(
                     item: item, uploadURL: uploadURL, fileSize: fileSize,
@@ -553,7 +543,7 @@ class UploadService: NSObject {
                             completion: completion,
                         )
                     } else {
-                        print("✅ Upload successful: \(item.filename)")
+                        AppLog.upload.info("Upload finished: \(item.filename)")
                         completion(.success(()))
                     }
                 } else if http.statusCode == 409 {
@@ -563,11 +553,11 @@ class UploadService: NSObject {
                     )
                 } else {
                     let msg = "PATCH returned \(http.statusCode)"
-                    print("❌ TUS PATCH failed: \(item.filename) - \(msg)")
-                    completion(.failure(NSError(domain: "UploadService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])))
+                    AppLog.upload.error("TUS PATCH failed for \(item.filename): \(msg, privacy: .public)")
+                    completion(.failure(AppError.api(message: msg, statusCode: http.statusCode)))
                 }
             } else {
-                completion(.failure(NSError(domain: "UploadService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No HTTP response"])))
+                completion(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
             }
         }
         task.resume()
@@ -731,5 +721,44 @@ struct MediaItem {
     enum MediaType {
         case image
         case video
+    }
+}
+
+/// The running result of one share: how many files landed, how many did not, and the first
+/// reason one did not.
+///
+/// A class behind a lock rather than three `var`s in ``UploadService/performUpload``. The upload
+/// chain hands control from one file's completion to the next, so no two links ever run at the
+/// same time — but they run on different threads, and "never at the same time" is not something
+/// the compiler can be shown. The lock costs nothing here and makes the claim true rather than
+/// merely believed.
+final class BatchTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var uploaded = 0
+    private var failed = 0
+    private var firstError: Error?
+
+    func noteUploaded() {
+        lock.lock()
+        uploaded += 1
+        lock.unlock()
+    }
+
+    /// Keeps the **first** error, not the last: it is the one that explains the run.
+    func noteFailed(_ error: Error) {
+        lock.lock()
+        failed += 1
+        if firstError == nil { firstError = error }
+        lock.unlock()
+    }
+
+    var outcome: ShareUploadOutcome {
+        lock.lock()
+        defer { lock.unlock() }
+        return ShareUploadOutcome(
+            uploaded: uploaded,
+            failed: failed,
+            lastErrorDescription: firstError?.localizedDescription,
+        )
     }
 }

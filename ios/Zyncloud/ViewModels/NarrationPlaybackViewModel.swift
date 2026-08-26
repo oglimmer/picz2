@@ -55,7 +55,9 @@ final class NarrationPlaybackViewModel: ObservableObject {
 
     /// - Parameter photosByID: the album's assets, so a `fileId` in the recording can be turned
     ///   back into something to render.
-    init(recording: RecordingInfo, photosByID: [Int: Photo]) {
+    init(recording: RecordingInfo, photosByID: [Int: Photo],
+         apiClient: APIClient? = APIClientProvider.shared.current)
+    {
         self.recording = recording
         totalMs = recording.durationMs ?? 0
 
@@ -67,11 +69,7 @@ final class NarrationPlaybackViewModel: ObservableObject {
         missingSlideCount = entries.count - resolved.count
         player = AVPlayer()
         slides = resolved
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(username: credentials.username, password: credentials.password)
-        } else {
-            apiClient = nil
-        }
+        self.apiClient = apiClient
     }
 
     var currentSlide: Photo? {
@@ -118,7 +116,7 @@ final class NarrationPlaybackViewModel: ObservableObject {
     private func waitForAudioThenPlay(publicToken: String) async {
         guard let apiClient else {
             // Not logged in is not a reason to refuse: the audio route is public. Try it directly.
-            attachAndPlay()
+            await attachAndPlay()
             return
         }
 
@@ -128,7 +126,7 @@ final class NarrationPlaybackViewModel: ObservableObject {
             switch await readiness(from: apiClient, publicToken: publicToken) {
             case .ready:
                 preparingMessage = nil
-                attachAndPlay()
+                await attachAndPlay()
                 return
             case .failed:
                 preparingMessage = nil
@@ -157,7 +155,7 @@ final class NarrationPlaybackViewModel: ObservableObject {
     }
 
     /// Hands the audio to `AVPlayer` and starts. Only called once the server says it is playable.
-    private func attachAndPlay() {
+    private func attachAndPlay() async {
         guard let url = recording.audioURL else {
             loadError = "This commentary has no audio link on the server."
             return
@@ -166,8 +164,11 @@ final class NarrationPlaybackViewModel: ObservableObject {
         // `.playback` rather than the recorder's `.playAndRecord`: this only plays, and
         // `.playback` is the category that ignores the ring/silent switch — a preview the user
         // pressed play on should be audible.
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        //
+        // Awaited off the main thread — see ``AudioSessionConfigurator``. A failure here is not
+        // fatal: the session may already be in a category that plays, so try anyway rather than
+        // refuse outright.
+        try? await AudioSessionConfigurator.activate(category: .playback, mode: .default)
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
@@ -249,7 +250,8 @@ final class NarrationPlaybackViewModel: ObservableObject {
         statusObserver?.invalidate()
         statusObserver = nil
         player.replaceCurrentItem(with: nil)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Fired and forgotten, like the recorder's — see ``AudioSessionConfigurator/deactivate()``.
+        Task { await AudioSessionConfigurator.deactivate() }
     }
 
     // MARK: - Following the audio

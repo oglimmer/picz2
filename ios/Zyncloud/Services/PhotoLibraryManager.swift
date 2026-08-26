@@ -1,7 +1,14 @@
 import Foundation
-import Photos
+// `@preconcurrency` because `PHAsset` and friends are not `Sendable` and never will be — they
+// are Objective-C objects backed by the photo library's own thread-safe store. Assets are
+// passed between the scan queue and the upload queues throughout, which is what the Photos
+// framework is designed for; the annotation says "these crossings are Apple's problem, not a
+// race we introduced".
+@preconcurrency import Photos
 
-final class PhotoLibraryManager: NSObject, PHPhotoLibraryChangeObserver {
+/// - Note: `@unchecked Sendable` — this type holds no mutable state of its own. It is a stateless
+///   wrapper over `PHPhotoLibrary`, which is thread-safe, plus a change-observer registration.
+final class PhotoLibraryManager: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
     static let shared = PhotoLibraryManager()
 
     override private init() {
@@ -13,7 +20,7 @@ final class PhotoLibraryManager: NSObject, PHPhotoLibraryChangeObserver {
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
     }
 
-    func requestAuthorization(completion: @escaping (PHAuthorizationStatus) -> Void) {
+    func requestAuthorization(completion: @escaping @Sendable (PHAuthorizationStatus) -> Void) {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
             DispatchQueue.main.async { completion(status) }
         }

@@ -23,8 +23,11 @@ enum CredentialsManager {
     /// Both seams exist purely so tests can operate on a scratch keychain item instead of
     /// the signed-in user's credentials — the same rationale as ``KeychainHelper/init(service:)``.
     /// Production never assigns them.
-    static var keychain = KeychainHelper.shared
-    static var legacyService = "PhotoUploadCredentials"
+    /// `nonisolated(unsafe)` says the compiler is not checking these for you, which is exactly
+    /// right: they are written once, by a test, before anything reads them. Production never
+    /// assigns either, so there is no concurrent write to guard against.
+    nonisolated(unsafe) static var keychain = KeychainHelper.shared
+    nonisolated(unsafe) static var legacyService = "PhotoUploadCredentials"
 
     // Where the extension kept its own separate item before the collapse.
     private static let legacyAccount = "upload_credentials"

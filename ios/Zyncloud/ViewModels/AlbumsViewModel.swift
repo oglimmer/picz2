@@ -8,19 +8,12 @@ class AlbumsViewModel: ViewModelProtocol {
     @Published var alertState: AlertState?
     @Published var isRefreshing: Bool = false
 
-    private var apiClient: APIClient?
+    private let apiClient: APIClient?
 
-    init() {
-        loadCredentials()
-    }
-
-    private func loadCredentials() {
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(
-                username: credentials.username,
-                password: credentials.password,
-            )
-        }
+    /// - Parameter apiClient: the client to talk to the server with. Defaults to the signed-in
+    ///   account's; a test passes one pointed at a stub server instead.
+    init(apiClient: APIClient? = APIClientProvider.shared.current) {
+        self.apiClient = apiClient
     }
 
     func fetchAlbums() {
@@ -38,7 +31,7 @@ class AlbumsViewModel: ViewModelProtocol {
         apiClient.fetchAlbums { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
                 self.isRefreshing = false
 
@@ -64,7 +57,7 @@ class AlbumsViewModel: ViewModelProtocol {
                     return
                 }
 
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     self.isRefreshing = false
 
                     switch result {
@@ -80,7 +73,7 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
-    func createAlbum(name: String, description: String?, completion: @escaping (Bool) -> Void) {
+    func createAlbum(name: String, description: String?, completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -105,7 +98,7 @@ class AlbumsViewModel: ViewModelProtocol {
         apiClient.createAlbum(name: name, description: description) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
 
                 switch result {
@@ -122,7 +115,7 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
-    func updateAlbum(id: Int, name: String, description: String?, completion: @escaping (Bool) -> Void) {
+    func updateAlbum(id: Int, name: String, description: String?, completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -147,7 +140,7 @@ class AlbumsViewModel: ViewModelProtocol {
         apiClient.updateAlbum(id: id, name: name, description: description) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
 
                 switch result {
@@ -166,7 +159,7 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
-    func deleteAlbum(id: Int, completion: @escaping (Bool) -> Void) {
+    func deleteAlbum(id: Int, completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -182,7 +175,7 @@ class AlbumsViewModel: ViewModelProtocol {
         apiClient.deleteAlbum(id: id) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isLoading = false
 
                 switch result {
@@ -199,7 +192,7 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
-    func showDeleteConfirmation(for album: Album, onConfirm: @escaping () -> Void) {
+    func showDeleteConfirmation(for album: Album, onConfirm: @escaping @Sendable @MainActor () -> Void) {
         alertState = .confirmation(
             title: "Delete Album",
             message: "Are you sure you want to delete '\(album.name)'? This action cannot be undone.",

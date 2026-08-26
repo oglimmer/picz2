@@ -45,11 +45,35 @@ struct RegionNameStoreTests {
 
     private struct Offline: Error {}
 
+    /// A clock the test can wind forward.
+    ///
+    /// A class behind a lock rather than a local `var clock: Date`: ``RegionNameStore`` takes its
+    /// clock as a `@Sendable` closure — it is read from the batching task, not from the caller's
+    /// thread — and a `@Sendable` closure cannot capture a mutable local.
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Date
+
+        init(_ value: Date) { self.value = value }
+
+        var now: Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func advance(by seconds: TimeInterval) {
+            lock.lock()
+            value = value.addingTimeInterval(seconds)
+            lock.unlock()
+        }
+    }
+
     /// A store wired to `fake`, with the batch timer removed so tests do not sleep.
     private func store(
         _ fake: FakeGeocoder,
         maxPointsPerRequest: Int = 60,
-        now: @escaping () -> Date = Date.init,
+        now: @escaping @Sendable () -> Date = { Date() },
     ) -> RegionNameStore {
         RegionNameStore(
             maxPointsPerRequest: maxPointsPerRequest,
@@ -227,8 +251,8 @@ struct RegionNameStoreTests {
     @Test func afailureStopsFurtherRequestsForTheBackoffWindow() async {
         let fake = FakeGeocoder()
         fake.failure = Offline()
-        var clock = Date(timeIntervalSince1970: 1_000_000)
-        let store = store(fake, now: { clock })
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000_000))
+        let store = store(fake, now: { clock.now })
 
         _ = store.name(for: munich())
         await store.awaitPendingLookups()
@@ -237,7 +261,7 @@ struct RegionNameStoreTests {
 
         // Different coordinates, still inside the window: nothing goes out.
         fake.failure = nil
-        clock = clock.addingTimeInterval(30)
+        clock.advance(by: 30)
         for index in 0 ..< 5 {
             _ = store.name(for: LatLng(lat: 50.0 + Double(index) * 0.01, lng: 11.0))
         }
@@ -250,15 +274,15 @@ struct RegionNameStoreTests {
     @Test func requestsResumeAfterTheBackoffWindowPasses() async {
         let fake = FakeGeocoder()
         fake.failure = Offline()
-        var clock = Date(timeIntervalSince1970: 1_000_000)
-        let store = store(fake, now: { clock })
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000_000))
+        let store = store(fake, now: { clock.now })
 
         _ = store.name(for: munich())
         await store.awaitPendingLookups()
 
         fake.failure = nil
         fake.names["50.0000,11.0000"] = "Somewhere"
-        clock = clock.addingTimeInterval(61)
+        clock.advance(by: 61)
 
         _ = store.name(for: LatLng(lat: 50.0, lng: 11.0))
         await store.awaitPendingLookups()
@@ -275,15 +299,15 @@ struct RegionNameStoreTests {
     @Test func acoordinateCaughtByAFailureIsNeverRetried() async {
         let fake = FakeGeocoder()
         fake.failure = Offline()
-        var clock = Date(timeIntervalSince1970: 1_000_000)
-        let store = store(fake, now: { clock })
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000_000))
+        let store = store(fake, now: { clock.now })
 
         _ = store.name(for: munich())
         await store.awaitPendingLookups()
 
         fake.failure = nil
         fake.names["48.1372,11.5755"] = "Munich"
-        clock = clock.addingTimeInterval(600)
+        clock.advance(by: 600)
 
         _ = store.name(for: munich())
         await store.awaitPendingLookups()

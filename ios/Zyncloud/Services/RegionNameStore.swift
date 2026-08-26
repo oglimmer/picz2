@@ -59,7 +59,7 @@ final class RegionNameStore: ObservableObject {
     init(
         maxPointsPerRequest: Int = 60,
         batchDelay: Duration = .milliseconds(50),
-        now: @escaping () -> Date = Date.init,
+        now: @escaping @Sendable () -> Date = { Date() },
         geocode: @escaping Geocoder = { points, language in
             await withCheckedContinuation { continuation in
                 APIClient().reverseGeocode(points: points, language: language) {
@@ -177,7 +177,7 @@ extension APIClient {
     func reverseGeocode(
         points: [LatLng],
         language: String?,
-        completion: @escaping (Result<[ReverseGeocodedPlace], Error>) -> Void,
+        completion: @escaping @Sendable (Result<[ReverseGeocodedPlace], Error>) -> Void,
     ) {
         guard !points.isEmpty else {
             completion(.success([]))

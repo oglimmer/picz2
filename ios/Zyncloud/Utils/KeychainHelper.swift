@@ -1,7 +1,10 @@
 import Foundation
 import Security
+import os
 
-final class KeychainHelper {
+/// - Note: `@unchecked Sendable` — this holds two immutable strings and nothing else. The store
+///   it talks to is the system keychain, which is thread-safe.
+final class KeychainHelper: @unchecked Sendable {
     static let shared = KeychainHelper()
 
     /// Posted after the stored credentials change — a sign-in, a sign-out, or the legacy-format
@@ -33,7 +36,7 @@ final class KeychainHelper {
         // JSON rather than "username:password": a colon is legal inside a password, and the
         // old delimiter-based format silently failed to load those credentials at all.
         guard let data = try? JSONEncoder().encode([Field.username: username, Field.password: password]) else {
-            print("KeychainHelper: Failed to encode credentials")
+            AppLog.store.error("Could not encode credentials")
             return false
         }
 
@@ -50,7 +53,7 @@ final class KeychainHelper {
 
         let status = SecItemAdd(query as CFDictionary, nil)
         let success = status == errSecSuccess
-        print("KeychainHelper: Save credentials - \(success ? "SUCCESS" : "FAILED with status \(status)")")
+        AppLog.store.info("Save credentials: \(success ? "ok" : "failed, OSStatus \(status)", privacy: .public)")
         if success { notifyCredentialsChanged() }
         return success
     }
@@ -69,13 +72,13 @@ final class KeychainHelper {
 
         guard status == errSecSuccess else {
             if status != errSecItemNotFound {
-                print("KeychainHelper: Load credentials - FAILED with status \(status)")
+                AppLog.store.error("Load credentials failed, OSStatus \(status, privacy: .public)")
             }
             return nil
         }
 
         guard let data = result as? Data else {
-            print("KeychainHelper: Load credentials - Failed to read data")
+            AppLog.store.error("Load credentials: the keychain item held no readable data")
             return nil
         }
 
@@ -90,7 +93,7 @@ final class KeychainHelper {
             return migrated
         }
 
-        print("KeychainHelper: Load credentials - Invalid format")
+        AppLog.store.error("Load credentials: the stored item is not in a format this app understands")
         return nil
     }
 
@@ -107,7 +110,7 @@ final class KeychainHelper {
         let password = String(legacy[legacy.index(after: separator)...])
         guard !username.isEmpty, !password.isEmpty else { return nil }
 
-        print("KeychainHelper: Migrating legacy credential format")
+        AppLog.store.info("Migrating the legacy credential format")
         _ = save(username: username, password: password)
         return (username: username, password: password)
     }
@@ -126,7 +129,12 @@ final class KeychainHelper {
     /// from inside `save()`, which posts again on success — a duplicate invalidation is free,
     /// and the alternative (suppressing it) is a flag that has to stay correct forever.
     private func notifyCredentialsChanged() {
-        let post = { NotificationCenter.default.post(name: KeychainHelper.credentialsDidChange, object: nil) }
+        // `@Sendable` because one of the two branches hands this closure to another queue.
+        // Without it the closure is an ordinary non-Sendable function value being converted to
+        // the `@Sendable @convention(block)` parameter `async(execute:)` wants.
+        let post = { @Sendable in
+            NotificationCenter.default.post(name: KeychainHelper.credentialsDidChange, object: nil)
+        }
         if Thread.isMainThread { post() } else { DispatchQueue.main.async(execute: post) }
     }
 }

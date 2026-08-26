@@ -831,13 +831,19 @@ struct PhotoDetailView: View {
                     // same bytes to AuthenticatedImage is what used to render "Failed".
                     VideoPlayer(player: player)
                         .onAppear {
-                            // Without .playback the ring/silent switch silences the video.
-                            try? AVAudioSession.sharedInstance().setCategory(.playback)
-                            try? AVAudioSession.sharedInstance().setActive(true)
                             if player.currentItem == nil {
                                 player.replaceCurrentItem(with: AVPlayerItem(url: videoURL))
                             }
-                            player.play()
+                            // Without .playback the ring/silent switch silences the video.
+                            //
+                            // Off the main thread, and awaited before `play()` — see
+                            // ``AudioSessionConfigurator``. This is `onAppear` on the video
+                            // screen, so doing it inline froze the screen for as long as the
+                            // audio route took to come up.
+                            Task {
+                                try? await AudioSessionConfigurator.activate(category: .playback)
+                                player.play()
+                            }
                         }
                         .onDisappear { player.pause() }
                 } else if let imageURL = viewModel.fullImageURL(for: photo) {

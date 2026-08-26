@@ -15,12 +15,8 @@ enum RecordingAudioReadiness {
 /// Slideshow narration recordings — list, upload, delete. The album's gallery pairs one
 /// recording with one (tag filter, language) combination.
 extension APIClient {
-    func fetchRecordings(albumId: Int, completion: @escaping (Result<[RecordingInfo], Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/albums/\(albumId)/recordings"))
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: RecordingsListResponse.self) { result in
+    func fetchRecordings(albumId: Int, completion: @escaping @Sendable (Result<[RecordingInfo], Error>) -> Void) {
+        send(.get, "api/albums/\(albumId)/recordings", expecting: RecordingsListResponse.self) { result in
             completion(result.map(\.recordings))
         }
     }
@@ -32,10 +28,12 @@ extension APIClient {
     /// credential — which is the same deal the audio stream itself takes.
     func fetchRecordingAudioStatus(
         publicToken: String,
-        completion: @escaping (RecordingAudioReadiness) -> Void,
+        completion: @escaping @Sendable (RecordingAudioReadiness) -> Void,
     ) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/r/\(publicToken)/audio/status"))
-        request.httpMethod = "GET"
+        guard var request = try? makeRequest(.get, "api/r/\(publicToken)/audio/status", authenticated: false) else {
+            completion(.unreachable)
+            return
+        }
         // Never a cached answer: the whole point is to see the state change from not-ready to ready.
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
@@ -53,12 +51,8 @@ extension APIClient {
         }
     }
 
-    func deleteRecording(id: Int, completion: @escaping (Result<Void, Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/recordings/\(id)"))
-        request.httpMethod = "DELETE"
-        addBasicAuth(to: &request)
-
-        performRequestIgnoringBody(request, completion: completion)
+    func deleteRecording(id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.delete, "api/recordings/\(id)", completion: completion)
     }
 
     /// Uploads one finished narration: the audio file plus the slide timings.
@@ -70,13 +64,17 @@ extension APIClient {
         albumId: Int,
         audioFileURL: URL,
         request payload: RecordingUploadRequest,
-        completion: @escaping (Result<RecordingInfo?, Error>) -> Void,
+        completion: @escaping @Sendable (Result<RecordingInfo?, Error>) -> Void,
     ) {
         let boundary = "Boundary-\(UUID().uuidString)"
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/albums/\(albumId)/recordings"))
-        request.httpMethod = "POST"
+        var request: URLRequest
+        do {
+            request = try makeRequest(.post, "api/albums/\(albumId)/recordings")
+        } catch {
+            completion(.failure(error))
+            return
+        }
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        addBasicAuth(to: &request)
 
         let bodyURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("narration-body-\(UUID().uuidString)")

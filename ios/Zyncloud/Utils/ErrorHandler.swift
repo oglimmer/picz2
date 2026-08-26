@@ -1,35 +1,7 @@
 import Foundation
 
-// MARK: - App Errors
-
-enum AppError: LocalizedError {
-    case network(Error)
-    case api(message: String, statusCode: Int?)
-    case authentication(String)
-    case photoLibrary(String)
-    case storage(String)
-    case unknown(Error)
-
-    var errorDescription: String? {
-        switch self {
-        case let .network(error):
-            return "Network error: \(error.localizedDescription)"
-        case let .api(message, statusCode):
-            if let code = statusCode {
-                return "API error (\(code)): \(message)"
-            }
-            return "API error: \(message)"
-        case let .authentication(message):
-            return "Authentication error: \(message)"
-        case let .photoLibrary(message):
-            return "Photo library error: \(message)"
-        case let .storage(message):
-            return "Storage error: \(message)"
-        case let .unknown(error):
-            return "Unexpected error: \(error.localizedDescription)"
-        }
-    }
-}
+// ``AppError`` used to live here. It moved to `Shared/AppError.swift` so the share extension,
+// which cannot see `Utils/`, reports failures as the same type the app does.
 
 // MARK: - Alert State
 

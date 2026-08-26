@@ -12,7 +12,9 @@ import Foundation
 /// Scheduling and running are tracked separately on purpose. "Scheduled recently but never run"
 /// and "never scheduled at all" are different faults with different causes — the first is iOS
 /// declining to give us time, the second is our own wiring being broken again.
-final class BackgroundTaskLog: ObservableObject {
+/// - Note: `@unchecked Sendable` — this class stores nothing of its own. Every value lives in
+///   `UserDefaults`, which is thread-safe, and the SwiftUI notification is hopped to main.
+final class BackgroundTaskLog: ObservableObject, @unchecked Sendable {
     static let shared = BackgroundTaskLog()
 
     enum Kind: String, CaseIterable {

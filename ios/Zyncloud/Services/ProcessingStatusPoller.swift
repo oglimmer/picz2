@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Polls GET /api/assets/{id}/status after a 202 upload completes.
 //
@@ -11,7 +12,8 @@ import Foundation
 // Happy path is intentionally silent: DONE doesn't emit a log entry, since the
 // existing "Uploaded photo …" entry already reads as success to the user.
 // Only FAILED / DEAD_LETTER / poll-timeout produce new entries.
-final class ProcessingStatusPoller {
+/// - Note: `@unchecked Sendable` — `inFlight` is touched only on ``queue``, which is serial.
+final class ProcessingStatusPoller: @unchecked Sendable {
     static let shared = ProcessingStatusPoller()
 
     // 2 s interval, 60 s cap. Matches the web frontend's rotate-poll cadence
@@ -56,7 +58,10 @@ final class ProcessingStatusPoller {
                     // don't escalate into a user-visible failure entry.
                     if Date() >= deadline {
                         self.inFlight.remove(serverAssetId)
-                        print("ProcessingStatusPoller: giving up on \(serverAssetId) after \(self.timeout)s, last error: \(error)")
+                        AppLog.sync.error("""
+                        Giving up on asset \(serverAssetId, privacy: .public) after \
+                        \(self.timeout, privacy: .public)s — \(error.localizedDescription, privacy: .public)
+                        """)
                     } else {
                         self.queue.asyncAfter(deadline: .now() + self.interval) {
                             self.tick(serverAssetId: serverAssetId, contentId: contentId, api: api, deadline: deadline)

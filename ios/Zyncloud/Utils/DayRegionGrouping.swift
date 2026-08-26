@@ -128,13 +128,17 @@ extension Photo {
 /// The server writes instants as ISO-8601, with fractional seconds when it has them and without
 /// when it does not, so both shapes have to be tried.
 enum ISO8601 {
-    private static let withFractionalSeconds: ISO8601DateFormatter = {
+    /// `nonisolated(unsafe)`: `ISO8601DateFormatter` is documented as thread-safe for parsing
+    /// once its `formatOptions` are set, which happens here and never again. Making one per call
+    /// instead would be the safe-looking answer and a much slower one — this parses every photo's
+    /// timestamp on every regroup.
+    nonisolated(unsafe) private static let withFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static let plain: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

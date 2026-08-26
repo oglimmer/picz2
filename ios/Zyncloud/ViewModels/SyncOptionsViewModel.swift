@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Photos
+import os
 
 @MainActor
 class SyncOptionsViewModel: ViewModelProtocol {
@@ -13,21 +14,14 @@ class SyncOptionsViewModel: ViewModelProtocol {
     @Published var isDeletingAccount: Bool = false
 
     private let syncCoordinator: SyncCoordinator
-    private var apiClient: APIClient?
+    private let apiClient: APIClient?
 
-    init(syncCoordinator: SyncCoordinator = .shared) {
+    init(syncCoordinator: SyncCoordinator = .shared,
+         apiClient: APIClient? = APIClientProvider.shared.current)
+    {
         self.syncCoordinator = syncCoordinator
-        loadCredentials()
+        self.apiClient = apiClient
         checkPhotoAccess()
-    }
-
-    private func loadCredentials() {
-        if let credentials = KeychainHelper.shared.load() {
-            apiClient = APIClient(
-                username: credentials.username,
-                password: credentials.password,
-            )
-        }
     }
 
     private func checkPhotoAccess() {
@@ -36,7 +30,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
 
     func requestPhotoAccess() {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.authStatus = status
             }
         }
@@ -61,7 +55,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
             apiClient.fetchAlbums { [weak self] albumsResult in
                 guard let self else { return }
 
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     self.isLoadingAlbums = false
 
                     switch albumsResult {
@@ -100,15 +94,15 @@ class SyncOptionsViewModel: ViewModelProtocol {
         apiClient.setTargetAlbum(albumId: album.id) { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 switch result {
                 case .success:
-                    print("SyncOptionsViewModel: Target album updated on server: \(album.id)")
+                    AppLog.sync.info("Target album updated on the server: \(album.id, privacy: .public)")
                     // Start syncing now that an album has been selected and saved
                     self.syncCoordinator.start()
 
                 case let .failure(error):
-                    print("SyncOptionsViewModel: Failed to update target album on server: \(error)")
+                    AppLog.sync.error("Could not update the target album: \(error.localizedDescription, privacy: .public)")
                     // Show error but still start syncing with local setting
                     self.alertState = AlertState(
                         title: "Warning",
@@ -182,7 +176,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
         )
     }
 
-    func logout(completion: @escaping () -> Void) {
+    func logout(completion: @escaping @Sendable @MainActor () -> Void) {
         alertState = .confirmation(
             title: "Logout",
             message: "Are you sure you want to logout? This will clear all sync data.",
@@ -214,7 +208,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
     /// gone would let the next screen try to sync against a user the server no longer knows.
     /// The local wipe only runs on a confirmed server-side delete; a failed request leaves the
     /// signed-in session intact so the user can retry.
-    func deleteAccount(completion: @escaping () -> Void) {
+    func deleteAccount(completion: @escaping @Sendable @MainActor () -> Void) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -228,7 +222,7 @@ class SyncOptionsViewModel: ViewModelProtocol {
         apiClient.deleteAccount { [weak self] result in
             guard let self else { return }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isDeletingAccount = false
 
                 switch result {

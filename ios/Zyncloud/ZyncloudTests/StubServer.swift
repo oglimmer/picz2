@@ -44,10 +44,13 @@ final class StubURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
-    private static var handler: ((RecordedRequest) -> Stub)?
-    private static var recorded: [RecordedRequest] = []
+    /// `nonisolated(unsafe)`: every read and write of this pair is between a ``lock`` and its
+    /// matching unlock, which is exactly the guarantee the compiler is asking for and cannot
+    /// verify for itself.
+    nonisolated(unsafe) private static var handler: (@Sendable (RecordedRequest) -> Stub)?
+    nonisolated(unsafe) private static var recorded: [RecordedRequest] = []
 
-    static func begin(_ handler: @escaping (RecordedRequest) -> Stub) {
+    static func begin(_ handler: @escaping @Sendable (RecordedRequest) -> Stub) {
         lock.lock()
         self.handler = handler
         recorded = []
@@ -134,6 +137,44 @@ final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+// MARK: - One capture at a time, across every suite
+
+/// Lets exactly one capture hold the stub at a time.
+///
+/// ``StubURLProtocol`` registers itself process-wide, so two captures running at once overwrite
+/// each other's handler and record each other's requests. `@Suite(.serialized)` does not prevent
+/// that: it orders tests *within* one suite, and Swift Testing runs separate suites in parallel —
+/// three suites use this stub. The symptom was a test failing perhaps one run in five, always a
+/// different one, always passing when run alone.
+///
+/// An `actor` on its own would not be enough either. Actors are reentrant, so a second capture
+/// would slip in the moment the first suspended on `await work()` — which is exactly where a
+/// capture spends all of its time. Hence an explicit gate with a queue of waiters.
+actor StubGate {
+    static let shared = StubGate()
+
+    private var isHeld = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /// Hands the stub straight to the next waiter rather than clearing the flag, so a queue of
+    /// waiters cannot let a newcomer jump in between two of them.
+    func release() {
+        if waiting.isEmpty {
+            isHeld = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+}
+
 // MARK: - The shape tests read this way round
 
 enum StubServer {
@@ -146,12 +187,34 @@ enum StubServer {
         json: String = "{\"success\":true}",
         _ work: () async -> Void,
     ) async -> [RecordedRequest] {
+        await StubGate.shared.acquire()
         URLCache.shared.removeAllCachedResponses()
         StubURLProtocol.begin { _ in
             StubURLProtocol.Stub(status: status, body: Data(json.utf8))
         }
         await work()
-        return StubURLProtocol.end()
+        let requests = StubURLProtocol.end()
+        await StubGate.shared.release()
+        return requests
+    }
+
+    /// The same, for a body that is not JSON — an image, say. Goes through the same gate.
+    ///
+    /// `isolation: #isolation` so the caller's actor comes along: the image tests are a
+    /// `@MainActor` suite, and without it their `work` closure would have to cross out of the
+    /// main actor to get here, which the compiler refuses.
+    static func serving(
+        status: Int,
+        body: Data,
+        isolation: isolated (any Actor)? = #isolation,
+        _ work: () async -> Void,
+    ) async {
+        await StubGate.shared.acquire()
+        URLCache.shared.removeAllCachedResponses()
+        StubURLProtocol.begin { _ in StubURLProtocol.Stub(status: status, body: body) }
+        await work()
+        _ = StubURLProtocol.end()
+        await StubGate.shared.release()
     }
 
     /// The single request `work` made. Fails the calling test if it made none.
@@ -180,7 +243,7 @@ extension APIClient {
 }
 
 /// Turns one completion-handler call into something a test can `await`.
-func awaiting<T>(_ call: (@escaping (Result<T, Error>) -> Void) -> Void) async -> Result<T, Error> {
+func awaiting<T: Sendable>(_ call: (@escaping @Sendable (Result<T, Error>) -> Void) -> Void) async -> Result<T, Error> {
     await withCheckedContinuation { continuation in
         call { continuation.resume(returning: $0) }
     }
@@ -188,7 +251,7 @@ func awaiting<T>(_ call: (@escaping (Result<T, Error>) -> Void) -> Void) async -
 
 /// The same, for the endpoints that fold failure into their answer instead of returning a
 /// `Result` — `fetchRecordingAudioStatus` is the one that does.
-func awaitingValue<T>(_ call: (@escaping (T) -> Void) -> Void) async -> T {
+func awaitingValue<T: Sendable>(_ call: (@escaping @Sendable (T) -> Void) -> Void) async -> T {
     await withCheckedContinuation { continuation in
         call { continuation.resume(returning: $0) }
     }

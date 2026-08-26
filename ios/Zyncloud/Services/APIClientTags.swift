@@ -8,32 +8,22 @@ import Foundation
 extension APIClient {
     // MARK: - One file
 
-    func addTag(fileId: Int, tagName: String, completion: @escaping (Result<[String], Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/files/\(fileId)/tags"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addBasicAuth(to: &request)
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["tagName": tagName])
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        performRequest(request, expecting: FileTagsResponse.self) { result in
+    func addTag(fileId: Int, tagName: String, completion: @escaping @Sendable (Result<[String], Error>) -> Void) {
+        send(.post, "api/files/\(fileId)/tags",
+             body: TagNameBody(tagName: tagName), expecting: FileTagsResponse.self)
+        { result in
             completion(result.map(\.tags))
         }
     }
 
-    func removeTag(fileId: Int, tagName: String, completion: @escaping (Result<[String], Error>) -> Void) {
+    func removeTag(fileId: Int, tagName: String, completion: @escaping @Sendable (Result<[String], Error>) -> Void) {
         guard let url = tagURL(prefix: "api/files/\(fileId)/tags", tagName: tagName) else {
             completion(.failure(AppError.api(message: "\"\(tagName)\" cannot be used in a web address.", statusCode: nil)))
             return
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
+        request.httpMethod = HTTPMethod.delete.rawValue
         addBasicAuth(to: &request)
 
         performRequest(request, expecting: FileTagsResponse.self) { result in
@@ -44,19 +34,19 @@ extension APIClient {
     // MARK: - Every file in an album
 
     /// Answers how many files actually changed. Files that already carry the tag are skipped.
-    func addTagToAllFiles(albumId: Int, tagName: String, completion: @escaping (Result<Int, Error>) -> Void) {
-        bulkTagRequest(albumId: albumId, tagName: tagName, method: "POST", completion: completion)
+    func addTagToAllFiles(albumId: Int, tagName: String, completion: @escaping @Sendable (Result<Int, Error>) -> Void) {
+        bulkTagRequest(albumId: albumId, tagName: tagName, method: .post, completion: completion)
     }
 
-    func removeTagFromAllFiles(albumId: Int, tagName: String, completion: @escaping (Result<Int, Error>) -> Void) {
-        bulkTagRequest(albumId: albumId, tagName: tagName, method: "DELETE", completion: completion)
+    func removeTagFromAllFiles(albumId: Int, tagName: String, completion: @escaping @Sendable (Result<Int, Error>) -> Void) {
+        bulkTagRequest(albumId: albumId, tagName: tagName, method: .delete, completion: completion)
     }
 
     private func bulkTagRequest(
         albumId: Int,
         tagName: String,
-        method: String,
-        completion: @escaping (Result<Int, Error>) -> Void,
+        method: HTTPMethod,
+        completion: @escaping @Sendable (Result<Int, Error>) -> Void,
     ) {
         guard let url = tagURL(prefix: "api/albums/\(albumId)/files/tags", tagName: tagName) else {
             completion(.failure(AppError.api(message: "\"\(tagName)\" cannot be used in a web address.", statusCode: nil)))
@@ -64,7 +54,7 @@ extension APIClient {
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = method
+        request.httpMethod = method.rawValue
         addBasicAuth(to: &request)
 
         performRequest(request, expecting: BulkTagResponse.self) { result in
@@ -77,12 +67,8 @@ extension APIClient {
     /// The tags this album accepts. The server refuses to put any other tag on a file in it
     /// (`FileStorageService.addTagToFile`), so this — not the account-wide list — is what the
     /// pickers offer. The `all` system tag is always in the answer.
-    func fetchEnabledTags(albumId: Int, completion: @escaping (Result<[Tag], Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/albums/\(albumId)/enabled-tags"))
-        request.httpMethod = "GET"
-        addBasicAuth(to: &request)
-
-        performRequest(request, expecting: TagsListResponse.self) { result in
+    func fetchEnabledTags(albumId: Int, completion: @escaping @Sendable (Result<[Tag], Error>) -> Void) {
+        send(.get, "api/albums/\(albumId)/enabled-tags", expecting: TagsListResponse.self) { result in
             completion(result.map(\.tags))
         }
     }
@@ -90,20 +76,10 @@ extension APIClient {
     /// Replaces the album's allowed tags with exactly `tagIds`. It is a whole-list write, not a
     /// toggle — any id left out is switched off. System tag ids may be sent; the server drops
     /// them because those are always on.
-    func setEnabledTags(albumId: Int, tagIds: [Int], completion: @escaping (Result<[Tag], Error>) -> Void) {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/albums/\(albumId)/enabled-tags"))
-        request.httpMethod = "PUT"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addBasicAuth(to: &request)
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["tagIds": tagIds])
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        performRequest(request, expecting: TagsListResponse.self) { result in
+    func setEnabledTags(albumId: Int, tagIds: [Int], completion: @escaping @Sendable (Result<[Tag], Error>) -> Void) {
+        send(.put, "api/albums/\(albumId)/enabled-tags",
+             body: EnabledTagsBody(tagIds: tagIds), expecting: TagsListResponse.self)
+        { result in
             completion(result.map(\.tags))
         }
     }
@@ -131,6 +107,11 @@ extension APIClient {
 
         return URL(string: "\(root)/\(prefix)/\(encoded)")
     }
+}
+
+/// The body of `PUT /api/albums/{id}/enabled-tags` — the album's whole allowed-tag list.
+struct EnabledTagsBody: Encodable {
+    let tagIds: [Int]
 }
 
 private extension CharacterSet {
