@@ -47,20 +47,7 @@ struct TagManagerView: View {
         }
         .navigationTitle("Tags")
         .navigationBarTitleDisplayMode(.inline)
-        .alert(item: $viewModel.alertState) { alertState in
-            if let primaryButton = alertState.primaryButton,
-               let secondaryButton = alertState.secondaryButton
-            {
-                Alert(
-                    title: Text(alertState.title),
-                    message: Text(alertState.message),
-                    primaryButton: .destructive(Text(primaryButton.title), action: primaryButton.action),
-                    secondaryButton: .cancel(Text(secondaryButton.title), action: secondaryButton.action),
-                )
-            } else {
-                Alert(title: Text(alertState.title), message: Text(alertState.message))
-            }
-        }
+        .alert(state: $viewModel.alertState)
         .onAppear {
             if viewModel.tags.isEmpty {
                 viewModel.loadTags()

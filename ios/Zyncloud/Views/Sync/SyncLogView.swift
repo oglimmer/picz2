@@ -19,7 +19,7 @@ struct SyncLogView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 // Sync status. §3.3 was undetectable in code and would have been obvious here:
                 // background tasks were only ever scheduled at launch, and the only symptom was

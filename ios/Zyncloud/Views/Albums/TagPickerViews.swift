@@ -23,7 +23,7 @@ struct PhotoTagsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     if viewModel.isLoadingTags, viewModel.albumTags.isEmpty {
@@ -90,7 +90,7 @@ struct BulkTagView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     if viewModel.isLoadingTags, viewModel.albumTags.isEmpty {

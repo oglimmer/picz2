@@ -49,23 +49,7 @@ struct LoginView: View {
         }
         .navigationTitle("Sign In")
         .navigationBarTitleDisplayMode(.inline)
-        .alert(item: $viewModel.alertState) { alertState in
-            if let primaryButton = alertState.primaryButton,
-               let secondaryButton = alertState.secondaryButton
-            {
-                Alert(
-                    title: Text(alertState.title),
-                    message: Text(alertState.message),
-                    primaryButton: .default(Text(primaryButton.title), action: primaryButton.action),
-                    secondaryButton: .cancel(Text(secondaryButton.title), action: secondaryButton.action),
-                )
-            } else {
-                Alert(
-                    title: Text(alertState.title),
-                    message: Text(alertState.message),
-                )
-            }
-        }
+        .alert(state: $viewModel.alertState)
     }
 
     private func handleLogin() {

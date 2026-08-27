@@ -1,4 +1,6 @@
+import Combine
 import Foundation
+import SwiftUI
 
 /// Drives the album's audio-commentary feature: pick a tag filter and a language, walk the
 /// matching assets one tap at a time, and record the voice over the top.
@@ -351,7 +353,7 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
                         primaryButton: AlertState.AlertButton(title: "Retry") { [weak self] in
                             self?.retrySave()
                         },
-                        secondaryButton: AlertState.AlertButton(title: "Discard") { [weak self] in
+                        secondaryButton: AlertState.AlertButton(title: "Discard", role: .destructive) { [weak self] in
                             self?.discardFailedSave()
                         },
                     )

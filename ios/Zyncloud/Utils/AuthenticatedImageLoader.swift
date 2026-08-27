@@ -71,6 +71,17 @@ final class AuthenticatedImageLoader: ObservableObject {
     /// whichever thread drops the last reference. `AnyCancellable.cancel()` is safe to call from
     /// anywhere; the reference itself is only ever assigned on the main actor.
     nonisolated(unsafe) private var cancellable: AnyCancellable?
+
+    /// The pending 202 re-check, held so ``cancel()`` can stop it.
+    ///
+    /// Without this, `cancel()` cancelled the subscription and nothing else, so a tile that
+    /// scrolled away while the server was still making its thumbnail went on waking up and
+    /// asking again every two seconds, up to fifteen times. `reload()` was worse: it cancels and
+    /// starts a fresh chain, and the old chain's pending re-check then started a second one.
+    ///
+    /// `nonisolated(unsafe)` for the same reason as ``cancellable`` — `Task.cancel()` is safe to
+    /// call from anywhere, and the reference is only ever assigned on the main actor.
+    nonisolated(unsafe) private var retryTask: Task<Void, Never>?
     private let url: URL
 
     /// Bounded self-retry for the 202 case, so a thumbnail that becomes ready a second after
@@ -117,14 +128,21 @@ final class AuthenticatedImageLoader: ObservableObject {
     /// Turns one response into an image, or into the reason there is not one.
     ///
     /// A `nonisolated static` function, and passed to `tryMap` by name — **not** written inline
-    /// as a closure. This build has `SWIFT_APPROACHABLE_CONCURRENCY` on, under which a
-    /// non-`@Sendable` closure inherits the isolation of wherever it was written. Combine's
-    /// operator closures are not `@Sendable`, so writing this inline inside a `@MainActor` type
-    /// made it a main-actor closure — and Combine runs these operators on the
-    /// `NSURLSession-delegate` queue. The result was a main-actor check failing on a background
-    /// queue: `BUG IN CLIENT OF LIBDISPATCH: Assertion failed`, on the first thumbnail loaded.
+    /// as a closure. Under `SWIFT_APPROACHABLE_CONCURRENCY` a non-`@Sendable` closure inherits
+    /// the isolation of wherever it was written. Combine's operator closures are not
+    /// `@Sendable`, so writing this inline inside a `@MainActor` type made it a main-actor
+    /// closure — and Combine runs these operators on the `NSURLSession-delegate` queue. The
+    /// result was a main-actor check failing on a background queue:
+    /// `BUG IN CLIENT OF LIBDISPATCH: Assertion failed`, on the first thumbnail loaded.
     ///
     /// A named `nonisolated` function has no enclosing isolation to inherit, which is the point.
+    ///
+    /// **The flag is set on the ShareExtension target only, not on the app target this file is
+    /// built into.** That is deliberate but unfinished: turning it on for the app compiles
+    /// cleanly and then crashes at runtime in this exact way somewhere else, because nothing
+    /// else in the app was written for the rule and the compiler does not point at the places
+    /// that break. Keep this function `nonisolated` regardless — it is correct either way, and
+    /// it is what the app target will need on the day the flag is switched on for real.
     private nonisolated static func decode(
         _ output: URLSession.DataTaskPublisher.Output,
     ) throws -> UIImage? {
@@ -172,8 +190,10 @@ final class AuthenticatedImageLoader: ObservableObject {
                 guard self.notReadyRetries < self.maxNotReadyRetries else { return }
                 self.notReadyRetries += 1
                 let delay = self.notReadyRetryDelay
-                Task { @MainActor [weak self] in
+                self.retryTask?.cancel()
+                self.retryTask = Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled else { return }
                     guard let self, self.image == nil else { return }
                     self.startRequest(bypassCaches: true)
                 }
@@ -195,6 +215,7 @@ final class AuthenticatedImageLoader: ObservableObject {
 
     nonisolated func cancel() {
         cancellable?.cancel()
+        retryTask?.cancel()
     }
 
     deinit {
