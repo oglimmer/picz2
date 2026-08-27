@@ -29,7 +29,9 @@ class SyncOptionsViewModel: ViewModelProtocol {
     }
 
     func requestPhotoAccess() {
-        PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
+        // `@Sendable` for the reason spelled out in ``AlbumDetailViewModel/requestUpload()``:
+        // Photos answers on a background queue and its block is not `Sendable`.
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { @Sendable [weak self] status in
             Task { @MainActor in
                 self?.authStatus = status
             }

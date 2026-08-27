@@ -11,15 +11,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     // MARK: - Early Registration (called from App init)
 
+    /// - Important: `using: .main`, never `using: nil`.
+    ///
+    /// `AppDelegate` conforms to `UIApplicationDelegate`, which the SDK annotates `@MainActor`,
+    /// so the whole type — statics included — is main-actor isolated, and these launch-handler
+    /// closures inherit that. `using: nil` lets `BGTaskScheduler` call them on a background queue
+    /// of its own choosing. Under Swift 5 that was an unchecked mismatch; Swift 6 checks actor
+    /// isolation at runtime, so the first background task the system ever ran killed the app with
+    /// `BUG IN CLIENT OF LIBDISPATCH: Assertion failed` — after fifteen quiet minutes, wherever
+    /// the user happened to be, and never on a path any test or launch touches.
+    ///
+    /// `.main` is safe here because neither handler does the work itself: each logs, reschedules,
+    /// installs an expiration handler and hands off — ``handleProcessing(task:)`` to a private
+    /// `OperationQueue` (which is where the blocking `group.wait()` lives) and
+    /// ``handleRefresh(task:)`` to ``SyncCoordinator/performBackgroundSync(completion:)``.
+    /// Nothing below blocks the main queue.
     static func registerBackgroundTasksEarly() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: processTaskId, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: processTaskId, using: .main) { task in
             guard let processingTask = task as? BGProcessingTask else {
                 AppLog.app.error("Background task was not a BGProcessingTask")
                 return
             }
             AppDelegate.handleProcessing(task: processingTask)
         }
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskId, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskId, using: .main) { task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 AppLog.app.error("Background task was not a BGAppRefreshTask")
                 return

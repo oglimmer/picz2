@@ -337,6 +337,254 @@ struct EndpointShapeTests {
         #expect(await readiness(json: json) == .unreachable)
     }
 
+    // MARK: - Presentation groups
+
+    @Test func fetchPresentationGroupsGetsTheAlbumsGroups() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"count\":0,\"groups\":[]}") {
+            _ = await awaiting { done in api.fetchPresentationGroups(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/albums/7/presentation-groups")
+        #expect(request?.headers["Authorization"] == APIClient.stubbedAuthHeader)
+    }
+
+    /// The four fields the shelving actually needs, spelled exactly as the server spells them.
+    /// `text` is the one that does not match its column (`body_text`), so it is the one a rename
+    /// would silently drop — a chapter would keep its heading and lose its paragraph.
+    @Test func agroupDecodesItsTagAnchorLabelAndText() async {
+        let json = """
+        {"success":true,"count":1,"groups":[
+          {"id":10,"albumId":7,"tag":"beach","startFileId":31,"label":"Morning",
+           "text":"Before the rain.","createdAt":"2026-05-04T12:00:00Z","updatedAt":null}
+        ]}
+        """
+        var result: Result<[PresentationGroup], Error>?
+        _ = await StubServer.capture(json: json) {
+            result = await awaiting { done in api.fetchPresentationGroups(albumId: 7, completion: done) }
+        }
+
+        let group = (try? result?.get())?.first
+        #expect(group?.id == 10)
+        #expect(group?.tag == "beach")
+        #expect(group?.startFileId == 31)
+        #expect(group?.label == "Morning")
+        #expect(group?.text == "Before the rain.")
+    }
+
+    /// `body_text` is nullable, so most groups arrive with a null here. Decoding has to survive
+    /// it — a throw would take every other chapter in the album down with it.
+    @Test func agroupWithNoTextStillDecodes() async {
+        let json = """
+        {"success":true,"count":1,"groups":[
+          {"id":11,"albumId":7,"tag":"beach","startFileId":32,"label":"Evening","text":null}
+        ]}
+        """
+        var result: Result<[PresentationGroup], Error>?
+        _ = await StubServer.capture(json: json) {
+            result = await awaiting { done in api.fetchPresentationGroups(albumId: 7, completion: done) }
+        }
+
+        #expect((try? result?.get())?.first?.text == nil)
+        #expect((try? result?.get())?.first?.label == "Evening")
+    }
+
+    // MARK: - Writing presentation groups
+
+    private var groupJSON: String {
+        """
+        {"success":true,"group":{"id":10,"albumId":7,"tag":"beach","startFileId":31,
+         "label":"Morning","text":"Before the rain."}}
+        """
+    }
+
+    /// Create carries the two things a chapter is anchored by — the tag and the photo it starts
+    /// at — alongside the words. Neither can be changed later, so getting them onto the wire here
+    /// is the whole of it.
+    @Test func creatingAgroupPostsTheTagAnchorAndWords() async {
+        let draft = PresentationGroupDraft(label: "Morning", text: "Before the rain.")
+
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.createPresentationGroup(
+                    albumId: 7,
+                    tag: "beach",
+                    startFileId: 31,
+                    draft: draft,
+                    completion: done,
+                )
+            }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/albums/7/presentation-groups")
+        #expect(request?.json["tag"] as? String == "beach")
+        #expect(request?.json["startFileId"] as? Int == 31)
+        #expect(request?.json["label"] as? String == "Morning")
+        #expect(request?.json["text"] as? String == "Before the rain.")
+    }
+
+    /// The stored group is what the caller keeps: the server trims the label and collapses a
+    /// blank body to null, so echoing the draft back would leave the screen showing something
+    /// slightly different from what was saved.
+    @Test func creatingAgroupReturnsTheStoredGroup() async {
+        var result: Result<PresentationGroup, Error>?
+        _ = await StubServer.capture(json: groupJSON) {
+            result = await awaiting { done in
+                api.createPresentationGroup(
+                    albumId: 7,
+                    tag: "beach",
+                    startFileId: 31,
+                    draft: PresentationGroupDraft(label: "  Morning  ", text: nil),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect((try? result?.get())?.id == 10)
+        #expect((try? result?.get())?.label == "Morning")
+    }
+
+    /// A chapter never changes tag or anchor — the server ignores both on update, and sending
+    /// them would suggest otherwise to the next person reading this client.
+    @Test func updatingAgroupSendsOnlyTheWords() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.updatePresentationGroup(
+                    id: 10,
+                    draft: PresentationGroupDraft(label: "Morning", text: "Before the rain."),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/presentation-groups/10")
+        #expect(request?.json["label"] as? String == "Morning")
+        #expect(request?.json["tag"] == nil)
+        #expect(request?.json["startFileId"] == nil)
+    }
+
+    /// A cleared body has to reach the server as an absent key, not as an empty string — that is
+    /// what makes `normalizedText` store null and the heading lose its paragraph.
+    @Test func agroupWithNoTextSendsNoTextKey() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.updatePresentationGroup(
+                    id: 10,
+                    draft: PresentationGroupDraft(label: "Morning", text: nil),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect(request?.json["label"] as? String == "Morning")
+        #expect(request?.json["text"] == nil)
+    }
+
+    @Test func deletingAgroupDeletesTheIdsPath() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.deletePresentationGroup(id: 10, completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/presentation-groups/10")
+    }
+
+    /// A refused save must surface as a failure: the form stays open on one, and swallowing it
+    /// would close the form over a chapter that was never stored.
+    @Test func arefusedGroupSaveIsAfailure() async {
+        var result: Result<PresentationGroup, Error>?
+        _ = await StubServer.capture(status: 400, json: "{\"success\":false,\"message\":\"Label is required\"}") {
+            result = await awaiting { done in
+                api.updatePresentationGroup(
+                    id: 10,
+                    draft: PresentationGroupDraft(label: "Morning", text: nil),
+                    completion: done,
+                )
+            }
+        }
+
+        guard case let .failure(error) = result else {
+            Issue.record("a 400 must not read as a saved chapter")
+            return
+        }
+        #expect(error.localizedDescription.contains("Label is required"))
+    }
+
+    // MARK: - The album's saved map view
+
+    @Test func savingAmapViewPutsTheFourDegreesToTheAlbum() async {
+        let json = """
+        {"success":true,"album":{"id":7,"name":"Trip",
+         "mapCenterLat":50.1,"mapCenterLng":8.6,"mapSpanLat":0.05,"mapSpanLng":0.08}}
+        """
+        let view = SavedMapView(centerLat: 50.1, centerLng: 8.6, spanLat: 0.05, spanLng: 0.08)
+
+        let request = await StubServer.captureOne(json: json) {
+            _ = await awaiting { done in api.setMapView(albumId: 7, view: view, completion: done) }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/albums/7/map-view")
+        #expect(request?.json["centerLat"] as? Double == 50.1)
+        #expect(request?.json["centerLng"] as? Double == 8.6)
+        #expect(request?.json["spanLat"] as? Double == 0.05)
+        #expect(request?.json["spanLng"] as? Double == 0.08)
+    }
+
+    /// The answer carries the album back, and it is the album that is believed — the server
+    /// clamps an over-wide span, so echoing what was sent would leave the map disagreeing with
+    /// what was stored.
+    @Test func thesavedViewIsReadBackOffTheAnswer() async {
+        let json = """
+        {"success":true,"album":{"id":7,"name":"Trip",
+         "mapCenterLat":50.1,"mapCenterLng":8.6,"mapSpanLat":180.0,"mapSpanLng":360.0}}
+        """
+        var result: Result<Album, Error>?
+        _ = await StubServer.capture(json: json) {
+            result = await awaiting { done in
+                api.setMapView(
+                    albumId: 7,
+                    view: SavedMapView(centerLat: 50.1, centerLng: 8.6, spanLat: 999, spanLng: 999),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect((try? result?.get())?.savedMapView?.spanLat == 180.0)
+        #expect((try? result?.get())?.savedMapView?.spanLng == 360.0)
+    }
+
+    /// Clearing is a DELETE on the same path, and the album comes back with the four fields null
+    /// — which has to read as "no saved view", not as a decode failure.
+    @Test func clearingAmapViewDeletesThePathAndLeavesNoView() async {
+        let json = """
+        {"success":true,"album":{"id":7,"name":"Trip","mapCenterLat":null,"mapCenterLng":null,
+         "mapSpanLat":null,"mapSpanLng":null}}
+        """
+        var result: Result<Album, Error>?
+        let request = await StubServer.captureOne(json: json) {
+            result = await awaiting { done in api.clearMapView(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/albums/7/map-view")
+        #expect((try? result?.get())?.savedMapView == nil)
+    }
+
+    /// An album payload from a server that predates the map fields must still decode — they are
+    /// simply absent, not null.
+    @Test func analbumPayloadWithNoMapFieldsStillDecodes() async {
+        var result: Result<Album, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"album\":{\"id\":7,\"name\":\"Trip\"}}") {
+            result = await awaiting { done in api.clearMapView(albumId: 7, completion: done) }
+        }
+
+        #expect((try? result?.get())?.id == 7)
+        #expect((try? result?.get())?.savedMapView == nil)
+    }
+
     // MARK: - Errors reach the caller
 
     /// Every one of these endpoints funnels through the same error ladder. Spot-check that the

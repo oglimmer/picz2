@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Photos
+import SwiftUI
 import os
 
 @MainActor
@@ -71,6 +72,14 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// granted, and asking afterwards would throw the user's choice away.
     @Published var isPickerPresented: Bool = false
 
+    /// Where this album's map opens, or nil to fit every pin.
+    ///
+    /// Held here rather than read off ``album`` on every access because saving a view changes it:
+    /// the album this screen was pushed with is a value, and the server's answer to the save is
+    /// the new truth. Seeded from the album, then owned by ``saveMapView(_:)`` and
+    /// ``clearMapView()``.
+    @Published private(set) var savedMapView: SavedMapView?
+
     let album: Album
 
     /// Readable across the file boundary so the tag actions in `AlbumDetailViewModel+Tags.swift`
@@ -88,6 +97,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         self.album = album
         self.syncCoordinator = syncCoordinator
         self.apiClient = apiClient
+        savedMapView = album.savedMapView
         observeUploads()
     }
 
@@ -449,7 +459,12 @@ class AlbumDetailViewModel: ViewModelProtocol {
             isPickerPresented = true
 
         case .notDetermined:
-            PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
+            // `@Sendable` on purpose. Photos calls this handler on a background queue, and its
+            // block is not marked `NS_SWIFT_SENDABLE`, so under `SWIFT_APPROACHABLE_CONCURRENCY`
+            // a bare closure written inside this `@MainActor` type would inherit main-actor
+            // isolation and trip `BUG IN CLIENT OF LIBDISPATCH` the moment Photos answers.
+            // `@Sendable` gives it no isolation to inherit; the hop to main is the `Task` below.
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { @Sendable [weak self] status in
                 Task { @MainActor in
                     guard let self else { return }
                     if status == .authorized || status == .limited {
@@ -563,6 +578,67 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
                 if case let .failure(error) = result {
                     self.photos = previous
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Map
+
+    /// True when any photo in this album carries a location, which is what makes a map worth
+    /// offering. A location lives only in the original, so photos uploaded before GPS extraction
+    /// existed — and those whose original retention has purged — never have one.
+    var hasLocatedPhotos: Bool {
+        !PhotoMapPlaces.located(in: photos).isEmpty
+    }
+
+    /// Stores the framing the owner has panned and pinched to, so everyone opening this album's
+    /// map — including share-link visitors — starts there.
+    ///
+    /// The server's answer carries the album back with the four fields set, so the new view is
+    /// taken from that rather than from what was sent: `MapView.of` clamps an over-wide span, and
+    /// believing our own copy would leave the screen disagreeing with what was stored.
+    func saveMapView(_ view: SavedMapView) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.setMapView(albumId: album.id, view: view) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(album):
+                    self.savedMapView = album.savedMapView
+                    self.showSuccess(message: "This album's map now opens at this view.")
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    /// Puts the map back to framing every pin.
+    func clearMapView() {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.clearMapView(albumId: album.id) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(album):
+                    self.savedMapView = album.savedMapView
+                case let .failure(error):
                     self.handleError(error)
                 }
             }

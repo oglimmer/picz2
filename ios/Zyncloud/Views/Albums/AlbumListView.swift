@@ -16,7 +16,7 @@ struct AlbumListView: View {
     ]
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 if viewModel.isLoading, viewModel.albums.isEmpty {
                     ProgressView("Loading albums...")
@@ -95,23 +95,7 @@ struct AlbumListView: View {
                     }
                 }
             }
-            .alert(item: $viewModel.alertState) { alertState in
-                if let primaryButton = alertState.primaryButton,
-                   let secondaryButton = alertState.secondaryButton
-                {
-                    Alert(
-                        title: Text(alertState.title),
-                        message: Text(alertState.message),
-                        primaryButton: .destructive(Text(primaryButton.title), action: primaryButton.action),
-                        secondaryButton: .cancel(Text(secondaryButton.title), action: secondaryButton.action),
-                    )
-                } else {
-                    Alert(
-                        title: Text(alertState.title),
-                        message: Text(alertState.message),
-                    )
-                }
-            }
+            .alert(state: $viewModel.alertState)
             .onAppear {
                 if viewModel.albums.isEmpty {
                     viewModel.fetchAlbums()

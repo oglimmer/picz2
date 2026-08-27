@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 // `@preconcurrency`: `UNNotificationSettings` is not `Sendable`, and `getNotificationSettings`
 // hands one to a `@Sendable` completion. Apple's shape, not ours.

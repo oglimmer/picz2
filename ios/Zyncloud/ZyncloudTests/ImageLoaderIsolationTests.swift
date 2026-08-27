@@ -58,8 +58,12 @@ struct ImageLoaderIsolationTests {
     /// Through ``StubServer/serving(status:body:_:)`` rather than driving ``StubURLProtocol``
     /// by hand, so this suite queues behind the other two that share the process-wide stub.
     private func serving(status: Int, body: Data, _ work: () async -> Void) async {
-        ImageCache.removeAll()
-        await StubServer.serving(status: status, body: body, work)
+        // Inside the gate, not before it. ``ImageCache`` is process-wide and ``ImageReloadTests``
+        // wipes it too, so clearing it out here raced with this suite's own cache assertions.
+        await StubServer.serving(status: status, body: body) {
+            ImageCache.removeAll()
+            await work()
+        }
     }
 
     /// The one that would have caught the crash: a plain successful load, start to finish.
@@ -88,6 +92,9 @@ struct ImageLoaderIsolationTests {
         await serving(status: 202, body: Data()) {
             loader.load()
             await eventually("the processing flag") { loader.isServerProcessing }
+            // A 202 schedules a re-check two seconds out. Cancelled here so it cannot fire after
+            // the stub has moved on to another suite and be recorded as that suite's request.
+            loader.cancel()
         }
 
         #expect(loader.isServerProcessing)

@@ -47,20 +47,14 @@ struct AlbumFormView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section(header: Text("Album Details")) {
                     TextField("Name", text: $name)
-                        .autocapitalization(.words)
+                        .textInputAutocapitalization(.words)
 
-                    if #available(iOS 16.0, *) {
-                        TextField("Description (optional)", text: $description, axis: .vertical)
-                            .lineLimit(3 ... 6)
-                    } else {
-                        // iOS 15 fallback
-                        TextField("Description (optional)", text: $description)
-                            .lineLimit(3)
-                    }
+                    TextField("Description (optional)", text: $description, axis: .vertical)
+                        .lineLimit(3 ... 6)
                 }
 
                 Section {

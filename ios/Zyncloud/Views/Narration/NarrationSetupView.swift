@@ -108,20 +108,7 @@ struct NarrationSetupView: View {
         } message: { _ in
             Text("This removes the audio from your server for good. It cannot be undone.")
         }
-        .alert(item: $viewModel.alertState) { state in
-            if let primaryButton = state.primaryButton,
-               let secondaryButton = state.secondaryButton
-            {
-                Alert(
-                    title: Text(state.title),
-                    message: Text(state.message),
-                    primaryButton: .default(Text(primaryButton.title), action: primaryButton.action),
-                    secondaryButton: .destructive(Text(secondaryButton.title), action: secondaryButton.action),
-                )
-            } else {
-                Alert(title: Text(state.title), message: Text(state.message))
-            }
-        }
+        .alert(state: $viewModel.alertState)
         .onAppear { viewModel.load() }
     }
 

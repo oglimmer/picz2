@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct SyncOptionsView: View {
@@ -16,14 +17,14 @@ struct SyncOptionsView: View {
     /// Step 2 — set only once step 1 was confirmed, which swaps the row for a final warning.
     ///
     /// The web app stacks two modal confirms here. On iOS the second one cannot be a second
-    /// `.alert`: this view already carries `.alert(item:)` for `alertState`, and two alert
+    /// `.alert`: this view already carries `.alert(state:)` for `alertState`, and two alert
     /// modifiers on one view fight over the same presentation slot — the later one silently
     /// wins. So the final warning is an inline armed state instead. Same two deliberate
     /// destructive taps, one presenter.
     @State private var deleteAccountArmed = false
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 // Photo Access Section
                 Section(header: Text("Permissions")) {
@@ -171,23 +172,7 @@ struct SyncOptionsView: View {
             } message: {
                 Text("This permanently deletes all your albums, all your photos, all your tags and all your settings. This action cannot be undone.")
             }
-            .alert(item: $viewModel.alertState) { alertState in
-                if let primaryButton = alertState.primaryButton,
-                   let secondaryButton = alertState.secondaryButton
-                {
-                    Alert(
-                        title: Text(alertState.title),
-                        message: Text(alertState.message),
-                        primaryButton: .destructive(Text(primaryButton.title), action: primaryButton.action),
-                        secondaryButton: .cancel(Text(secondaryButton.title), action: secondaryButton.action),
-                    )
-                } else {
-                    Alert(
-                        title: Text(alertState.title),
-                        message: Text(alertState.message),
-                    )
-                }
-            }
+            .alert(state: $viewModel.alertState)
             .onAppear {
                 if viewModel.albums.isEmpty {
                     viewModel.fetchAlbums()

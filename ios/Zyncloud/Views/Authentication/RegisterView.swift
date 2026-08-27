@@ -86,8 +86,6 @@ struct RegisterView: View {
             }
         }
         .navigationTitle("Create Account")
-        .alert(item: $viewModel.alertState) { alertState in
-            Alert(title: Text(alertState.title), message: Text(alertState.message))
-        }
+        .alert(state: $viewModel.alertState)
     }
 }

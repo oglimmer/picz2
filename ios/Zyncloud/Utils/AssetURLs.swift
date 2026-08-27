@@ -6,6 +6,16 @@ import Foundation
 /// `permitAll` — so these carry no auth and can be handed straight to an image loader or an
 /// `AVPlayer`.
 enum AssetURLs {
+    /// The grid-sized rendition.
+    static func thumbnail(for photo: Photo) -> URL? {
+        var components = URLComponents(
+            url: AppConfiguration.apiBaseURL.appendingPathComponent("api/i/\(photo.publicToken)"),
+            resolvingAgainstBaseURL: false,
+        )
+        components?.queryItems = [URLQueryItem(name: "size", value: "thumbnail")]
+        return components?.url
+    }
+
     /// A rendition sized for a full screen.
     static func image(for photo: Photo) -> URL? {
         var components = URLComponents(

@@ -1,4 +1,5 @@
 import AVKit
+import Combine
 import PhotosUI
 import SwiftUI
 
@@ -10,12 +11,17 @@ enum AlbumLayoutMode: String, CaseIterable, Identifiable {
     /// The same photos shelved by the day they were taken and the place they were taken at.
     case days
 
+    /// The album's located photos as pins on Apple Maps. Only offered when the album has one —
+    /// see ``AlbumDetailViewModel/hasLocatedPhotos``.
+    case map
+
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .grid: "Grid"
         case .days: "By Day & Place"
+        case .map: "Map"
         }
     }
 
@@ -23,6 +29,7 @@ enum AlbumLayoutMode: String, CaseIterable, Identifiable {
         switch self {
         case .grid: "square.grid.2x2"
         case .days: "calendar"
+        case .map: "map"
         }
     }
 }
@@ -76,6 +83,11 @@ struct AlbumDetailView: View {
     /// `NavigationLink` inside menu content never pushes — the menu closes and nothing happens.
     @State private var isNarrationPresented = false
 
+    /// True while the presentation — the album read the way a share-link visitor reads it — owns
+    /// the screen. A full-screen cover rather than a sheet: a presentation the album is still
+    /// visible behind is not one.
+    @State private var isPresentationPresented = false
+
     /// True while Delete Album waits for a yes. Deleting an album takes its photos with it, so
     /// it always asks first — same as the web app.
     @State private var confirmingAlbumDelete = false
@@ -116,6 +128,8 @@ struct AlbumDetailView: View {
                 arrangeByHandList
             } else if layoutMode == .days {
                 daysGallery
+            } else if layoutMode == .map, viewModel.hasLocatedPhotos {
+                albumMap
             } else {
                 photoGrid
             }
@@ -214,7 +228,7 @@ struct AlbumDetailView: View {
             BulkTagView(viewModel: viewModel)
         }
         .sheet(isPresented: $isAlbumTagsPresented) {
-            NavigationView {
+            NavigationStack {
                 AlbumTagsSettingsView(viewModel: viewModel)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
@@ -225,6 +239,9 @@ struct AlbumDetailView: View {
         }
         .sheet(isPresented: $isNarrationPresented) {
             NarrationSetupView(album: album)
+        }
+        .fullScreenCover(isPresented: $isPresentationPresented) {
+            PresentationView(album: album)
         }
         .confirmationDialog(
             "Delete album",
@@ -257,12 +274,7 @@ struct AlbumDetailView: View {
         } message: { action in
             Text(action.confirmationMessage)
         }
-        .alert(item: $viewModel.alertState) { alertState in
-            Alert(
-                title: Text(alertState.title),
-                message: Text(alertState.message),
-            )
-        }
+        .alert(state: $viewModel.alertState)
         .onAppear {
             if viewModel.photos.isEmpty {
                 viewModel.fetchPhotos()
@@ -329,13 +341,13 @@ struct AlbumDetailView: View {
 
     // MARK: - Album Menu
 
-    /// Share and Delete, the two album-wide actions the web app has. Share hands the public link
-    /// to the system share sheet; a missing token only hides the entry, because a link cannot be
-    /// invented on the phone.
+    /// The album-wide actions: how to look at it, Present, the tag and commentary screens, then
+    /// Share and Delete. Share hands the public link to the system share sheet; a missing token
+    /// only hides the entry, because a link cannot be invented on the phone.
     private var albumMenu: some View {
         Menu {
             Picker("View", selection: $layoutMode) {
-                ForEach(AlbumLayoutMode.allCases) { mode in
+                ForEach(availableLayoutModes) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
             }
@@ -346,6 +358,13 @@ struct AlbumDetailView: View {
             }
 
             Divider()
+
+            Button {
+                isPresentationPresented = true
+            } label: {
+                Label("Present", systemImage: "play.rectangle")
+            }
+            .disabled(viewModel.photos.isEmpty)
 
             Button {
                 viewModel.beginSelecting()
@@ -447,6 +466,30 @@ struct AlbumDetailView: View {
             onDelete: { pendingDelete = photo },
             onTag: { taggingPhoto = photo },
         )
+    }
+
+    // MARK: - Map
+
+    /// The album's located photos as pins.
+    ///
+    /// The layout is a reading preference kept in app storage, so it follows the user from album
+    /// to album — and an album with no located photo would open on an empty map with no Map entry
+    /// left in the picker to escape from. Hence the `hasLocatedPhotos` guard at the call site,
+    /// which mirrors the web gallery's watcher on `mapFilterAvailable`.
+    private var albumMap: some View {
+        AlbumMapView(
+            photos: viewModel.photos,
+            savedView: viewModel.savedMapView,
+            canEditView: true,
+            onSaveView: { viewModel.saveMapView($0) },
+            onClearView: { viewModel.clearMapView() },
+        )
+    }
+
+    /// Map is offered only when there is something to put on it. Grid and By Day & Place always
+    /// work — a photo with no date or place still has a trailing bucket to sit in.
+    private var availableLayoutModes: [AlbumLayoutMode] {
+        AlbumLayoutMode.allCases.filter { $0 != .map || viewModel.hasLocatedPhotos }
     }
 
     // MARK: - By Day & Place
@@ -815,7 +858,7 @@ struct PhotoDetailView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
 

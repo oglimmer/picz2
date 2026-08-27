@@ -58,9 +58,7 @@ struct NarrationLanguagesView: View {
         }
         .navigationTitle("Narration Languages")
         .navigationBarTitleDisplayMode(.inline)
-        .alert(item: $viewModel.alertState) { alertState in
-            Alert(title: Text(alertState.title), message: Text(alertState.message))
-        }
+        .alert(state: $viewModel.alertState)
         .onAppear {
             viewModel.loadLanguages()
         }

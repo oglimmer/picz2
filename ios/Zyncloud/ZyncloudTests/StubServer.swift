@@ -217,6 +217,27 @@ enum StubServer {
         await StubGate.shared.release()
     }
 
+    /// Serialises work that shares process-wide state with the stub's users but does not need
+    /// the stub itself — ``ImageCache``, which three suites read and write.
+    ///
+    /// ``StubGate`` was built for exactly this failure one layer down: it guards `URLProtocol`
+    /// interception, and nothing guarded the image cache. ``ImageReloadTests`` calls
+    /// ``ImageCache/removeAll()`` while ``ImageLoaderIsolationTests`` is asserting that a
+    /// decoded image is still cached, so that assertion failed perhaps one run in five and
+    /// always passed when the suite ran alone.
+    ///
+    /// `isolation: #isolation` for the same reason ``serving(status:body:_:)`` needs it: both
+    /// image suites are `@MainActor`, and their `work` closure must not have to leave the main
+    /// actor to get here.
+    static func holdingTheStub(
+        isolation: isolated (any Actor)? = #isolation,
+        _ work: () async -> Void,
+    ) async {
+        await StubGate.shared.acquire()
+        await work()
+        await StubGate.shared.release()
+    }
+
     /// The single request `work` made. Fails the calling test if it made none.
     static func captureOne(
         status: Int = 200,
