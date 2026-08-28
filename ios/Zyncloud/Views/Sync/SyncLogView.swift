@@ -10,6 +10,12 @@ struct SyncLogView: View {
     @EnvironmentObject private var sync: SyncCoordinator
     @StateObject private var logger = SyncLogger.shared
     @ObservedObject private var taskLog = BackgroundTaskLog.shared
+    /// Only read for the sync window, which the "In scope" explanation spells out.
+    @ObservedObject private var settings = Settings.shared
+
+    /// The open explanation sheet, if any. One `@State` for both sections: they can never be
+    /// open at once, and `sheet(item:)` re-presents correctly when the identity changes.
+    @State private var guide: StatusFieldGuide?
 
     /// "Never" is a real answer here, and the most important one to read at a glance — so it is
     /// spelled out rather than shown as an empty value.
@@ -26,7 +32,12 @@ struct SyncLogView: View {
                 // sync quietly stopping. Scheduled and run are shown separately because "iOS has
                 // not granted us time yet" and "we never asked" are different faults.
                 Section(
-                    header: Text("Current"),
+                    header: sectionHeader("Current") {
+                        guide = .current(
+                            syncLastDays: settings.syncLastDays,
+                            includesSkippedTooLarge: sync.metrics.skippedTooLarge > 0,
+                        )
+                    },
                     footer: sync.metrics.skippedTooLarge > 0
                         ? Text("Some files are larger than this server accepts, so they were not backed up. The entries below name them and their size.")
                         : Text(""),
@@ -46,7 +57,7 @@ struct SyncLogView: View {
                 }
 
                 Section(
-                    header: Text("Background Tasks"),
+                    header: sectionHeader("Background Tasks") { guide = .backgroundTasks },
                     footer: Text(taskLog.hasScheduledButNeverRun
                         ? "Scheduled, but iOS has not granted background time yet. This is normal for a while after install; if it persists for days, scheduling is broken."
                         : "iOS decides when these run. Long gaps are normal; \"never\" is not."),
@@ -81,6 +92,7 @@ struct SyncLogView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .sheet(item: $guide) { StatusFieldGuideSheet(guide: $0) }
             .navigationTitle("Sync Status")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -97,6 +109,53 @@ struct SyncLogView: View {
                 }
             }
         }
+    }
+
+    /// A section header with an ⓘ on the trailing edge. The rows below it are a dense table of
+    /// counters, and captioning each one would roughly double the height of both sections —
+    /// so the explanation is one tap away instead of always on screen.
+    private func sectionHeader(_ title: String, showGuide: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Button(action: showGuide) {
+                Image(systemName: "info.circle")
+                    .imageScale(.large)
+            }
+            // Without this the whole header behaves like one tappable row in a List.
+            .buttonStyle(.borderless)
+            .accessibilityLabel("What the \(title) values mean")
+        }
+    }
+}
+
+/// The explanation itself: one field per row, name over meaning.
+struct StatusFieldGuideSheet: View {
+    let guide: StatusFieldGuide
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(guide.fields) { field in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(field.name)
+                        .font(.headline)
+                    Text(field.text)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+            .navigationTitle(guide.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        // Medium first: the sheet is a glossary you glance at, not a page you read.
+        .presentationDetents([.medium, .large])
     }
 }
 
