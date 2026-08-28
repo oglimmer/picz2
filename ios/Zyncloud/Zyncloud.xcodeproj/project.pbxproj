@@ -12,6 +12,7 @@
 		AA2222222222222222222202 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1111111111111111111102 /* AppDelegate.swift */; };
 		AA2222222222222222222210 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA1111111111111111111110 /* Assets.xcassets */; };
 		AA2222222222222222222211 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA3333333333333333333301 /* LaunchScreen.storyboard */; };
+		AA2222222222222222222212 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA1111111111111111111111 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,6 +54,7 @@
 		AA1111111111111111111102 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		AA1111111111111111111109 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA1111111111111111111110 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AA1111111111111111111111 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA3333333333333333333302 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		AA4444444444444444444401 /* Zyncloud.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Zyncloud.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8888888888888888888801 /* ZyncloudTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZyncloudTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -145,6 +147,7 @@
 				AA1111111111111111111102 /* AppDelegate.swift */,
 				AA1111111111111111111101 /* ZyncloudApp.swift */,
 				AA1111111111111111111109 /* Info.plist */,
+				AA1111111111111111111111 /* PrivacyInfo.xcprivacy */,
 				AA1111111111111111111110 /* Assets.xcassets */,
 				AA3333333333333333333301 /* LaunchScreen.storyboard */,
 				4F525AB92EC346FA003F8EDD /* Shared */,
@@ -288,6 +291,7 @@
 			files = (
 				AA2222222222222222222210 /* Assets.xcassets in Resources */,
 				AA2222222222222222222211 /* LaunchScreen.storyboard in Resources */,
+				AA2222222222222222222212 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
