@@ -24,7 +24,10 @@ class SyncOptionsViewModel: ViewModelProtocol {
         checkPhotoAccess()
     }
 
-    private func checkPhotoAccess() {
+    /// Re-read the live status. Called from `init` and again whenever the options screen
+    /// appears or the app returns to the foreground: the user can change this in iOS Settings
+    /// without the app running, and a status read once at init goes stale the moment they do.
+    func checkPhotoAccess() {
         authStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }
 
@@ -257,18 +260,41 @@ class SyncOptionsViewModel: ViewModelProtocol {
 
     var photoAccessColor: String {
         switch authStatus {
-        case .authorized, .limited:
+        case .authorized:
             return "green"
+        // Not green. `.limited` means Photos hands us only the assets the user hand-picked,
+        // so a background sync quietly skips the rest of the library and looks like it worked.
+        case .limited, .notDetermined:
+            return "orange"
         case .denied, .restricted:
             return "red"
-        case .notDetermined:
-            return "orange"
         @unknown default:
             return "gray"
         }
     }
 
+    /// The whole Permissions section is hidden once access is *full*. Anything else is a state
+    /// the user has to act on, including `.limited` — see ``photoAccessColor``.
+    var showsPermissionsSection: Bool {
+        authStatus != .authorized
+    }
+
+    /// What the current state costs the user, in their words. `nil` when the section is hidden.
+    var photoAccessHint: String? {
+        switch authStatus {
+        case .authorized: nil
+        case .limited: "Only the photos you picked can sync. Everything else is skipped."
+        case .denied: "Zyncloud cannot see your photos, so nothing will sync."
+        case .restricted: "Photo access is blocked on this device, so nothing will sync."
+        case .notDetermined: "Zyncloud needs access to your photos before it can sync."
+        @unknown default: nil
+        }
+    }
+
+    /// Only `.notDetermined` can still be answered by the system prompt. For every other
+    /// non-authorized state `requestAuthorization` returns the same answer without showing
+    /// anything — the old button was a no-op for denied users. Those get ``canOpenSettings``.
     var canRequestAccess: Bool {
-        authStatus != .authorized && authStatus != .limited
+        authStatus == .notDetermined
     }
 }
