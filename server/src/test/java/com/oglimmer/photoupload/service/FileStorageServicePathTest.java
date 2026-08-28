@@ -38,6 +38,7 @@ class FileStorageServicePathTest {
     UserContext userContext = Mockito.mock(UserContext.class);
     PlatformTransactionManager txManager = Mockito.mock(PlatformTransactionManager.class);
     JobEnqueueService jobEnqueueService = Mockito.mock(JobEnqueueService.class);
+    SystemTagProvisioner systemTagProvisioner = Mockito.mock(SystemTagProvisioner.class);
 
     FileStorageService svc =
         new FileStorageService(
@@ -54,6 +55,7 @@ class FileStorageServicePathTest {
             userContext,
             txManager,
             jobEnqueueService,
+            systemTagProvisioner,
             Optional.empty());
 
     // Not required for this specific test, but safe to ensure directory exists

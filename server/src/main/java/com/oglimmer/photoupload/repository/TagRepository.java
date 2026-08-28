@@ -14,6 +14,10 @@ public interface TagRepository extends JpaRepository<Tag, Long> {
   // User-scoped queries
   Optional<Tag> findByUserAndName(User user, String name);
 
+  // Id-keyed variant so SystemTagProvisioner can look tags up from a throw-away transaction
+  // without dragging a User entity across persistence contexts.
+  Optional<Tag> findByUserIdAndName(Long userId, String name);
+
   Optional<Tag> findByUserAndId(User user, Long id);
 
   boolean existsByUserAndName(User user, String name);

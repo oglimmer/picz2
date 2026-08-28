@@ -46,6 +46,7 @@ class FileStorageServiceBulkTagTest {
   private ImageTagRepository imageTagRepo;
   private AlbumEnabledTagRepository albumEnabledTagRepo;
   private AlbumRepository albumRepo;
+  private SystemTagProvisioner systemTagProvisioner;
   private FileStorageService svc;
 
   private User user;
@@ -63,6 +64,7 @@ class FileStorageServiceBulkTagTest {
     imageTagRepo = Mockito.mock(ImageTagRepository.class);
     albumEnabledTagRepo = Mockito.mock(AlbumEnabledTagRepository.class);
     albumRepo = Mockito.mock(AlbumRepository.class);
+    systemTagProvisioner = Mockito.mock(SystemTagProvisioner.class);
     UserContext userContext = Mockito.mock(UserContext.class);
 
     svc =
@@ -80,6 +82,7 @@ class FileStorageServiceBulkTagTest {
             userContext,
             Mockito.mock(PlatformTransactionManager.class),
             Mockito.mock(JobEnqueueService.class),
+            systemTagProvisioner,
             Optional.empty());
 
     user = new User();
@@ -99,7 +102,9 @@ class FileStorageServiceBulkTagTest {
     when(tagRepo.findByUserAndName(user, FileStorageService.ALL_TAG))
         .thenReturn(Optional.of(allTag));
     when(tagRepo.findByUserAndName(user, FileStorageService.NO_TAG)).thenReturn(Optional.of(noTag));
-    when(tagRepo.existsByUserAndName(user, FileStorageService.NO_TAG)).thenReturn(true);
+    // no_tag is now provisioned in its own transaction and resolved by id, not re-queried.
+    when(systemTagProvisioner.ensureTag(user, FileStorageService.NO_TAG)).thenReturn(noTag.getId());
+    when(tagRepo.getReferenceById(noTag.getId())).thenReturn(noTag);
   }
 
   @Test
