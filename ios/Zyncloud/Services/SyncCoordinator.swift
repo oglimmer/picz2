@@ -15,9 +15,9 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
 
     private let photo = PhotoLibraryManager.shared
     private let uploader = Uploader.shared
-    // Phase 5 — TUS resumable uploads. Lives behind the Settings.useTus toggle AND a server-
-    // advertised capability (cachedCapabilities.tus.enabled). When either is false, drainQueue
-    // falls back to the multipart `uploader`. Both uploaders share the same onTaskFinished
+    // Phase 5 — TUS resumable uploads. Lives behind the server-advertised capability
+    // (cachedCapabilities.tus.enabled). When that is false, drainQueue falls back to the
+    // multipart `uploader`. Both uploaders share the same onTaskFinished
     // callback shape (adapted in init() below) so handleUploadFinished is path-agnostic.
     private let tusUploader = TusUploader.shared
     /// Guarded, for the same reason ``cachedApi`` is: this pair is written on the URLSession
@@ -601,8 +601,8 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
             self.metrics.uploading += batch.count
         }
 
-        // Phase 5 — pick the upload path once per batch. Both flags must be true: server
-        // advertises tus.enabled in /api/capabilities AND user opted in via Settings.useTus.
+        // Phase 5 — pick the upload path once per batch, from the server-advertised
+        // tus.enabled in /api/capabilities.
         // Decision is made per-batch (not per-asset) so a mid-batch capability flip can't
         // produce a half-multipart-half-TUS batch with race-prone state.
         let useTus = shouldUseTus()
@@ -662,8 +662,8 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
 
     // MARK: - Phase 5 — Capabilities cache + path selection
 
-    /// Returns true iff the user has opted in (Settings.useTus) AND the server advertises
-    /// tus.enabled (cached /api/capabilities). When capabilities haven't loaded yet — the
+    /// Returns true iff the server advertises tus.enabled (cached
+    /// /api/capabilities). When capabilities haven't loaded yet — the
     /// first drainQueue after a fresh launch — this returns false, and the batch goes via
     /// the multipart path. The next refresh after ensureCapabilitiesLoaded completes flips
     /// the answer; subsequent batches use TUS.
@@ -682,10 +682,7 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     }
 
     private func shouldUseTus() -> Bool {
-        UploadRouting.selectPath(
-            userOptedIn: Settings.shared.snapshot.useTus,
-            capabilities: cachedCapabilities
-        ) == .tus
+        UploadRouting.selectPath(capabilities: cachedCapabilities) == .tus
     }
 
     /// Resolve the server-side asset id for a TUS upload, given the client's contentId

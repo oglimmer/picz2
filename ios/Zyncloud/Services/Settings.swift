@@ -30,14 +30,13 @@ final class Settings: ObservableObject, @unchecked Sendable {
         var albumId: Int
         var selectedAlbumName: String?
         var syncLastDays: Int
-        var useTus: Bool
         var tusMaxUploadBytes: Int64
     }
 
     private let snapshotLock = NSLock()
     private var storedSnapshot = Snapshot(
         wifiOnly: true, lastSyncDate: nil, albumId: 1, selectedAlbumName: nil,
-        syncLastDays: 3, useTus: true, tusMaxUploadBytes: 0,
+        syncLastDays: 3, tusMaxUploadBytes: 0,
     )
 
     /// The settings as they stood a moment ago. Safe from any thread.
@@ -58,7 +57,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
             albumId: albumId,
             selectedAlbumName: selectedAlbumName,
             syncLastDays: syncLastDays,
-            useTus: useTus,
             tusMaxUploadBytes: tusMaxUploadBytes,
         )
         snapshotLock.unlock()
@@ -99,16 +97,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
         }
     }
 
-    // Phase 5 — TUS resumable uploads. Hidden TestFlight toggle. SyncCoordinator picks the
-    // upload path by combining this flag with /api/capabilities.tus.enabled returned from the
-    // server. R2 lights up server-side capabilities; flipping this flag opts a build into TUS.
-    @Published var useTus: Bool {
-        didSet {
-            defaults.set(useTus, forKey: Keys.useTus)
-            refreshSnapshot()
-        }
-    }
-
     /// Last `tus.maxSize` the server advertised, in bytes; 0 means "never asked yet".
     ///
     /// Persisted rather than kept only in ``SyncCoordinator/cachedCapabilities`` because the
@@ -132,7 +120,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
         static let albumId = "settings.albumId"
         static let selectedAlbumName = "settings.selectedAlbumName"
         static let syncLastDays = "settings.syncLastDays"
-        static let useTus = "settings.useTus"
     }
 
     /// `defaults` is injectable purely so tests can drive a scratch suite instead of the
@@ -144,10 +131,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
         albumId = defaults.object(forKey: Keys.albumId) as? Int ?? 1
         selectedAlbumName = defaults.object(forKey: Keys.selectedAlbumName) as? String
         syncLastDays = defaults.object(forKey: Keys.syncLastDays) as? Int ?? 3
-        // R3 — TUS resumable uploads are the default for new installs (and any existing user
-        // who never touched the toggle). UserDefaults.object returns nil iff the key was never
-        // written, so a user who explicitly toggled OFF still gets `false` and is respected.
-        useTus = defaults.object(forKey: Keys.useTus) as? Bool ?? true
         tusMaxUploadBytes = (defaults.object(forKey: Keys.tusMaxUploadBytes) as? NSNumber)?.int64Value ?? 0
         refreshSnapshot()
     }
@@ -158,7 +141,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
         defaults.removeObject(forKey: Keys.albumId)
         defaults.removeObject(forKey: Keys.selectedAlbumName)
         defaults.removeObject(forKey: Keys.syncLastDays)
-        defaults.removeObject(forKey: Keys.useTus)
         defaults.removeObject(forKey: Keys.tusMaxUploadBytes)
 
         // Reset to default values
@@ -167,7 +149,6 @@ final class Settings: ObservableObject, @unchecked Sendable {
         albumId = 1
         selectedAlbumName = nil
         syncLastDays = 3
-        useTus = true  // R3 default
         tusMaxUploadBytes = 0  // unknown until the next /api/capabilities
     }
 }

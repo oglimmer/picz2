@@ -30,45 +30,27 @@ struct UploadRoutingTests {
 
     // MARK: - Path selection: the full truth table
 
-    /// Toggle × capability × not-yet-loaded. TUS requires *both* sides to say yes; every other
-    /// combination is multipart.
+    /// The server alone decides. There is no client-side opt-out any more.
     @Test(arguments: [
-        (true, true, UploadPath.tus),
-        (true, false, UploadPath.multipart),
-        (false, true, UploadPath.multipart),
-        (false, false, UploadPath.multipart),
+        (true, UploadPath.tus),
+        (false, UploadPath.multipart),
     ])
-    func pathRequiresBothTheToggleAndTheServer(
-        optedIn: Bool, serverEnabled: Bool, expected: UploadPath
-    ) {
-        #expect(
-            UploadRouting.selectPath(userOptedIn: optedIn, capabilities: caps(tusEnabled: serverEnabled))
-                == expected
-        )
+    func pathFollowsTheServerCapability(serverEnabled: Bool, expected: UploadPath) {
+        #expect(UploadRouting.selectPath(capabilities: caps(tusEnabled: serverEnabled)) == expected)
     }
 
     /// The third state, and the one most likely to be lost in a refactor: on the first drain
     /// after a cold launch nothing has been fetched yet. That is "we have not asked", not
     /// "the server said no" — but it still goes multipart rather than stalling the batch.
     @Test func capabilitiesNotYetLoadedFallsBackToMultipart() {
-        #expect(UploadRouting.selectPath(userOptedIn: true, capabilities: nil) == .multipart)
-    }
-
-    @Test func capabilitiesNotYetLoadedIsMultipartEvenWithTheToggleOff() {
-        #expect(UploadRouting.selectPath(userOptedIn: false, capabilities: nil) == .multipart)
-    }
-
-    /// The opt-in is checked first and is sufficient on its own to refuse — a user who turned
-    /// TUS off must not be put back on it by a server that advertises it.
-    @Test func theUserOptOutBeatsAnEnabledServer() {
-        #expect(UploadRouting.selectPath(userOptedIn: false, capabilities: caps(tusEnabled: true)) == .multipart)
+        #expect(UploadRouting.selectPath(capabilities: nil) == .multipart)
     }
 
     /// Only `tus.enabled` decides. A server that advertises TUS with an odd size limit is still
     /// a server that advertises TUS — size handling belongs to the uploader, not the router.
     @Test func theAdvertisedSizeLimitDoesNotAffectRouting() {
-        #expect(UploadRouting.selectPath(userOptedIn: true, capabilities: caps(tusEnabled: true, maxSize: 0)) == .tus)
-        #expect(UploadRouting.selectPath(userOptedIn: true, capabilities: caps(tusEnabled: false, maxSize: .max)) == .multipart)
+        #expect(UploadRouting.selectPath(capabilities: caps(tusEnabled: true, maxSize: 0)) == .tus)
+        #expect(UploadRouting.selectPath(capabilities: caps(tusEnabled: false, maxSize: .max)) == .multipart)
     }
 
     // MARK: - Background session routing
