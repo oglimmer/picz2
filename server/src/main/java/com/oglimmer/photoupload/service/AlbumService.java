@@ -47,6 +47,7 @@ public class AlbumService {
   private final FileStorageService fileStorageService;
   private final UserContext userContext;
   private final AlbumMapper albumMapper;
+  private final SystemTagProvisioner systemTagProvisioner;
 
   @Transactional
   public AlbumInfo createAlbum(String name, String description) {
@@ -485,21 +486,16 @@ public class AlbumService {
     return nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
   }
 
+  /**
+   * Same race-safe path as the upload flow: creation happens in its own transaction so a duplicate
+   * key from a concurrent request cannot roll this album duplication back. See {@link
+   * SystemTagProvisioner}.
+   */
   private Tag ensureNoTagExists(User user) {
-    return tagRepository
-        .findByUserAndName(user, FileStorageService.NO_TAG)
-        .orElseGet(
-            () -> {
-              Tag tag = new Tag();
-              tag.setUser(user);
-              tag.setName(FileStorageService.NO_TAG);
-              tag = tagRepository.save(tag);
-              log.info(
-                  "Created special '{}' tag for user: {}",
-                  FileStorageService.NO_TAG,
-                  user.getEmail());
-              return tag;
-            });
+    Long noTagId = systemTagProvisioner.ensureTag(user, FileStorageService.NO_TAG);
+    // Reference, not a lookup: a concurrently committed row is invisible to this transaction's
+    // REPEATABLE READ snapshot, but the FK write only needs the id.
+    return tagRepository.getReferenceById(noTagId);
   }
 
   private AlbumInfo convertToAlbumInfo(Album album) {

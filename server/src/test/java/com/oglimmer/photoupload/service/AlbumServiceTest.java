@@ -40,6 +40,7 @@ class AlbumServiceTest {
   @Mock AlbumEnabledTagRepository albumEnabledTagRepository;
   @Mock FileStorageService fileStorageService;
   @Mock UserContext userContext;
+  @Mock SystemTagProvisioner systemTagProvisioner;
 
   @InjectMocks AlbumService service;
 
@@ -97,8 +98,9 @@ class AlbumServiceTest {
     when(albumRepository.findByUserAndName(eq(testUser), anyString())).thenReturn(Optional.empty());
     when(albumRepository.save(any(Album.class))).thenAnswer(inv -> inv.getArgument(0));
     when(albumEnabledTagRepository.findByAlbumId(1L)).thenReturn(List.of());
-    when(tagRepository.findByUserAndName(eq(testUser), anyString()))
-        .thenReturn(Optional.of(new Tag()));
+    // no_tag is provisioned in its own transaction now and resolved by id, not re-queried.
+    when(systemTagProvisioner.ensureTag(eq(testUser), anyString())).thenReturn(11L);
+    when(tagRepository.getReferenceById(11L)).thenReturn(new Tag());
 
     FileMetadata original = new FileMetadata();
     original.setId(7L);

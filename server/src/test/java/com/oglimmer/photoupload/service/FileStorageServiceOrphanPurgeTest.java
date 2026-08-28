@@ -65,6 +65,7 @@ class FileStorageServiceOrphanPurgeTest {
             mock(UserContext.class),
             mock(PlatformTransactionManager.class),
             mock(JobEnqueueService.class),
+            mock(SystemTagProvisioner.class),
             Optional.of(storage));
   }
 

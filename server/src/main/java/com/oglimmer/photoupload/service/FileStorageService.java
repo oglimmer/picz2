@@ -114,6 +114,7 @@ public class FileStorageService {
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
   private final JobEnqueueService jobEnqueueService;
+  private final SystemTagProvisioner systemTagProvisioner;
   // Optional: present iff storage.s3.enabled=true. When present, the upload path PUTs the body
   // directly to MinIO and stores an S3 key in file_path; the local PVC is used only for Spring's
   // transient .multipart-tmp staging (auto-cleaned per request) and per-job processing scratch.
@@ -133,6 +134,7 @@ public class FileStorageService {
       UserContext userContext,
       PlatformTransactionManager transactionManager,
       JobEnqueueService jobEnqueueService,
+      SystemTagProvisioner systemTagProvisioner,
       Optional<ObjectStorageService> objectStorage) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
@@ -148,6 +150,7 @@ public class FileStorageService {
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.jobEnqueueService = jobEnqueueService;
+    this.systemTagProvisioner = systemTagProvisioner;
     this.objectStorage = objectStorage;
   }
 
@@ -341,6 +344,13 @@ public class FileStorageService {
     final String finalNewFilename = newFilename;
     final String finalContentType = contentType;
     final String finalStoredPath = storedPath;
+    // Commit no_tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
+    // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
+    // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
+    // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
+    // Provisioning first means this transaction's snapshot always contains the tag it references.
+    final Long noTagId = ensureNoTagExists(currentUser);
+
     FileInfo result =
         transactionTemplate.execute(
             status -> {
@@ -368,8 +378,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              ensureNoTagExists(currentUser);
-              addNoTagToFile(saved, currentUser);
+              addNoTagToFile(saved, noTagId);
               // Same TX as the metadata insert → either both visible or neither.
               jobEnqueueService.enqueue(saved.getId());
               return convertToFileInfoWithId(saved);
@@ -441,6 +450,13 @@ public class FileStorageService {
     final String finalContentType = contentType;
     final String finalNewFilename = newFilename;
     final String finalOriginalKey = originalKey;
+    // Commit no_tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
+    // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
+    // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
+    // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
+    // Provisioning first means this transaction's snapshot always contains the tag it references.
+    final Long noTagId = ensureNoTagExists(currentUser);
+
     FileInfo result =
         transactionTemplate.execute(
             status -> {
@@ -467,8 +483,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              ensureNoTagExists(currentUser);
-              addNoTagToFile(saved, currentUser);
+              addNoTagToFile(saved, noTagId);
               jobEnqueueService.enqueue(saved.getId(), JobType.PROCESS);
               return convertToFileInfo(saved);
             });
@@ -981,8 +996,7 @@ public class FileStorageService {
 
     // If no other tags remain, restore no_tag
     if (otherTagsCount == 0) {
-      ensureNoTagExists(currentUser);
-      addNoTagToFile(metadata, currentUser);
+      addNoTagToFile(metadata, ensureNoTagExists(currentUser));
     }
 
     // Return updated tags list
@@ -1118,13 +1132,9 @@ public class FileStorageService {
 
   /** Counterpart of {@link #removeTagRowFromFetchedFile} for restoring {@code no_tag}. */
   private void addNoTagToFetchedFile(FileMetadata metadata, User user) {
-    ensureNoTagExists(user);
-    Tag noTag =
-        tagRepository
-            .findByUserAndName(user, NO_TAG)
-            .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", NO_TAG));
-    if (metadata.getImageTags().stream()
-        .anyMatch(it -> it.getTag().getId().equals(noTag.getId()))) {
+    Long noTagId = ensureNoTagExists(user);
+    Tag noTag = tagRepository.getReferenceById(noTagId);
+    if (metadata.getImageTags().stream().anyMatch(it -> it.getTag().getId().equals(noTagId))) {
       return;
     }
     ImageTag imageTag = new ImageTag();
@@ -1146,12 +1156,7 @@ public class FileStorageService {
     if (!isSystemTag(tagName)) {
       throw new ResourceNotFoundException("Tag", "name", tagName);
     }
-    Tag tag = new Tag();
-    tag.setUser(user);
-    tag.setName(tagName);
-    Tag saved = tagRepository.save(tag);
-    log.info("Created special '{}' tag for user: {}", tagName, user.getEmail());
-    return saved;
+    return tagRepository.getReferenceById(systemTagProvisioner.ensureTag(user, tagName));
   }
 
   private static boolean isSystemTag(String tagName) {
@@ -1364,29 +1369,22 @@ public class FileStorageService {
   }
 
   /**
-   * Ensure the special "no_tag" tag exists for the current user. Creates it if it doesn't exist.
+   * Ensure the special "no_tag" tag exists for the current user, and return its id. Creation runs
+   * in its own transaction (see {@link SystemTagProvisioner}) so that two concurrent uploads by a
+   * brand-new user cannot roll each other's file_metadata insert back.
    */
-  private void ensureNoTagExists(User user) {
-    if (!tagRepository.existsByUserAndName(user, NO_TAG)) {
-      Tag noTag = new Tag();
-      noTag.setUser(user);
-      noTag.setName(NO_TAG);
-      tagRepository.save(noTag);
-      log.info("Created special '{}' tag for user: {}", NO_TAG, user.getEmail());
-    }
+  private Long ensureNoTagExists(User user) {
+    return systemTagProvisioner.ensureTag(user, NO_TAG);
   }
 
   /** Add the "no_tag" tag to a file (without any checks or side effects). */
-  private void addNoTagToFile(FileMetadata metadata, User user) {
-    Tag noTag =
-        tagRepository
-            .findByUserAndName(user, NO_TAG)
-            .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", NO_TAG));
+  private void addNoTagToFile(FileMetadata metadata, Long noTagId) {
+    // getReferenceById, not a fresh lookup: the row may have been committed by a concurrent
+    // request after this transaction took its REPEATABLE READ snapshot, so a SELECT could miss it.
+    Tag noTag = tagRepository.getReferenceById(noTagId);
 
     // Check if no_tag already exists for this file
-    if (imageTagRepository
-        .findByFileMetadataIdAndTagId(metadata.getId(), noTag.getId())
-        .isEmpty()) {
+    if (imageTagRepository.findByFileMetadataIdAndTagId(metadata.getId(), noTagId).isEmpty()) {
       ImageTag imageTag = new ImageTag();
       imageTag.setFileMetadata(metadata);
       imageTag.setTag(noTag);
