@@ -3,7 +3,7 @@ import Photos
 import os
 
 /// Phase 5 — TUS resumable uploads. Drop-in alternative to ``Uploader`` selected at runtime by
-/// ``SyncCoordinator`` based on ``Settings/useTus`` and the server-advertised capabilities
+/// ``SyncCoordinator`` based on the server-advertised capabilities
 /// (``APIClient/fetchCapabilities``).
 ///
 /// V1 shipped a single PATCH of the whole file from offset 0. Traefik's 60s `readTimeout`

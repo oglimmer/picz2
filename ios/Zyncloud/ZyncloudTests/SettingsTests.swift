@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import Zyncloud
 
-/// §6 step 7 — the documented `useTus` "never written vs explicitly false" behaviour, plus the
-/// rest of the defaults. Each case drives its own `UserDefaults` suite.
+/// §6 step 7 — the persisted settings defaults, and that `clear()` restores them.
+/// Each case drives its own `UserDefaults` suite.
 struct SettingsTests {
     private func withScratchDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         let name = "test.settings.\(UUID().uuidString)"
@@ -12,42 +12,7 @@ struct SettingsTests {
         try body(defaults)
     }
 
-    // MARK: - useTus
-
-    /// R3: TUS is the default for new installs and for anyone who never touched the toggle.
-    @Test func useTusDefaultsToTrueWhenTheKeyWasNeverWritten() {
-        withScratchDefaults { defaults in
-            #expect(Settings(defaults: defaults).useTus)
-        }
-    }
-
-    /// The distinction the comment in `Settings.init` is about: `object(forKey:)` returns nil
-    /// only when the key was never written, so an explicit `false` is respected rather than
-    /// being overwritten by the default. A `bool(forKey:)` here would silently force TUS on.
-    @Test func anExplicitFalseIsRespectedRatherThanTreatedAsUnset() {
-        withScratchDefaults { defaults in
-            defaults.set(false, forKey: "settings.useTus")
-            #expect(!Settings(defaults: defaults).useTus)
-        }
-    }
-
-    @Test func anExplicitTrueIsAlsoHonoured() {
-        withScratchDefaults { defaults in
-            defaults.set(true, forKey: "settings.useTus")
-            #expect(Settings(defaults: defaults).useTus)
-        }
-    }
-
-    @Test func togglingUseTusOffPersists() {
-        withScratchDefaults { defaults in
-            let settings = Settings(defaults: defaults)
-            settings.useTus = false
-
-            #expect(!Settings(defaults: defaults).useTus)
-        }
-    }
-
-    // MARK: - Other defaults
+    // MARK: - Defaults
 
     @Test func freshInstallDefaults() {
         withScratchDefaults { defaults in
@@ -96,7 +61,6 @@ struct SettingsTests {
             settings.syncLastDays = 30
             settings.selectedAlbumName = "Holiday"
             settings.lastSyncDate = Date()
-            settings.useTus = false
 
             settings.clear()
 
@@ -105,20 +69,17 @@ struct SettingsTests {
             #expect(settings.syncLastDays == 3)
             #expect(settings.selectedAlbumName == nil)
             #expect(settings.lastSyncDate == nil)
-            #expect(settings.useTus)
         }
     }
 
     @Test func clearedValuesSurviveARestart() {
         withScratchDefaults { defaults in
             let settings = Settings(defaults: defaults)
-            settings.useTus = false
             settings.albumId = 42
 
             settings.clear()
 
             let reloaded = Settings(defaults: defaults)
-            #expect(reloaded.useTus)
             #expect(reloaded.albumId == 1)
         }
     }
@@ -133,10 +94,10 @@ struct SettingsTests {
             let settings = Settings(defaults: defaults)
             settings.clear()
 
-            #expect(defaults.object(forKey: "settings.useTus") != nil)
             #expect(defaults.object(forKey: "settings.wifiOnly") != nil)
+            #expect(defaults.object(forKey: "settings.syncLastDays") != nil)
             // ...and the value written is the default, so behaviour is unaffected.
-            #expect(Settings(defaults: defaults).useTus)
+            #expect(Settings(defaults: defaults).wifiOnly)
         }
     }
 }
