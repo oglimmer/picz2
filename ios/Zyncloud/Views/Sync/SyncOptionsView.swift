@@ -1,8 +1,13 @@
 import Combine
 import SwiftUI
+import UIKit
 
 struct SyncOptionsView: View {
     @StateObject private var viewModel = SyncOptionsViewModel()
+    /// Photo access can be changed in iOS Settings while the app sits in the background, so the
+    /// status is re-read on every return to `.active` as well as on first appearance.
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     /// Observed directly, not reached through `sync.settings` (§5.5).
     ///
     /// `Settings` is an `ObservableObject` held inside another one. Mutating a property of the
@@ -26,18 +31,34 @@ struct SyncOptionsView: View {
     var body: some View {
         NavigationStack {
             List {
-                // Photo Access Section
-                Section(header: Text("Permissions")) {
-                    HStack {
-                        Text("Photo Access")
-                        Spacer()
-                        Text(viewModel.photoAccessStatusText)
-                            .foregroundColor(viewModel.photoAccessColor == "green" ? .green : (viewModel.photoAccessColor == "red" ? .red : .orange))
-                    }
+                // Photo Access Section — shown only while there is something to fix. Full
+                // access is the steady state and needs no row; `.limited` is *not* full access
+                // and stays visible, because the cost of it is invisible otherwise.
+                if viewModel.showsPermissionsSection {
+                    Section(header: Text("Permissions")) {
+                        HStack {
+                            Text("Photo Access")
+                            Spacer()
+                            Text(viewModel.photoAccessStatusText)
+                                .foregroundColor(viewModel.photoAccessColor == "green" ? .green : (viewModel.photoAccessColor == "red" ? .red : .orange))
+                        }
 
-                    if viewModel.canRequestAccess {
-                        Button("Request Access") {
-                            viewModel.requestPhotoAccess()
+                        if let hint = viewModel.photoAccessHint {
+                            Text(hint)
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if viewModel.canRequestAccess {
+                            Button("Request Access") {
+                                viewModel.requestPhotoAccess()
+                            }
+                        } else if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                            // Denied, restricted and limited cannot be re-prompted in-app; the
+                            // only way out is the system settings page for this app.
+                            Button("Open Settings") {
+                                openURL(settingsURL)
+                            }
                         }
                     }
                 }
@@ -162,8 +183,14 @@ struct SyncOptionsView: View {
             }
             .alert(state: $viewModel.alertState)
             .onAppear {
+                viewModel.checkPhotoAccess()
                 if viewModel.albums.isEmpty {
                     viewModel.fetchAlbums()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    viewModel.checkPhotoAccess()
                 }
             }
         }
