@@ -121,8 +121,12 @@ spec:
           value: {{ required "apns.keyId is required when apns.enabled" .Values.apns.keyId | quote }}
         - name: APNS_TEAM_ID
           value: {{ required "apns.teamId is required when apns.enabled" .Values.apns.teamId | quote }}
+        # required, not defaulted: `helm upgrade --reuse-values` bases on the previous release's
+        # values and does NOT pick up new defaults from the chart, so the first upgrade that
+        # turned apns on shipped an empty topic — and APNs rejects every push without one, while
+        # the api still logs a happy "client initialized". Fail the render instead.
         - name: APNS_TOPIC
-          value: {{ .Values.apns.topic | quote }}
+          value: {{ required "apns.topic is required when apns.enabled (the app's bundle id, e.g. com.oglimmer.photosync) — note that --reuse-values does not supply the chart default" .Values.apns.topic | quote }}
         - name: APNS_PRODUCTION
           value: {{ .Values.apns.production | default false | quote }}
         - name: APNS_PRIVATE_KEY
