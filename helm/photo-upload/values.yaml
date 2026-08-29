@@ -255,6 +255,28 @@ objectStorage:
 #   * tus.enabled       — manifests rendered + api-side hook controller wired.
 #   * tus.advertised    — what /api/capabilities reports to clients. R1 ships enabled=true,
 #                         advertised=false; R2 flips advertised=true.
+# Apple Push Notification service: tells the iOS app about new photos and newly published albums.
+# Disabled by default, and off is a supported state — the api then logs once and drops every push,
+# and e-mail notifications are unaffected.
+#
+# The signing key is the body of the downloaded AuthKey_XXXX.p8 and MUST be supplied out of band:
+#   --set-file apns.privateKey=AuthKey_XXXXXXXXXX.p8
+# It used to be committed to the repo and baked into the JAR, which meant it could not be rotated
+# without a rebuild and could not be kept out of the image at all.
+apns:
+  enabled: false
+  # Body of the .p8 file, PEM armour and all. Never commit a real key — use --set-file.
+  privateKey: ""
+  # Key ID of the APNs key from the Apple Developer portal (10 chars). Not a secret.
+  keyId: ""
+  # Apple Developer Team ID (10 chars). Not a secret.
+  teamId: ""
+  # The app's bundle id, which APNs calls the topic.
+  topic: "com.oglimmer.photosync"
+  # false talks to Apple's sandbox, which is what a debug build of the app registers against.
+  # A TestFlight or App Store build only receives pushes with this set to true.
+  production: false
+
 # Apple Maps (MapKit JS) for the gallery's map filter. Disabled by default: without an Apple
 # Developer account there is no key to sign tokens with, and /api/capabilities then reports
 # maps.enabled=false so the UI hides the filter entirely.

@@ -12,16 +12,15 @@ import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.DeviceToken;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
 @Profile(Profiles.API)
@@ -42,52 +41,57 @@ public class ApnsService {
       return;
     }
 
+    if (!apnsConfig.isConfigured()) {
+      log.info(
+          "APNs not configured (app.apns.private-key / key-path, key-id, team-id) — "
+              + "push notifications will be skipped");
+      return;
+    }
+
     try {
-      File p8File = getKeyFile(apnsConfig.getKeyPath());
       ApnsClient client =
           new ApnsClientBuilder()
               .setApnsServer(
                   apnsConfig.isProduction()
                       ? ApnsClientBuilder.PRODUCTION_APNS_HOST
                       : ApnsClientBuilder.DEVELOPMENT_APNS_HOST)
-              .setSigningKey(
-                  ApnsSigningKey.loadFromPkcs8File(
-                      p8File, apnsConfig.getTeamId(), apnsConfig.getKeyId()))
+              .setSigningKey(loadSigningKey())
               .build();
 
       this.apnsClient = client;
       log.info(
-          "APNs client initialized for {} environment",
-          apnsConfig.isProduction() ? "PRODUCTION" : "DEVELOPMENT");
+          "APNs client initialized for {} environment (keyId={})",
+          apnsConfig.isProduction() ? "PRODUCTION" : "DEVELOPMENT",
+          apnsConfig.getKeyId());
     } catch (Exception e) {
-      log.error("Failed to initialize APNs client", e);
+      // A bad key disables push, it does not stop the pod: nothing else in the api depends on it,
+      // and a boot loop over a notification channel would take the whole gallery down with it.
+      log.error("Failed to initialize APNs client — push notifications are off", e);
     }
   }
 
-  private File getKeyFile(String keyPath) throws IOException {
-    File file = new File(keyPath);
-
-    // If it's an absolute path and exists, use it directly
-    if (file.isAbsolute() && file.exists()) {
-      return file;
-    }
-
-    // Otherwise, try to load from classpath
-    Resource resource = new ClassPathResource(keyPath);
-    if (resource.exists()) {
-      // For classpath resources in JAR files, we need to copy to a temp file
-      if (!resource.isFile()) {
-        Path tempFile = Files.createTempFile("apns-key-", ".p8");
-        Files.copy(
-            resource.getInputStream(), tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        tempFile.toFile().deleteOnExit();
-        return tempFile.toFile();
+  /**
+   * The signing key, from the secret if there is one, else from a file on disk.
+   *
+   * <p>The PEM body wins because that is how production supplies it — an env var out of a
+   * Kubernetes secret, so the key never enters the image and can be rotated without a rebuild.
+   * {@code key-path} exists for local development, where the {@code .p8} sits gitignored beside the
+   * MapKit key. Nothing is read from the classpath any more; the key is no longer in the JAR.
+   */
+  private ApnsSigningKey loadSigningKey() throws Exception {
+    String pem = apnsConfig.getPrivateKey();
+    if (!pem.isBlank()) {
+      try (InputStream in = new ByteArrayInputStream(pem.getBytes(StandardCharsets.UTF_8))) {
+        return ApnsSigningKey.loadFromInputStream(
+            in, apnsConfig.getTeamId(), apnsConfig.getKeyId());
       }
-      return resource.getFile();
     }
 
-    // If not found anywhere, throw exception
-    throw new IOException("APNs key file not found: " + keyPath);
+    File file = new File(apnsConfig.getKeyPath());
+    if (!file.isFile()) {
+      throw new IOException("APNs key file not found: " + apnsConfig.getKeyPath());
+    }
+    return ApnsSigningKey.loadFromPkcs8File(file, apnsConfig.getTeamId(), apnsConfig.getKeyId());
   }
 
   @PreDestroy
