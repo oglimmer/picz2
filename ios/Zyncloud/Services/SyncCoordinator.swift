@@ -14,6 +14,11 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     @Published var settings = Settings.shared
 
     private let photo = PhotoLibraryManager.shared
+    /// Tells us whether uploads may run at all. Consulted in ``drainQueue()`` rather than
+    /// anywhere else: that is the single door every export and every byte goes through, so
+    /// gating it there is enough to stop the work — and to stop the -1009 errors that Wi‑Fi
+    /// Only used to produce on cellular.
+    private let network = NetworkMonitor.shared
     private let uploader = Uploader.shared
     // Phase 5 — TUS resumable uploads. Lives behind the server-advertised capability
     // (cachedCapabilities.tus.enabled). When that is false, drainQueue falls back to the
@@ -75,6 +80,9 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
         /// Assets held back because they exceed the server's cap. Shown on the Sync tab: a
         /// backup with a silent hole in it is worse than one that says which files are missing.
         var skippedTooLarge: Int = 0
+        /// Why uploads are not running, or nil when they are. Shown on the Status tab so a
+        /// queue that is deliberately standing still does not read as a stuck one.
+        var uploadPause: UploadPause?
     }
 
     private var syncQueue = DispatchQueue(label: "com.oglimmer.photosync.sync", qos: .utility)
@@ -90,6 +98,11 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     // queue slot forever. The give-up rule lives in ExportRetryPolicy so it can be tested
     // without standing up a coordinator. Touched only on syncQueue.
     private var exportRetryPolicy = ExportRetryPolicy()
+
+    /// Whether ``drainQueue()`` is currently holding the queue back for the network. Kept so
+    /// the pause is logged once per pause instead of once per drain — drainQueue is called on
+    /// every enqueue and every finished upload. Touched only on syncQueue.
+    private var pausedForNetwork = false
 
     /// Destination album for assets the user picked by hand on an album screen, keyed by local
     /// identifier. Everything absent from this map goes wherever the server's target-album
@@ -110,7 +123,36 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     /// new batch starts. Main queue only.
     @Published private(set) var albumUploadsRejectedAsDuplicate: [Int: [String]] = [:]
 
+    /// Holds the ``Settings/wifiOnly`` subscription below. Set up in `init`, not `start()`,
+    /// which runs again on every foreground and would stack duplicate subscriptions.
+    private var cancellables = Set<AnyCancellable>()
+
     private init() {
+        // Watch the link, and drain again the moment it becomes usable. Without this the queue
+        // would sit paused until the next enqueue or the next background slot, which on a phone
+        // that just walked into Wi-Fi range can be a long time.
+        //
+        // In `init` rather than in ``start()`` because a background launch never calls
+        // ``start()`` — see the note in `AppDelegate` — and background runs are exactly where
+        // the Wi-Fi-Only-on-cellular failures were logged.
+        network.onChange = { [weak self] _ in
+            guard let self else { return }
+            self.syncQueue.async { self.drainQueue() }
+        }
+        network.start()
+
+        // Turning Wi‑Fi Only off is the user saying "send it over cellular, now". Nothing else
+        // would call drainQueue until the next enqueue or background slot, so the toggle would
+        // appear to do nothing for minutes. `dropFirst` skips the value Combine replays on
+        // subscribe, which is not a change.
+        Settings.shared.$wifiOnly
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.syncQueue.async { self.drainQueue() }
+            }
+            .store(in: &cancellables)
+
         // Route actual upload completions through the coordinator so we can
         // free a slot, drain the next upload, and re-enqueue 503s with backoff.
         uploader.onTaskFinished = { [weak self] assetId, outcome in
@@ -588,7 +630,40 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
         DispatchQueue.main.async { self.metrics.queued = queued }
     }
 
+    /// Whether uploads may start, and the bookkeeping that goes with the answer.
+    ///
+    /// Returns false to hold the queue as it is — nothing is dequeued, nothing is exported and
+    /// nothing is marked failed, so the whole batch simply resumes later. The log line is
+    /// written once per pause, and only while something is actually waiting: "paused" on an
+    /// empty queue describes no held-back work and is pure noise.
+    ///
+    /// syncQueue only, like ``pausedForNetwork`` and ``queue``.
+    private func networkGateIsOpen() -> Bool {
+        let pause = network.pause(wifiOnly: settings.snapshot.wifiOnly)
+        // Only on a real change: drainQueue runs on every enqueue and every finished upload,
+        // and an unconditional write here would re-render the Status tab each time.
+        DispatchQueue.main.async {
+            if self.metrics.uploadPause != pause { self.metrics.uploadPause = pause }
+        }
+
+        guard let pause else {
+            if pausedForNetwork {
+                pausedForNetwork = false
+                SyncLogger.shared.logUploadsResumed()
+            }
+            return true
+        }
+
+        if !pausedForNetwork, queue.pendingCount > 0 {
+            pausedForNetwork = true
+            SyncLogger.shared.logUploadsPaused(pause)
+        }
+        return false
+    }
+
     private func drainQueue() {
+        guard networkGateIsOpen() else { return }
+
         // Only launch enough uploads to fill the concurrency cap. New uploads
         // are handed off one-per-completion (see handleUploadFinished) so the
         // server never sees more than the queue's maxInFlight at once.
