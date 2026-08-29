@@ -173,8 +173,17 @@ app:
   mail:
     enabled: "${MAIL_ENABLED:true}"
   apns:
+    # Push notifications to the iOS app (new photos, newly published albums). The signing key is
+    # supplied the same way the MapKit one is — as the .p8 body from a secret, never from the JAR.
+    # Leave the key unset to disable: the service then logs once and drops every push, which is
+    # the normal state for local dev.
     enabled: "${APNS_ENABLED:true}"
-    key-path: "${APNS_KEY_PATH:AuthKey_W4CMQFDV9D.p8}"
+    # Body of the AuthKey_XXXX.p8 file. Production injects it from the Kubernetes secret.
+    private-key: "${APNS_PRIVATE_KEY:}"
+    # Local-dev alternative: a filesystem path to the same .p8, which sits gitignored at the repo
+    # root beside the MapKit key. Ignored when private-key is set.
+    key-path: "${APNS_KEY_PATH:}"
+    # Identifiers, not secrets — they name the key, they cannot sign with it.
     key-id: "${APNS_KEY_ID:W4CMQFDV9D}"
     team-id: "${APNS_TEAM_ID:SBFZ9G94BG}"
     topic: "${APNS_TOPIC:com.oglimmer.photosync}"

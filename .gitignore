@@ -103,6 +103,8 @@ frontend/public/build-info.json
 
 gitleaks-report.json
 
-# MapKit / APNs signing keys dropped in the repo root while wiring up a key.
-# The APNs key under server/src/main/resources is tracked deliberately; stray ones are not.
-/AuthKey_*.p8
+# Apple signing keys (MapKit JS and APNs). Both live at the repo root, side by side, and neither
+# is ever committed: the server takes each one as a PEM body from a secret, so nothing needs the
+# file in the image. No leading slash on purpose — the APNs key used to be tracked under
+# server/src/main/resources, where the old root-only rule could not see it.
+AuthKey_*.p8

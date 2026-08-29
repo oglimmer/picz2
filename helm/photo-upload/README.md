@@ -207,6 +207,69 @@ curl -s https://picz2.oglimmer.com/api/capabilities | jq .maps      # {"enabled"
 curl -s https://picz2.oglimmer.com/api/maps/token | cut -c1-40      # a JWT, not an error string
 ```
 
+### Push notifications (APNs)
+
+The iOS app is told about new photos and newly published albums over Apple Push. The api pod signs
+each push with an Apple Developer key, so the feature is **off** until you supply one: with
+`apns.enabled=false` the api logs one line at boot and drops every push. E-mail notifications are
+unaffected either way.
+
+The key used to be committed to the repo at `server/src/main/resources/AuthKey_XXXX.p8` and read
+off the classpath, which baked it into every image and made rotation a rebuild. It is now supplied
+exactly like the MapKit key — as the `.p8` body, from the chart's secret.
+
+Getting the credentials (Apple Developer account required):
+
+1. developer.apple.com → Certificates, Identifiers & Profiles → **Keys** → create a key with
+   **Apple Push Notifications service (APNs)** enabled → download `AuthKey_XXXXXXXXXX.p8`
+   (**one download only**).
+2. Key ID is on the key's detail page; Team ID is top-right in the portal.
+3. The topic is the app's bundle id, `com.oglimmer.photosync`.
+
+Install with the key read straight off disk, so it never lands in a values file:
+
+```bash
+helm upgrade --install photo-upload ./helm/photo-upload \
+  --reuse-values \
+  --set apns.enabled=true \
+  --set apns.keyId=W4CMQFDV9D \
+  --set apns.teamId=SBFZ9G94BG \
+  --set apns.production=false \
+  --set-file apns.privateKey=AuthKey_W4CMQFDV9D.p8
+```
+
+| Parameter          | Description                                                                    | Default                  |
+| ------------------ | ------------------------------------------------------------------------------ | ------------------------ |
+| `apns.enabled`     | Send pushes at all                                                             | `false`                  |
+| `apns.privateKey`  | Body of the `.p8` file — **must** be overridden, ideally with `--set-file`      | `""`                     |
+| `apns.keyId`       | APNs Key ID — the token header's `kid`                                         | `""`                     |
+| `apns.teamId`      | Apple Developer Team ID — the token's `iss`                                    | `""`                     |
+| `apns.topic`       | The app's bundle id                                                            | `com.oglimmer.photosync` |
+| `apns.production`  | `false` uses Apple's sandbox, which is what a **debug** build registers against. A TestFlight or App Store build only receives pushes with this `true` | `false` |
+
+Verify after deploy — one line, and which environment it picked:
+
+```bash
+kubectl logs deploy/photo-upload-backend | grep APNs
+# APNs client initialized for DEVELOPMENT environment (keyId=W4CMQFDV9D)
+```
+
+**Rotating the key** is now a secret edit plus a restart, with no image rebuild:
+
+```bash
+helm upgrade photo-upload ./helm/photo-upload --reuse-values \
+  --set apns.keyId=NEWKEYID12 \
+  --set-file apns.privateKey=AuthKey_NEWKEYID12.p8
+kubectl rollout restart deploy/photo-upload-backend
+```
+
+For local development, point at the file instead of pasting a PEM into your shell. Both Apple
+keys live gitignored at the repo root:
+
+```bash
+APNS_KEY_PATH=$PWD/AuthKey_W4CMQFDV9D.p8 ./mvnw spring-boot:run
+```
+
 ### Reverse geocoding (place names on "by day & region")
 
 The gallery's "📅 By day & region" grouping labels each region with a place name. The api pod
