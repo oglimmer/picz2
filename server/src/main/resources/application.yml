@@ -184,7 +184,7 @@ app:
     # root beside the MapKit key. Ignored when private-key is set.
     key-path: "${APNS_KEY_PATH:}"
     # Identifiers, not secrets — they name the key, they cannot sign with it.
-    key-id: "${APNS_KEY_ID:W4CMQFDV9D}"
+    key-id: "${APNS_KEY_ID:289ZRKLFNQ}"
     team-id: "${APNS_TEAM_ID:SBFZ9G94BG}"
     topic: "${APNS_TOPIC:com.oglimmer.photosync}"
     production: "${APNS_PRODUCTION:false}"
