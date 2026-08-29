@@ -232,10 +232,10 @@ Install with the key read straight off disk, so it never lands in a values file:
 helm upgrade --install photo-upload ./helm/photo-upload \
   --reuse-values \
   --set apns.enabled=true \
-  --set apns.keyId=W4CMQFDV9D \
+  --set apns.keyId=289ZRKLFNQ \
   --set apns.teamId=SBFZ9G94BG \
   --set apns.production=false \
-  --set-file apns.privateKey=AuthKey_W4CMQFDV9D.p8
+  --set-file apns.privateKey=AuthKey_289ZRKLFNQ.p8
 ```
 
 | Parameter          | Description                                                                    | Default                  |
@@ -251,7 +251,7 @@ Verify after deploy — one line, and which environment it picked:
 
 ```bash
 kubectl logs deploy/photo-upload-backend | grep APNs
-# APNs client initialized for DEVELOPMENT environment (keyId=W4CMQFDV9D)
+# APNs client initialized for DEVELOPMENT environment (keyId=289ZRKLFNQ)
 ```
 
 **Rotating the key** is now a secret edit plus a restart, with no image rebuild:
@@ -267,7 +267,7 @@ For local development, point at the file instead of pasting a PEM into your shel
 keys live gitignored at the repo root:
 
 ```bash
-APNS_KEY_PATH=$PWD/AuthKey_W4CMQFDV9D.p8 ./mvnw spring-boot:run
+APNS_KEY_PATH=$PWD/AuthKey_289ZRKLFNQ.p8 ./mvnw spring-boot:run
 ```
 
 ### Reverse geocoding (place names on "by day & region")
