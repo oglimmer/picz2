@@ -35,6 +35,9 @@ struct AlbumListView: View {
                                         albumToEdit = album
                                         showingEditSheet = true
                                     },
+                                    onTogglePublished: {
+                                        viewModel.setPublished(id: album.id, published: !album.isPublished)
+                                    },
                                     onShare: {
                                         if let shareToken = album.shareToken,
                                            let shareURL = AppConfiguration.publicAlbumURL(shareToken: shareToken)
@@ -140,6 +143,10 @@ struct AlbumCardView: View {
     let album: Album
     let onEdit: () -> Void
 
+    /// Opens or closes public access. Kept next to Share in the menu because it is the switch
+    /// that decides whether sharing does anything at all.
+    let onTogglePublished: () -> Void
+
     /// Raised to the list screen, which owns the share sheet.
     let onShare: () -> Void
     let onDelete: () -> Void
@@ -178,6 +185,25 @@ struct AlbumCardView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                // A private album is one nobody outside the account can open. Saying so on the
+                // tile is the difference between a deliberate draft and a share link the owner
+                // believes is working.
+                if !album.isPublished {
+                    VStack {
+                        HStack {
+                            Text("PRIVATE")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.black.opacity(0.65)))
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(8)
+                }
             }
             .aspectRatio(1.0, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -208,7 +234,15 @@ struct AlbumCardView: View {
                 Label("Edit", systemImage: "pencil")
             }
 
-            if album.shareToken != nil {
+            Button(action: onTogglePublished) {
+                album.isPublished
+                    ? Label("Make Private", systemImage: "eye.slash")
+                    : Label("Make Public", systemImage: "eye")
+            }
+
+            // Only when the link actually opens. Handing out a URL that 404s is worse than not
+            // offering to share: the owner would hear about it from whoever it failed for.
+            if album.shareToken != nil, album.isPublished {
                 Button(action: onShare) {
                     Label("Share Link", systemImage: "square.and.arrow.up")
                 }

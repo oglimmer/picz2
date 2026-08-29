@@ -24,6 +24,18 @@ struct Album: Codable, Identifiable, Hashable {
     var mapSpanLat: Double?
     var mapSpanLng: Double?
 
+    /// Whether the share link is live and subscribers may be mailed about this album.
+    ///
+    /// A new album is created unpublished: it already has a `shareToken`, but every public route
+    /// answers 404 until the owner turns sharing on. Optional and `var` for the same reason as the
+    /// map fields — an older server omits the key, and `isPublished` reads a missing value as true
+    /// so an album from such a server is never shown as a draft it isn't.
+    var published: Bool?
+
+    /// When the album first went public, or nil while it never has. Set once; unpublishing leaves
+    /// it, so a republished album is not re-announced to subscribers.
+    var publishedAt: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -39,11 +51,20 @@ struct Album: Codable, Identifiable, Hashable {
         case mapCenterLng
         case mapSpanLat
         case mapSpanLng
+        case published
+        case publishedAt
     }
 
     // Computed property for backwards compatibility
     var imageCount: Int? {
         fileCount
+    }
+
+    /// Can anyone outside the account see this album? Absent means yes: only a server too old to
+    /// know about publishing omits the field, and on that server every album with a token is
+    /// public.
+    var isPublished: Bool {
+        published ?? true
     }
 
     /// The framing the owner saved for this album's map, or nil to fit every pin.

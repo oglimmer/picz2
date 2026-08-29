@@ -18,6 +18,11 @@ export interface Album {
   coverFileId?: number;
   coverImageToken?: string;
   shareToken?: string;
+  // Whether the share link is live. A new album is created unpublished: the token exists but
+  // the public routes 404 and subscribers get no mail until the owner turns it on. Owner-facing
+  // responses only — the public album endpoint never returns an unpublished album at all.
+  published?: boolean;
+  publishedAt?: string | null;
   // Flat on the wire (see AlbumInfo on the server); all four present or all four absent.
   mapCenterLat?: number | null;
   mapCenterLng?: number | null;

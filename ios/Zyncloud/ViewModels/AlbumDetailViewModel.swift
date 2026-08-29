@@ -80,6 +80,11 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// ``clearMapView()``.
     @Published private(set) var savedMapView: SavedMapView?
 
+    /// Whether the share link is live, for the same reason ``savedMapView`` is held here: the
+    /// album this screen was pushed with is a value, and the server's answer to a publish is the
+    /// new truth. Seeded from the album, then owned by ``setPublished(_:)``.
+    @Published private(set) var isPublished: Bool
+
     let album: Album
 
     /// Readable across the file boundary so the tag actions in `AlbumDetailViewModel+Tags.swift`
@@ -98,6 +103,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         self.syncCoordinator = syncCoordinator
         self.apiClient = apiClient
         savedMapView = album.savedMapView
+        isPublished = album.isPublished
         observeUploads()
     }
 
@@ -679,10 +685,40 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
     // MARK: - Album Actions
 
-    /// The public link for this album, or nil when the server gave it no share token.
+    /// The public link for this album, or nil when there is nothing worth handing out — no share
+    /// token, or the album is not published, in which case the link would answer 404.
     var shareURL: URL? {
-        guard let shareToken = album.shareToken else { return nil }
+        guard isPublished, let shareToken = album.shareToken else { return nil }
         return AppConfiguration.publicAlbumURL(shareToken: shareToken)
+    }
+
+    /// Opens or closes public access to this album.
+    ///
+    /// Publishing makes the share link work and lets the subscription notifier mail this album's
+    /// subscribers. Unpublishing closes both — subscriptions are kept, they simply go quiet.
+    func setPublished(_ published: Bool) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.setAlbumPublished(albumId: album.id, published: published) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(album):
+                    self.isPublished = album.isPublished
+                    self.showSuccess(message: published
+                        ? "This album is public. The share link works and subscribers will be notified."
+                        : "This album is private. The share link no longer opens and notifications stop.")
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
     }
 
     /// Deletes the whole album, exactly as the web app's album delete does. The view asks for

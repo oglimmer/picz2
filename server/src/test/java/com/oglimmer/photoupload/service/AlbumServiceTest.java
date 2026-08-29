@@ -11,6 +11,7 @@ import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
+import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.AlbumInfo;
 import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
@@ -51,7 +52,9 @@ class AlbumServiceTest {
     testUser = new User();
     testUser.setId(1L);
     testUser.setEmail("test@example.com");
-    when(userContext.getCurrentUser()).thenReturn(testUser);
+    // lenient: the share-token tests exercise the anonymous path, which never asks who is logged
+    // in, and strict stubbing would fail them for not using this.
+    lenient().when(userContext.getCurrentUser()).thenReturn(testUser);
   }
 
   @Test
@@ -74,6 +77,76 @@ class AlbumServiceTest {
     assertNotNull(info.getShareToken());
     assertTrue(info.getShareToken().length() >= 48); // token length depends on generator
     assertEquals(4, info.getDisplayOrder());
+    // The token exists from the start, but the album is not public until the owner says so.
+    assertEquals(Boolean.FALSE, info.getPublished());
+    assertNull(info.getPublishedAt());
+  }
+
+  @Test
+  void publishingStampsTheDateOnceAndOpensTheShareLink() {
+    Album album = new Album();
+    album.setId(10L);
+    album.setUser(testUser);
+    album.setName("Summer");
+    when(albumRepository.findByUserAndId(testUser, 10L)).thenReturn(Optional.of(album));
+    when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(10L, 1L))
+        .thenReturn(List.of());
+
+    AlbumInfo published = service.setPublished(10L, true);
+    assertEquals(Boolean.TRUE, published.getPublished());
+    Instant firstPublishedAt = published.getPublishedAt();
+    assertNotNull(firstPublishedAt);
+
+    // Unpublishing closes the link but keeps the date: it records the first publication, and the
+    // "new albums" notifier keys off it. Re-announcing on every republish would spam subscribers.
+    AlbumInfo hidden = service.setPublished(10L, false);
+    assertEquals(Boolean.FALSE, hidden.getPublished());
+    assertEquals(firstPublishedAt, hidden.getPublishedAt());
+
+    AlbumInfo again = service.setPublished(10L, true);
+    assertEquals(firstPublishedAt, again.getPublishedAt());
+  }
+
+  @Test
+  void unpublishedAlbumIsNotFoundByShareToken() {
+    // The repository query itself filters on published, so an unpublished album and a made-up
+    // token are the same empty Optional — and must be the same 404 to the visitor.
+    when(albumRepository.findByShareTokenAndPublishedTrue("tok")).thenReturn(Optional.empty());
+
+    assertThrows(ResourceNotFoundException.class, () -> service.getAlbumByShareToken("tok"));
+  }
+
+  @Test
+  void duplicatingAPublicAlbumProducesAPrivateCopy() {
+    Album source = new Album();
+    source.setId(10L);
+    source.setUser(testUser);
+    source.setName("Summer");
+    source.setPublished(true);
+    source.setPublishedAt(Instant.now());
+
+    when(albumRepository.findByUserAndId(testUser, 10L)).thenReturn(Optional.of(source));
+    when(albumRepository.findByUserAndName(eq(testUser), anyString())).thenReturn(Optional.empty());
+    when(albumRepository.findMaxDisplayOrderByUser(testUser)).thenReturn(0);
+    when(albumEnabledTagRepository.findByAlbumId(10L)).thenReturn(List.of());
+    when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(anyLong(), eq(1L)))
+        .thenReturn(List.of());
+    when(systemTagProvisioner.ensureTag(eq(testUser), anyString())).thenReturn(99L);
+    when(tagRepository.getReferenceById(99L)).thenReturn(new Tag());
+
+    ArgumentCaptor<Album> saved = ArgumentCaptor.forClass(Album.class);
+    when(albumRepository.save(saved.capture()))
+        .thenAnswer(
+            inv -> {
+              Album a = inv.getArgument(0);
+              a.setId(11L);
+              return a;
+            });
+
+    AlbumInfo copy = service.duplicateAlbum(10L);
+
+    assertEquals(Boolean.FALSE, copy.getPublished());
+    assertNull(copy.getPublishedAt());
   }
 
   @Test

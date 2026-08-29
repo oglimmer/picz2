@@ -36,10 +36,12 @@ public class AlbumSubscriptionService {
   @Transactional
   public AlbumSubscriptionResponse createSubscription(
       String shareToken, AlbumSubscriptionRequest request) {
-    // Find album by share token
+    // Find album by share token. Published only: signing up for updates to an album you cannot
+    // see is not something a visitor can meaningfully consent to, and the confirmation mail would
+    // name an album whose link is dead.
     Album album =
         albumRepository
-            .findByShareToken(shareToken)
+            .findByShareTokenAndPublishedTrue(shareToken)
             .orElseThrow(() -> new ResourceNotFoundException("Album", "shareToken", shareToken));
 
     // Check if subscription already exists
@@ -160,6 +162,8 @@ public class AlbumSubscriptionService {
    */
   @Transactional
   public AlbumSubscriptionResponse unsubscribe(String email, String shareToken) {
+    // Not gated on published, unlike subscribing: someone holding an unsubscribe link must always
+    // be able to get out, including while the album is unpublished.
     Album album =
         albumRepository
             .findByShareToken(shareToken)

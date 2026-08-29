@@ -289,7 +289,7 @@ public class SlideshowRecordingService {
     // Validate album exists by share token
     Album album =
         albumRepository
-            .findByShareToken(shareToken)
+            .findByShareTokenAndPublishedTrue(shareToken)
             .orElseThrow(() -> new IllegalArgumentException("Album not found with share token"));
 
     // Get all recordings for this album
