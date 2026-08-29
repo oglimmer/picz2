@@ -342,8 +342,9 @@ struct AlbumDetailView: View {
     // MARK: - Album Menu
 
     /// The album-wide actions: how to look at it, Present, the tag and commentary screens, then
-    /// Share and Delete. Share hands the public link to the system share sheet; a missing token
-    /// only hides the entry, because a link cannot be invented on the phone.
+    /// publishing, Share and Delete. Share hands the public link to the system share sheet; it is
+    /// hidden when the album is unpublished or has no token, because in both cases there is no
+    /// working link and one cannot be invented on the phone.
     private var albumMenu: some View {
         Menu {
             Picker("View", selection: $layoutMode) {
@@ -383,6 +384,18 @@ struct AlbumDetailView: View {
                 isNarrationPresented = true
             } label: {
                 Label("Audio Commentary", systemImage: "mic")
+            }
+
+            Divider()
+
+            // The switch that decides whether Share does anything: an unpublished album's link
+            // answers 404 and its subscribers get no mail.
+            Button {
+                viewModel.setPublished(!viewModel.isPublished)
+            } label: {
+                viewModel.isPublished
+                    ? Label("Make Private", systemImage: "eye.slash")
+                    : Label("Make Public", systemImage: "eye")
             }
 
             if let shareURL = viewModel.shareURL {

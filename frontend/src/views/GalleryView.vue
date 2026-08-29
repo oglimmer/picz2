@@ -103,6 +103,15 @@
           >
             Share
           </button>
+          <!-- The one state an owner must not have to go looking for: whether strangers can see
+               this album at all. -->
+          <span
+            v-if="!isPublished"
+            class="album-draft-badge"
+            title="Not shared yet. Manage → Public sharing turns the link on."
+          >
+            Private
+          </span>
           <MenuButton
             label="Manage"
             align="right"
@@ -111,6 +120,17 @@
               <p class="popover-head">
                 This album
               </p>
+              <button
+                class="menu-item"
+                :class="{ 'menu-item--on': isPublished }"
+                role="menuitem"
+                :disabled="togglingPublished"
+                @click="close(); togglePublished()"
+              >
+                <span class="menu-item-label">Public sharing</span>
+                <span class="menu-item-count">{{ isPublished ? 'On' : 'Off' }}</span>
+              </button>
+              <div class="popover-sep" />
               <button
                 class="menu-item"
                 :class="{ 'menu-item--on': tagPickerOpen }"
@@ -1084,7 +1104,7 @@ export default {
     const { isLoggedIn } = useAuth()
     const { apiUrl, fetchWithAuth } = useApi()
     const { uploadFile } = useUpload()
-    const { currentAlbum, loadAlbumById, updateAlbum, saveMapView, deleteAlbum } = useAlbums()
+    const { currentAlbum, loadAlbumById, updateAlbum, saveMapView, setPublished, deleteAlbum } = useAlbums()
     const {
       files,
       loadingFiles,
@@ -1858,6 +1878,30 @@ export default {
       }
     }
 
+    // A new album is created unpublished, so the share link is dead until the owner enables it.
+    // Treated as published when the field is missing so an older cached album never reads as a
+    // draft it isn't.
+    const isPublished = computed(() => album.value?.published !== false)
+    const togglingPublished = ref(false)
+
+    async function togglePublished() {
+      if (!album.value || togglingPublished.value) return
+
+      const next = !isPublished.value
+      togglingPublished.value = true
+      try {
+        await setPublished(album.value.id, next)
+        success(next
+          ? 'Album is public. The share link works and subscribers will be notified.'
+          : 'Album is private again. The share link no longer opens and notifications stop.')
+      } catch (err) {
+        console.error('Error changing album sharing:', err)
+        error('Could not change album sharing')
+      } finally {
+        togglingPublished.value = false
+      }
+    }
+
     function copyPresentationUrl() {
       if (!album.value) return
 
@@ -1865,6 +1909,13 @@ export default {
         const token = album.value.shareToken
         if (!token) {
           warning('Share token not available for this album')
+          return
+        }
+
+        // Copying a link that 404s is worse than refusing to copy it: the owner would hand it out
+        // and only hear about it from whoever it failed for.
+        if (!isPublished.value) {
+          warning('Enable public sharing for this album first (Manage → Public sharing)')
           return
         }
 
@@ -2740,6 +2791,9 @@ export default {
       cancelEditDescription,
       togglePresentation,
       copyPresentationUrl,
+      isPublished,
+      togglingPublished,
+      togglePublished,
       handleDeleteFile,
       handleRotateImage,
       handleAddTag,

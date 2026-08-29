@@ -26,6 +26,16 @@
         <span class="placeholder-label">Empty</span>
       </div>
 
+      <!-- An unpublished album is only visible to its owner. Saying so on the tile is the
+           difference between a deliberate draft and a share link the owner thinks is working. -->
+      <span
+        v-if="album.published === false"
+        class="tile-private"
+        title="Not shared. Open the album and turn on Public sharing."
+      >
+        Private
+      </span>
+
       <!-- Ties the masthead's "phone uploads to X" line to the tile it means. -->
       <span
         v-if="isUploadTarget"

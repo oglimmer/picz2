@@ -28,8 +28,25 @@ public interface AlbumRepository extends JpaRepository<Album, Long> {
   // Public access via share token (no user scoping needed)
   Optional<Album> findByShareToken(String shareToken);
 
+  /**
+   * The share-token lookup every public entry point must use. An unpublished album is invisible
+   * rather than forbidden — an empty Optional here becomes the same 404 as a token that was never
+   * issued, so the link leaks nothing about whether the album exists.
+   *
+   * <p>Use {@link #findByShareToken} only where the owner is already authenticated, or where the
+   * caller must reach an unpublished album on purpose (unsubscribing, for instance).
+   */
+  Optional<Album> findByShareTokenAndPublishedTrue(String shareToken);
+
   // Find albums created by user after a specific time (for subscription notifications)
   List<Album> findByUserAndCreatedAtAfter(User user, Instant createdAt);
+
+  /**
+   * Albums of this owner that went public after a point in time — the feed behind the "new albums"
+   * subscription. Keyed on publishedAt, not createdAt: a subscriber should hear about an album when
+   * it becomes visible to them, and never about one that is still a draft.
+   */
+  List<Album> findByUserAndPublishedTrueAndPublishedAtAfter(User user, Instant publishedAt);
 
   /**
    * Bulk-delete the album row, bypassing JPA cascade so we don't pull the entire {@code files}

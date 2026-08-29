@@ -66,7 +66,7 @@ public class PresentationGroupService {
   public List<PresentationGroupInfo> getGroupsByShareToken(String shareToken) {
     Album album =
         albumRepository
-            .findByShareToken(shareToken)
+            .findByShareTokenAndPublishedTrue(shareToken)
             .orElseThrow(() -> new ResourceNotFoundException("Album not found with share token"));
 
     return presentationGroupMapper.groupsToGroupInfos(

@@ -512,6 +512,49 @@ struct EndpointShapeTests {
         #expect(error.localizedDescription.contains("Label is required"))
     }
 
+    // MARK: - The album's publish gate
+
+    /// Publishing is a query parameter on a PUT with no body, matching the analytics-pause switch
+    /// it sits beside on the server.
+    @Test func publishingAnAlbumPutsTheFlagInTheQuery() async {
+        let json = #"{"success":true,"album":{"id":7,"name":"Trip","published":true}}"#
+
+        let request = await StubServer.captureOne(json: json) {
+            _ = await awaiting { done in api.setAlbumPublished(albumId: 7, published: true, completion: done) }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/albums/7/published")
+        #expect(request?.query["published"] == "true")
+    }
+
+    @Test func unpublishingSendsFalse() async {
+        let json = #"{"success":true,"album":{"id":7,"name":"Trip","published":false}}"#
+
+        let request = await StubServer.captureOne(json: json) {
+            _ = await awaiting { done in api.setAlbumPublished(albumId: 7, published: false, completion: done) }
+        }
+
+        #expect(request?.query["published"] == "false")
+    }
+
+    /// A server too old to know about publishing omits the key. Reading that as "private" would
+    /// hide the share link on every album the account owns, so absent means public.
+    @Test func anAlbumWithoutTheFlagCountsAsPublished() throws {
+        let json = Data(#"{"id":7,"name":"Trip"}"#.utf8)
+        let album = try JSONDecoder().decode(Album.self, from: json)
+
+        #expect(album.published == nil)
+        #expect(album.isPublished)
+    }
+
+    @Test func anExplicitlyUnpublishedAlbumIsNotPublished() throws {
+        let json = Data(#"{"id":7,"name":"Trip","published":false}"#.utf8)
+        let album = try JSONDecoder().decode(Album.self, from: json)
+
+        #expect(!album.isPublished)
+    }
+
     // MARK: - The album's saved map view
 
     @Test func savingAmapViewPutsTheFourDegreesToTheAlbum() async {

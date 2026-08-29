@@ -16,6 +16,7 @@ export interface AlbumsComposable {
   deleteAlbum: (albumId: number) => Promise<void>;
   updateAlbum: (albumId: number, updates: Partial<Album>) => Promise<void>;
   saveMapView: (albumId: number, view: MapView | null) => Promise<void>;
+  setPublished: (albumId: number, published: boolean) => Promise<void>;
   duplicateAlbum: (albumId: number) => Promise<Album | null>;
 }
 
@@ -247,6 +248,41 @@ export function useAlbums(): AlbumsComposable {
     }
   }
 
+  /**
+   * Opens or closes public access to the album.
+   *
+   * Separate from `updateAlbum` for the same reason as `saveMapView`: that endpoint round-trips
+   * the name, so a toggle would fight an unsaved rename. Patches from the server's answer, so
+   * `publishedAt` reflects what was actually stamped on the first publish.
+   */
+  async function setPublished(
+    albumId: number,
+    published: boolean,
+  ): Promise<void> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/albums/${albumId}/published?published=${published}`,
+      { method: "PUT" },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Could not change album sharing");
+    }
+
+    const patch: Partial<Album> = {
+      published: data.album?.published ?? published,
+      publishedAt: data.album?.publishedAt ?? null,
+    };
+
+    if (currentAlbum.value && currentAlbum.value.id === albumId) {
+      currentAlbum.value = { ...currentAlbum.value, ...patch };
+    }
+    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
+    if (albumIndex !== -1) {
+      albums.value[albumIndex] = { ...albums.value[albumIndex], ...patch };
+    }
+  }
+
   async function duplicateAlbum(albumId: number): Promise<Album | null> {
     try {
       const response = await fetchWithAuth(
@@ -286,6 +322,7 @@ export function useAlbums(): AlbumsComposable {
     deleteAlbum,
     updateAlbum,
     saveMapView,
+    setPublished,
     duplicateAlbum,
   };
 }

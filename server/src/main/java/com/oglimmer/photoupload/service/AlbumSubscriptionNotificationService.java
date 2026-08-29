@@ -97,6 +97,14 @@ public class AlbumSubscriptionNotificationService {
    */
   private boolean checkAndNotifyAlbumUpdates(AlbumSubscription subscription) {
     Album album = subscription.getAlbum();
+
+    // An unpublished album is dark: its share link 404s, so a mail pointing at it would send the
+    // reader nowhere. Subscriptions are kept, not cancelled — publishing again resumes them.
+    if (!album.isPublished()) {
+      log.debug("Skipping updates for unpublished album {}", album.getName());
+      return false;
+    }
+
     Instant lastNotified = subscription.getLastNotifiedAt();
 
     // If never notified, use subscription creation time
@@ -261,8 +269,10 @@ public class AlbumSubscriptionNotificationService {
       lastNotified = subscription.getCreatedAt();
     }
 
-    // Find new albums created by the owner after last notification
-    List<Album> newAlbums = albumRepository.findByUserAndCreatedAtAfter(albumOwner, lastNotified);
+    // Find albums the owner has published since the last notification. Publication date, not
+    // creation date: a draft started weeks ago is new to a subscriber on the day it goes live.
+    List<Album> newAlbums =
+        albumRepository.findByUserAndPublishedTrueAndPublishedAtAfter(albumOwner, lastNotified);
 
     // Remove the original album from the list if it's included
     newAlbums.removeIf(album -> album.getId().equals(originalAlbum.getId()));
@@ -279,6 +289,7 @@ public class AlbumSubscriptionNotificationService {
       boolean anyNotificationSent = false;
       for (Album newAlbum : newAlbums) {
         // Only notify about albums with share tokens (public albums) and at least one visible image
+        // The query already filtered to published albums.
         if (newAlbum.getShareToken() != null && !newAlbum.getShareToken().isEmpty()) {
           // Get all files in the new album
           List<FileMetadata> albumFiles =

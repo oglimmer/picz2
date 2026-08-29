@@ -75,10 +75,62 @@ public class AlbumService {
     Integer maxOrder = albumRepository.findMaxDisplayOrderByUser(currentUser);
     album.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
+    // A share token exists from the start, but the link stays dead until the owner publishes.
+    // Nothing about a brand-new album is ready for strangers, and this is the difference between
+    // "has a link" and "is public".
+    album.setPublished(false);
+
     album = albumRepository.save(album);
-    log.info("Created album: {} for user: {}", name, currentUser.getEmail());
+    log.info("Created album: {} for user: {} (unpublished)", name, currentUser.getEmail());
 
     return convertToAlbumInfo(album);
+  }
+
+  /**
+   * Turns public access to the album on or off.
+   *
+   * <p>Publishing opens the share link and lets the notifier mail this album's subscribers.
+   * Unpublishing closes both again — existing subscriptions survive, they simply stop producing
+   * mail while the album is dark.
+   *
+   * <p>{@code publishedAt} is stamped only the first time, so republishing an album does not
+   * re-announce it to everyone who already heard about it.
+   */
+  @Transactional
+  public AlbumInfo setPublished(Long albumId, boolean published) {
+    User currentUser = userContext.getCurrentUser();
+    Album album =
+        albumRepository
+            .findByUserAndId(currentUser, albumId)
+            .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
+
+    album.setPublished(published);
+    if (published && album.getPublishedAt() == null) {
+      album.setPublishedAt(Instant.now());
+    }
+    album.setUpdatedAt(Instant.now());
+
+    log.info(
+        "{} album '{}' for user: {}",
+        published ? "Published" : "Unpublished",
+        album.getName(),
+        currentUser.getEmail());
+    return convertToAlbumInfo(album);
+  }
+
+  /**
+   * Resolves a share token for public use, or throws the same not-found a bogus token throws.
+   *
+   * <p>Every anonymous read of an album goes through here. Deliberately indistinguishable from an
+   * unknown token: a visitor holding an old link should not be able to tell "this album is hidden
+   * right now" from "no such album", and the owner should not have their draft's existence
+   * confirmed to whoever kept the URL.
+   */
+  @Transactional(readOnly = true)
+  public Album requirePublishedByShareToken(String shareToken) {
+    return albumRepository
+        .findByShareTokenAndPublishedTrue(shareToken)
+        .orElseThrow(() -> new ResourceNotFoundException("Album not found with share token"));
   }
 
   @Transactional(readOnly = true)
@@ -337,10 +389,7 @@ public class AlbumService {
 
   @Transactional(readOnly = true)
   public AlbumInfo getAlbumByShareToken(String shareToken) {
-    Album album =
-        albumRepository
-            .findByShareToken(shareToken)
-            .orElseThrow(() -> new ResourceNotFoundException("Album not found with share token"));
+    Album album = requirePublishedByShareToken(shareToken);
 
     // Return minimal info for public access (just name and id)
     AlbumInfo info = new AlbumInfo();
@@ -377,6 +426,11 @@ public class AlbumService {
     byte[] bytes = new byte[32];
     new SecureRandom().nextBytes(bytes);
     newAlbum.setShareToken(HexFormat.of().formatHex(bytes));
+
+    // A copy is a draft, however public its source was. The duplicate is usually about to be
+    // re-curated, and publishing it here would put a half-edited album behind a live link.
+    newAlbum.setPublished(false);
+    newAlbum.setPublishedAt(null);
 
     Integer maxOrder = albumRepository.findMaxDisplayOrderByUser(currentUser);
     newAlbum.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
@@ -507,6 +561,8 @@ public class AlbumService {
     info.setUpdatedAt(album.getUpdatedAt());
     info.setDisplayOrder(album.getDisplayOrder());
     info.setShareToken(album.getShareToken());
+    info.setPublished(album.isPublished());
+    info.setPublishedAt(album.getPublishedAt());
     info.setMapCenterLat(album.getMapCenterLat());
     info.setMapCenterLng(album.getMapCenterLng());
     info.setMapSpanLat(album.getMapSpanLat());

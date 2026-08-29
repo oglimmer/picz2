@@ -159,6 +159,48 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
+    /// Opens or closes public access to an album.
+    ///
+    /// A new album is private: its share link 404s and subscribers hear nothing until this is
+    /// turned on. The list row is patched from the server's answer rather than from the value we
+    /// sent, so `publishedAt` is whatever the server actually stamped.
+    func setPublished(id: Int, published: Bool, completion: @escaping @Sendable @MainActor (Bool) -> Void = { _ in }) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            completion(false)
+            return
+        }
+
+        isLoading = true
+        alertState = nil
+
+        apiClient.setAlbumPublished(albumId: id, published: published) { [weak self] result in
+            guard let self else { return }
+
+            Task { @MainActor in
+                self.isLoading = false
+
+                switch result {
+                case let .success(album):
+                    if let index = self.albums.firstIndex(where: { $0.id == id }) {
+                        self.albums[index] = album
+                    }
+                    self.showSuccess(message: published
+                        ? "Album is public. The share link works now."
+                        : "Album is private. The share link no longer opens.")
+                    completion(true)
+
+                case let .failure(error):
+                    self.handleError(error)
+                    completion(false)
+                }
+            }
+        }
+    }
+
     func deleteAlbum(id: Int, completion: @escaping @Sendable @MainActor (Bool) -> Void) {
         guard let apiClient else {
             alertState = AlertState(

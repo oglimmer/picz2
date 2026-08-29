@@ -59,6 +59,23 @@ public class Album {
   private boolean analyticsPaused = false;
 
   /**
+   * Whether the share link works and subscribers may be notified. False on a freshly created album
+   * — the owner publishes it once it holds what they want strangers to see. Every share-token
+   * lookup on the public side goes through {@code findByShareTokenAndPublishedTrue}, so an
+   * unpublished album is a 404 rather than an empty page.
+   */
+  @Column(name = "published", nullable = false)
+  private boolean published = false;
+
+  /**
+   * When the album first went public, or null while it never has. Unpublishing leaves it set: it
+   * records the first publication, and the "new albums" notifier uses it so a subscriber hears
+   * about an album once, on the day it became visible rather than the day it was created.
+   */
+  @Column(name = "published_at")
+  private Instant publishedAt;
+
+  /**
    * Saved view for the map filter, as MapKit's CoordinateRegion: a centre plus a span in degrees
    * (the span is the zoom — smaller means closer in). All four are set together or all four are
    * null; null means the map frames every pin instead. See {@link

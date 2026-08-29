@@ -20,7 +20,6 @@ import com.oglimmer.photoupload.model.ReorderResponse;
 import com.oglimmer.photoupload.model.TagIdsRequest;
 import com.oglimmer.photoupload.model.TagInfo;
 import com.oglimmer.photoupload.model.TagsListResponse;
-import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.service.AlbumService;
 import com.oglimmer.photoupload.service.AlbumTagService;
 import com.oglimmer.photoupload.service.AnalyticsService;
@@ -52,7 +51,6 @@ public class AlbumController {
   private final AlbumTagService albumTagService;
   private final FileStorageService fileStorageService;
   private final AnalyticsService analyticsService;
-  private final AlbumRepository albumRepository;
 
   @PostMapping
   public ResponseEntity<AlbumResponse> createAlbum(@RequestBody AlbumRequest albumRequest) {
@@ -107,6 +105,7 @@ public class AlbumController {
 
   @GetMapping("/public/{token}/files")
   public ResponseEntity<FilesResponse> getPublicAlbumFiles(@PathVariable String token) {
+    albumService.requirePublishedByShareToken(token);
     List<FileInfo> files = fileStorageService.listFilesByAlbumByShareToken(token);
 
     long totalSize = files.stream().mapToLong(FileInfo::getSize).sum();
@@ -127,10 +126,7 @@ public class AlbumController {
       @PathVariable String token,
       @RequestParam(required = false) String tag,
       HttpServletRequest request) {
-    Album albumEntity =
-        albumRepository
-            .findByShareToken(token)
-            .orElseThrow(() -> new RuntimeException("Album not found"));
+    Album albumEntity = albumService.requirePublishedByShareToken(token);
     analyticsService.logPageView(albumEntity, tag, request);
 
     MessageResponse response =
@@ -142,10 +138,7 @@ public class AlbumController {
   @PostMapping("/public/{token}/analytics/filter-change")
   public ResponseEntity<MessageResponse> logPublicFilterChange(
       @PathVariable String token, @RequestParam String tag, HttpServletRequest request) {
-    Album albumEntity =
-        albumRepository
-            .findByShareToken(token)
-            .orElseThrow(() -> new RuntimeException("Album not found"));
+    Album albumEntity = albumService.requirePublishedByShareToken(token);
     analyticsService.logFilterChange(albumEntity, tag, request);
 
     MessageResponse response =
@@ -160,10 +153,7 @@ public class AlbumController {
       @RequestParam Long recordingId,
       @RequestParam(required = false) String tag,
       HttpServletRequest request) {
-    Album albumEntity =
-        albumRepository
-            .findByShareToken(token)
-            .orElseThrow(() -> new RuntimeException("Album not found"));
+    Album albumEntity = albumService.requirePublishedByShareToken(token);
     analyticsService.logAudioPlay(albumEntity, tag, recordingId, request);
 
     MessageResponse response =
@@ -193,6 +183,18 @@ public class AlbumController {
     String message = newState ? "Analytics paused" : "Analytics resumed";
     MessageResponse response = MessageResponse.builder().success(true).message(message).build();
     return ResponseEntity.ok(response);
+  }
+
+  /**
+   * Opens or closes public access to the album. Until it is published the share link 404s and the
+   * subscription notifier ignores the album, so a new album is private until its owner says
+   * otherwise.
+   */
+  @PutMapping("/{id}/published")
+  public ResponseEntity<AlbumResponse> setPublished(
+      @PathVariable Long id, @RequestParam boolean published) {
+    AlbumInfo album = albumService.setPublished(id, published);
+    return ResponseEntity.ok(AlbumResponse.builder().success(true).album(album).build());
   }
 
   @PutMapping("/{id}")

@@ -1,5 +1,23 @@
 <template>
+  <!-- An unpublished (or deleted) album answers 404 on every public route. Without this the
+       visitor got an empty gallery under a "Loading..." heading and no idea why. -->
   <div
+    v-if="albumUnavailable"
+    class="album-gallery presentation-mode"
+  >
+    <div class="gallery-header">
+      <div class="gallery-nav">
+        <h2>Album not available</h2>
+      </div>
+    </div>
+    <p class="album-unavailable-text">
+      This link does not open an album. It may not be shared yet, or it may have been removed.
+      Ask whoever sent it to you to check.
+    </p>
+  </div>
+
+  <div
+    v-else
     class="album-gallery presentation-mode"
     :class="{ 'map-mode': mapMode }"
   >
@@ -378,6 +396,8 @@ export default {
     shareToken.value = props.shareToken
 
     const album = ref(null)
+    // Set when the public album endpoint answers 404: not shared, removed, or never existed.
+    const albumUnavailable = ref(false)
     // The owner's saved framing for the map filter, if they set one. Read-only here: a share-link
     // visitor can pan and zoom all they like, but nothing they do is persisted.
     const albumMapViewValue = computed(() => albumMapView(album.value))
@@ -658,6 +678,14 @@ export default {
     async function loadAlbumInfo() {
       try {
         const response = await fetch(`${apiUrl}/api/albums/public/${props.shareToken}`)
+
+        // 404 is what an unpublished album, a deleted album and a made-up token all return —
+        // the server keeps them indistinguishable on purpose, and so does this message.
+        if (response.status === 404) {
+          albumUnavailable.value = true
+          return
+        }
+
         const data = await response.json()
 
         if (data.success && data.album) {
@@ -801,6 +829,7 @@ export default {
 
     return {
       album,
+      albumUnavailable,
       albumMapViewValue,
       files,
       presentationSections,

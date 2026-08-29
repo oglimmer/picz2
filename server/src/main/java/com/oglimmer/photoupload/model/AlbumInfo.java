@@ -22,6 +22,11 @@ public class AlbumInfo {
   private String coverImageToken; // Public token of cover image
   private String shareToken; // Public share token for accessing album
 
+  // Whether the share link is live. Owner-facing only: the public share-token response never
+  // carries it, because an unpublished album never produces a response at all.
+  private Boolean published;
+  private Instant publishedAt;
+
   // Saved view for the map filter (D35): MapKit's CoordinateRegion, centre + span in degrees.
   // Null — all four together — means no saved view, and the map frames every pin instead. Flat
   // fields rather than a nested object so MapStruct maps them from the entity by name.

@@ -970,6 +970,26 @@ body.landing-page .app-footer { display: none; }
 }
 .tile-destination .receiving-dot { width: 5px; height: 5px; }
 
+/* Same corner as the "Receiving" pill, and they never appear together: an unpublished album is
+   not somewhere the phone is told to upload. */
+.tile-private {
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-full);
+  background: rgba(250,247,242,.92);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-size: .5625rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--c-warn);
+}
+
 .tile-btn:hover { background: #fff; }
 .tile-btn--danger { color: var(--c-danger); }
 .tile-btn--danger:hover { background: var(--c-danger); color: #fff; }
@@ -1347,6 +1367,24 @@ body.landing-page .app-footer { display: none; }
   flex-wrap: wrap;
 }
 .album-head-actions { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+
+/* Reads as a state, not a button: an unpublished album's share link is dead, and the owner needs
+   to see that at a glance rather than discover it from whoever they sent the link to. */
+.album-draft-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  height: 1.5rem;
+  border: 1px solid var(--c-warn);
+  border-radius: 2px;
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  font-size: .625rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 
 .album-meta {
   display: flex;
@@ -3875,4 +3913,14 @@ body.landing-dark { background: #0B1D2E; }
   color: var(--c-ok);
   font-weight: 600;
   margin-bottom: var(--sp-2);
+}
+
+/* Public share link that leads nowhere — unpublished album, deleted album, or a bad token. */
+.album-unavailable-text {
+  max-width: 34rem;
+  margin: var(--sp-6) auto;
+  padding: 0 var(--sp-8);
+  color: var(--c-text-2);
+  line-height: 1.6;
+  text-align: center;
 }
