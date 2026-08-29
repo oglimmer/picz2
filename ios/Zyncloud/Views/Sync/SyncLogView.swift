@@ -36,12 +36,20 @@ struct SyncLogView: View {
                         guide = .current(
                             syncLastDays: settings.syncLastDays,
                             includesSkippedTooLarge: sync.metrics.skippedTooLarge > 0,
+                            includesUploadPause: sync.metrics.uploadPause != nil,
                         )
                     },
                     footer: sync.metrics.skippedTooLarge > 0
                         ? Text("Some files are larger than this server accepts, so they were not backed up. The entries below name them and their size.")
                         : Text(""),
                 ) {
+                    // First, and only while it applies: every number under it reads as a
+                    // fault otherwise. A queue that is not moving because the user asked for
+                    // Wi-Fi only is not the same as a stuck one.
+                    if let pause = sync.metrics.uploadPause {
+                        LabeledContent("Uploads paused", value: pause.status)
+                            .foregroundColor(.orange)
+                    }
                     LabeledContent("Queued", value: "\(sync.metrics.queued)")
                     LabeledContent("Uploading", value: "\(sync.metrics.uploading)")
                     LabeledContent("Uploaded this session", value: "\(sync.metrics.uploaded)")

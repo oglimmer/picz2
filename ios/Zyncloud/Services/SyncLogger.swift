@@ -94,6 +94,20 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
                message: UploadSizeLimit.message(filename: filename, size: size, limit: limit))
     }
 
+    // Uploads are held back by the link, not failing on it. Logged as an informational entry
+    // on purpose: with Wi‑Fi Only on and the phone on cellular, every attempt used to surface
+    // as a red "Failed to upload …: The Internet connection appears to be offline", which is
+    // both untrue and the fastest way to teach someone to ignore the red ones that matter.
+    func logUploadsPaused(_ pause: UploadPause) {
+        addLog(isManual: false, success: true, message: "Uploads paused — \(pause.detail)")
+    }
+
+    // The counterpart, so a paused stretch in the log has a visible end rather than just
+    // stopping.
+    func logUploadsResumed() {
+        addLog(isManual: false, success: true, message: "Network is usable — uploads resumed")
+    }
+
     /// One sync run's progress, headed by what kicked it off.
     ///
     /// Takes the trigger rather than existing twice, once per trigger — see

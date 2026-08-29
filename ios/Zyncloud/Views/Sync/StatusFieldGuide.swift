@@ -29,7 +29,11 @@ extension StatusFieldGuide {
     ///     exactly the vagueness that makes the number look wrong.
     ///   - includesSkippedTooLarge: the "Too big to back up" row only renders when it is
     ///     non-zero, so explaining it unconditionally would describe a row that is not there.
-    static func current(syncLastDays: Int, includesSkippedTooLarge: Bool) -> StatusFieldGuide {
+    ///   - includesUploadPause: same rule for "Uploads paused", which is only on screen while
+    ///     the link actually holds uploads back.
+    static func current(syncLastDays: Int, includesSkippedTooLarge: Bool,
+                        includesUploadPause: Bool) -> StatusFieldGuide
+    {
         var fields: [Field] = [
             Field(
                 name: "Queued",
@@ -52,6 +56,14 @@ extension StatusFieldGuide {
                 text: "When a photo last finished uploading. If nothing needed sending, this does not move, even though the app did check.",
             ),
         ]
+
+        // Prepended, because it is the first row on screen when it is there at all.
+        if includesUploadPause {
+            fields.insert(Field(
+                name: "Uploads paused",
+                text: "Photos are waiting on purpose, not failing. Either there is no usable connection, or Wi‑Fi Only is on and the phone is on mobile data. Nothing is lost — sending starts again by itself when the connection is right. To send over mobile data, turn Wi‑Fi Only off under Options.",
+            ), at: 0)
+        }
 
         if includesSkippedTooLarge {
             fields.append(Field(

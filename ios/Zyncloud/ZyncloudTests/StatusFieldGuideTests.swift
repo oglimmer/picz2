@@ -5,8 +5,11 @@ import Testing
 /// The Status tab's ⓘ sheets. Pinned because the wording *is* the feature here — a glossary
 /// that has drifted from the rows it describes is worse than no glossary.
 struct StatusFieldGuideTests {
-    private func current(days: Int = 3, tooLarge: Bool = false) -> StatusFieldGuide {
-        .current(syncLastDays: days, includesSkippedTooLarge: tooLarge)
+    private func current(days: Int = 3, tooLarge: Bool = false,
+                         paused: Bool = false) -> StatusFieldGuide
+    {
+        .current(syncLastDays: days, includesSkippedTooLarge: tooLarge,
+                 includesUploadPause: paused)
     }
 
     // MARK: - Coverage
@@ -39,8 +42,16 @@ struct StatusFieldGuideTests {
         #expect(current(tooLarge: true).fields.contains { $0.name == "Too big to back up" })
     }
 
+    /// "Uploads paused" is only on screen while the link is holding uploads back, and it goes
+    /// first there — every counter under it reads as a fault otherwise.
+    @Test func thePausedRowIsExplainedOnlyWhenItIsShownAndComesFirst() {
+        #expect(!current(paused: false).fields.contains { $0.name == "Uploads paused" })
+        #expect(current(paused: true).fields.first?.name == "Uploads paused")
+        #expect(current(tooLarge: true, paused: true).fields.first?.name == "Uploads paused")
+    }
+
     @Test func noExplanationIsEmpty() {
-        for guide in [current(tooLarge: true), .backgroundTasks] {
+        for guide in [current(tooLarge: true, paused: true), .backgroundTasks] {
             for field in guide.fields {
                 #expect(!field.text.isEmpty, "\(field.name) has no explanation")
             }
@@ -81,7 +92,7 @@ struct StatusFieldGuideTests {
 
     /// Each row's name is its identity in the sheet's `List`; duplicates would drop rows.
     @Test func fieldNamesAreUniqueWithinAGuide() {
-        for guide in [current(tooLarge: true), .backgroundTasks] {
+        for guide in [current(tooLarge: true, paused: true), .backgroundTasks] {
             #expect(Set(guide.fields.map(\.id)).count == guide.fields.count)
         }
     }
