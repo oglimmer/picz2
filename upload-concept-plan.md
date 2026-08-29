@@ -8,6 +8,8 @@ Status legend (update as work lands):
 - [~] in progress
 - [x] done
 
+Last reviewed: 2026-08-30 (Follow-up to **D58**: the first `helm upgrade --reuse-values` that turned `apns.enabled=true` shipped an **empty** `APNS_TOPIC`, because `--reuse-values` bases on the previous release's values and never picks up a new chart default. APNs rejects every push without a topic while the api still logs a cheerful "client initialized", so the failure was silent in both directions. `apns.topic` is now `required` in the template, and the runbook says to pass every field explicitly. Also set `apns.production=true` to match `Zyncloud.Release.entitlements`, which carries `aps-environment: production` — sandbox would have answered `BadDeviceToken` for any TestFlight build.)
+
 Last reviewed: 2026-08-30 (APNs key `W4CMQFDV9D` revoked in the Apple portal and replaced by `289ZRKLFNQ`, which has never been committed — completes **D58**. The revoked key is still in git history at `server/src/main/resources/AuthKey_W4CMQFDV9D.p8`; it is dead, so the history is left alone rather than rewritten. Defaults and the Helm runbook now name the new key id.)
 
 Last reviewed: 2026-08-29 (APNs signing key out of the repo — **D58**. The key was committed at `server/src/main/resources/AuthKey_W4CMQFDV9D.p8` in the very first commit and read off the classpath, so it was baked into every image and could not be rotated without a rebuild. It now arrives as a PEM body from the chart's secret, exactly like the MapKit key, and the file sits gitignored at the repo root beside it. Deploy order matters: set the secret before rolling the new image, or push goes quiet.)

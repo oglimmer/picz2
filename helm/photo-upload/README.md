@@ -234,9 +234,17 @@ helm upgrade --install photo-upload ./helm/photo-upload \
   --set apns.enabled=true \
   --set apns.keyId=289ZRKLFNQ \
   --set apns.teamId=SBFZ9G94BG \
-  --set apns.production=false \
+  --set apns.topic=com.oglimmer.photosync \
+  --set apns.production=true \
   --set-file apns.privateKey=AuthKey_289ZRKLFNQ.p8
 ```
+
+**Set every field, including the ones with defaults.** `--reuse-values` bases the upgrade on the
+*previous release's* values and does not pick up new defaults from the chart, so the first upgrade
+that turns `apns` on gets `topic: ""` however good the default in `values.yaml` is. APNs rejects
+every push without a topic, while the api still logs a cheerful "client initialized" — so the
+template makes `apns.topic` `required` rather than letting that ship. If a later upgrade fails with
+`apns.topic is required`, that is this same trap; pass the value again.
 
 | Parameter          | Description                                                                    | Default                  |
 | ------------------ | ------------------------------------------------------------------------------ | ------------------------ |
@@ -245,13 +253,20 @@ helm upgrade --install photo-upload ./helm/photo-upload \
 | `apns.keyId`       | APNs Key ID — the token header's `kid`                                         | `""`                     |
 | `apns.teamId`      | Apple Developer Team ID — the token's `iss`                                    | `""`                     |
 | `apns.topic`       | The app's bundle id                                                            | `com.oglimmer.photosync` |
-| `apns.production`  | `false` uses Apple's sandbox, which is what a **debug** build registers against. A TestFlight or App Store build only receives pushes with this `true` | `false` |
+| `apns.production`  | Must match the build on the phone: `false` is Apple's sandbox, which a **debug** build (`Zyncloud.entitlements`, `aps-environment: development`) registers against; `true` is what a TestFlight or App Store build needs (`Zyncloud.Release.entitlements`, `aps-environment: production`). One server can only talk to one of the two — with the wrong one Apple answers `BadDeviceToken` and drops the push | `false` |
 
 Verify after deploy — one line, and which environment it picked:
 
 ```bash
 kubectl logs deploy/photo-upload-backend | grep APNs
-# APNs client initialized for DEVELOPMENT environment (keyId=289ZRKLFNQ)
+# APNs client initialized for PRODUCTION environment (keyId=289ZRKLFNQ)
+```
+
+That line only proves the key parsed. It says nothing about the topic, so check that too:
+
+```bash
+kubectl exec deploy/photo-upload-backend -- printenv | grep APNS_TOPIC
+# APNS_TOPIC=com.oglimmer.photosync     <- empty here means every push is rejected
 ```
 
 **Rotating the key** is now a secret edit plus a restart, with no image rebuild:
