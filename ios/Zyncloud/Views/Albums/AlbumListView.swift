@@ -3,7 +3,6 @@ import SwiftUI
 struct AlbumListView: View {
     @StateObject private var viewModel = AlbumsViewModel()
     @State private var showingCreateSheet = false
-    @State private var showingEditSheet = false
     @State private var albumToEdit: Album?
 
     /// The link handed to the system share sheet. Owned by this screen, not by the card: a sheet
@@ -33,7 +32,6 @@ struct AlbumListView: View {
                                     album: album,
                                     onEdit: {
                                         albumToEdit = album
-                                        showingEditSheet = true
                                     },
                                     onTogglePublished: {
                                         viewModel.setPublished(id: album.id, published: !album.isPublished)
