@@ -240,13 +240,14 @@ import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useApi } from '../composables/useApi'
 
 /**
- * Where the iOS app lives, or '' while it is not on the App Store yet.
+ * Where the iOS app lives.
  *
- * Empty renders the note as plain text rather than a dead link: telling someone to fetch the app
- * is still true and still useful, and a link that goes nowhere is worse than no link. Fill this in
- * once the listing exists — it is the only thing that has to change.
+ * Currently the App Store's iPhone apps page, not a listing for Zyncloud — a stand-in until the
+ * app is published, so the note reads as a link and lands somewhere real rather than nowhere.
+ * Swap in `https://apps.apple.com/app/id…` the day the listing exists; this constant is the only
+ * thing that has to change. Setting it back to '' renders the note as plain text instead.
  */
-const APP_STORE_URL = ''
+const APP_STORE_URL = 'https://apps.apple.com/de/iphone/apps'
 
 export default {
   name: 'SubscriptionDialog',
