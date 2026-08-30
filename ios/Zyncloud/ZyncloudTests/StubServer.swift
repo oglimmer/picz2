@@ -1,5 +1,4 @@
 import Foundation
-
 @testable import Zyncloud
 
 /// One request the client actually put on the wire.
@@ -9,7 +8,9 @@ struct RecordedRequest {
     let headers: [String: String]
     let body: Data
 
-    var path: String { url.path }
+    var path: String {
+        url.path
+    }
 
     /// The path exactly as it went out, percent-encoding intact. `URL.path` decodes it, which
     /// hides precisely the bug the tag-name tests are looking for.
@@ -28,7 +29,9 @@ struct RecordedRequest {
         (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
     }
 
-    var bodyText: String { String(decoding: body, as: UTF8.self) }
+    var bodyText: String {
+        String(decoding: body, as: UTF8.self)
+    }
 }
 
 /// Intercepts `URLSession.shared` so the endpoint builders can be checked without a server.
@@ -47,8 +50,8 @@ final class StubURLProtocol: URLProtocol {
     /// `nonisolated(unsafe)`: every read and write of this pair is between a ``lock`` and its
     /// matching unlock, which is exactly the guarantee the compiler is asking for and cannot
     /// verify for itself.
-    nonisolated(unsafe) private static var handler: (@Sendable (RecordedRequest) -> Stub)?
-    nonisolated(unsafe) private static var recorded: [RecordedRequest] = []
+    private nonisolated(unsafe) static var handler: (@Sendable (RecordedRequest) -> Stub)?
+    private nonisolated(unsafe) static var recorded: [RecordedRequest] = []
 
     static func begin(_ handler: @escaping @Sendable (RecordedRequest) -> Stub) {
         lock.lock()
@@ -76,7 +79,7 @@ final class StubURLProtocol: URLProtocol {
 
     private static func serve(_ request: RecordedRequest) -> Stub {
         lock.lock()
-        let handler = self.handler
+        let handler = handler
         recorded.append(request)
         lock.unlock()
         return handler?(request) ?? Stub(status: 200, body: Data("{}".utf8))
@@ -85,7 +88,9 @@ final class StubURLProtocol: URLProtocol {
     /// `URLSession` turns a set `httpBody` into a stream by the time a protocol sees it, so both
     /// shapes have to be read or every body assertion silently passes on empty data.
     private static func body(of request: URLRequest) -> Data {
-        if let body = request.httpBody { return body }
+        if let body = request.httpBody {
+            return body
+        }
         guard let stream = request.httpBodyStream else { return Data() }
 
         stream.open()
@@ -97,7 +102,9 @@ final class StubURLProtocol: URLProtocol {
         defer { buffer.deallocate() }
         while stream.hasBytesAvailable {
             let read = stream.read(buffer, maxLength: capacity)
-            if read <= 0 { break }
+            if read <= 0 {
+                break
+            }
             data.append(buffer, count: read)
         }
         return data
@@ -105,9 +112,13 @@ final class StubURLProtocol: URLProtocol {
 
     // MARK: - URLProtocol
 
-    override class func canInit(with _: URLRequest) -> Bool { isArmed }
+    override class func canInit(with _: URLRequest) -> Bool {
+        isArmed
+    }
 
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
 
     override func startLoading() {
         guard let url = request.url else {
@@ -198,6 +209,36 @@ enum StubServer {
         return requests
     }
 
+    /// The same, with the answer picked per request.
+    ///
+    /// ``capture(status:json:_:)`` serves one body to everything, which is enough for a test that
+    /// makes one call. A screen loading is not that: ``PresentationViewModel/load()`` asks four
+    /// endpoints at once, and a single shared body decodes into three of them as nothing at all —
+    /// so the screen under test would be furnished by accident rather than by the fixture.
+    ///
+    /// `route` answers on `path`; anything it does not recognise should get an empty envelope
+    /// rather than a failure, so an endpoint added later shows up as a missing fixture instead of
+    /// an unexplained error.
+    ///
+    /// `isolation: #isolation` for the reason ``serving(status:body:_:)`` needs it: the view-model
+    /// suites are `@MainActor`, and without it their `work` closure could not stay there.
+    static func routing(
+        isolation _: isolated (any Actor)? = #isolation,
+        _ route: @escaping @Sendable (RecordedRequest) -> (status: Int, json: String),
+        _ work: () async -> Void,
+    ) async -> [RecordedRequest] {
+        await StubGate.shared.acquire()
+        URLCache.shared.removeAllCachedResponses()
+        StubURLProtocol.begin { request in
+            let answer = route(request)
+            return StubURLProtocol.Stub(status: answer.status, body: Data(answer.json.utf8))
+        }
+        await work()
+        let requests = StubURLProtocol.end()
+        await StubGate.shared.release()
+        return requests
+    }
+
     /// The same, for a body that is not JSON — an image, say. Goes through the same gate.
     ///
     /// `isolation: #isolation` so the caller's actor comes along: the image tests are a
@@ -206,7 +247,7 @@ enum StubServer {
     static func serving(
         status: Int,
         body: Data,
-        isolation: isolated (any Actor)? = #isolation,
+        isolation _: isolated (any Actor)? = #isolation,
         _ work: () async -> Void,
     ) async {
         await StubGate.shared.acquire()
@@ -230,7 +271,7 @@ enum StubServer {
     /// image suites are `@MainActor`, and their `work` closure must not have to leave the main
     /// actor to get here.
     static func holdingTheStub(
-        isolation: isolated (any Actor)? = #isolation,
+        isolation _: isolated (any Actor)? = #isolation,
         _ work: () async -> Void,
     ) async {
         await StubGate.shared.acquire()
