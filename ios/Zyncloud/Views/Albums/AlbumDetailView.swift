@@ -15,7 +15,9 @@ enum AlbumLayoutMode: String, CaseIterable, Identifiable {
     /// see ``AlbumDetailViewModel/hasLocatedPhotos``.
     case map
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -122,7 +124,14 @@ struct AlbumDetailView: View {
         )
     }
 
-    var body: some View {
+    /// The screen itself: an optional banner, one of the four galleries, an optional
+    /// selection bar.
+    ///
+    /// Split out of ``body`` rather than left inline, and it has to stay split: with this
+    /// stack and the modifier chain below it in one expression the type checker gives up —
+    /// "unable to type-check this expression in reasonable time" — and the whole target
+    /// stops building. Nothing about the view itself changed in the split.
+    private var content: some View {
         VStack(spacing: 0) {
             if viewModel.uploadsInFlight > 0 {
                 uploadBanner
@@ -142,173 +151,177 @@ struct AlbumDetailView: View {
                 selectionBar
             }
         }
-        .navigationTitle(album.name)
-        .navigationBarTitleDisplayMode(.inline)
-        // The tab bar and the selection bar would otherwise stack up two rows deep at the
-        // bottom, and the tabs lead away from a selection that would be thrown away on the way
-        // out. So while picking, the bottom of the screen belongs to the selection bar alone.
-        .toolbar(viewModel.isSelecting ? .hidden : .visible, for: .tabBar)
-        .toolbar {
-            if viewModel.isSelecting {
-                // On the right, where the Select button that opened this mode was — and away
-                // from the back arrow, which it sat next to and read as a second way out.
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    // "Done", not "Cancel": leaving selection mode keeps every edit already
-                    // applied, so there is nothing here to take back.
-                    Button("Done") { viewModel.endSelecting() }
-                        .disabled(viewModel.isBulkWorking)
-                }
-            } else {
-                // Top-level rather than buried in the album menu, because this is the one
-                // entry point for every multi-photo action and iPhone users look for a
-                // "Select" here first. The long press on a tile reaches the same mode.
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Select") { viewModel.beginSelecting() }
-                        .disabled(!canSelectPhotos)
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(
-                        action: { viewModel.requestUpload() },
-                        label: { Image(systemName: "plus") },
-                    )
-                    .disabled(viewModel.isArrangingByHand)
-                    .accessibilityLabel("Upload photos")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    sortMenu
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(
-                        action: { viewModel.reloadPhotosAndImages() },
-                        label: { Image(systemName: "arrow.clockwise") },
-                    )
-                    .disabled(viewModel.isLoading || viewModel.isArrangingByHand)
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    albumMenu
-                }
-            }
-        }
-        // `photoLibrary: .shared()` is load-bearing, not a default: without it the picker runs
-        // out of process and the returned items carry no `itemIdentifier`, which is the only
-        // way back to the PHAsset the uploader needs.
-        .photosPicker(
-            isPresented: $viewModel.isPickerPresented,
-            selection: $pickedItems,
-            maxSelectionCount: nil,
-            matching: .any(of: [.images, .videos]),
-            photoLibrary: .shared(),
-        )
-        .onChange(of: pickedItems) { _, items in
-            guard !items.isEmpty else { return }
-            viewModel.upload(
-                assetIdentifiers: items.compactMap(\.itemIdentifier),
-                pickedCount: items.count,
-            )
-            pickedItems = []
-        }
-        .confirmationDialog(
-            "Delete photo",
-            isPresented: Binding(
-                get: { pendingDelete != nil },
-                set: { shown in
-                    if !shown {
-                        pendingDelete = nil
+    }
+
+    var body: some View {
+        content
+            .navigationTitle(album.name)
+            .navigationBarTitleDisplayMode(.inline)
+            // The tab bar and the selection bar would otherwise stack up two rows deep at the
+            // bottom, and the tabs lead away from a selection that would be thrown away on the way
+            // out. So while picking, the bottom of the screen belongs to the selection bar alone.
+            .toolbar(viewModel.isSelecting ? .hidden : .visible, for: .tabBar)
+            .toolbar {
+                if viewModel.isSelecting {
+                    // On the right, where the Select button that opened this mode was — and away
+                    // from the back arrow, which it sat next to and read as a second way out.
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        // "Done", not "Cancel": leaving selection mode keeps every edit already
+                        // applied, so there is nothing here to take back.
+                        Button("Done") { viewModel.endSelecting() }
+                            .disabled(viewModel.isBulkWorking)
                     }
-                },
-            ),
-            titleVisibility: .visible,
-            presenting: pendingDelete,
-        ) { photo in
-            Button("Delete", role: .destructive) {
-                pendingDelete = nil
-                viewModel.delete(photo)
+                } else {
+                    // Top-level rather than buried in the album menu, because this is the one
+                    // entry point for every multi-photo action and iPhone users look for a
+                    // "Select" here first. The long press on a tile reaches the same mode.
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Select") { viewModel.beginSelecting() }
+                            .disabled(!canSelectPhotos)
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(
+                            action: { viewModel.requestUpload() },
+                            label: { Image(systemName: "plus") },
+                        )
+                        .disabled(viewModel.isArrangingByHand)
+                        .accessibilityLabel("Upload photos")
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        sortMenu
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(
+                            action: { viewModel.reloadPhotosAndImages() },
+                            label: { Image(systemName: "arrow.clockwise") },
+                        )
+                        .disabled(viewModel.isLoading || viewModel.isArrangingByHand)
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        albumMenu
+                    }
+                }
             }
-            Button("Cancel", role: .cancel) { pendingDelete = nil }
-        } message: { _ in
-            Text("This removes the photo from your server for good. It cannot be undone.")
-        }
-        .confirmationDialog(
-            viewModel.selectedPhotoIds.count == 1
-                ? "Delete 1 photo"
-                : "Delete \(viewModel.selectedPhotoIds.count) photos",
-            isPresented: $confirmingSelectionDelete,
-            titleVisibility: .visible,
-        ) {
-            Button("Delete", role: .destructive) { viewModel.deleteSelection() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes them from your server for good. It cannot be undone.")
-        }
-        .sheet(item: $sharingLink) { link in
-            ShareSheet(items: [link.url])
-        }
-        .sheet(item: $taggingPhoto) { photo in
-            PhotoTagsView(photo: photo, viewModel: viewModel)
-        }
-        .sheet(isPresented: $isBulkTagPresented) {
-            BulkTagView(viewModel: viewModel)
-        }
-        .sheet(isPresented: $isAlbumTagsPresented) {
-            NavigationStack {
-                AlbumTagsSettingsView(viewModel: viewModel)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Done") { isAlbumTagsPresented = false }
+            // `photoLibrary: .shared()` is load-bearing, not a default: without it the picker runs
+            // out of process and the returned items carry no `itemIdentifier`, which is the only
+            // way back to the PHAsset the uploader needs.
+            .photosPicker(
+                isPresented: $viewModel.isPickerPresented,
+                selection: $pickedItems,
+                maxSelectionCount: nil,
+                matching: .any(of: [.images, .videos]),
+                photoLibrary: .shared(),
+            )
+            .onChange(of: pickedItems) { _, items in
+                guard !items.isEmpty else { return }
+                viewModel.upload(
+                    assetIdentifiers: items.compactMap(\.itemIdentifier),
+                    pickedCount: items.count,
+                )
+                pickedItems = []
+            }
+            .confirmationDialog(
+                "Delete photo",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { shown in
+                        if !shown {
+                            pendingDelete = nil
+                        }
+                    },
+                ),
+                titleVisibility: .visible,
+                presenting: pendingDelete,
+            ) { photo in
+                Button("Delete", role: .destructive) {
+                    pendingDelete = nil
+                    viewModel.delete(photo)
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            } message: { _ in
+                Text("This removes the photo from your server for good. It cannot be undone.")
+            }
+            .confirmationDialog(
+                viewModel.selectedPhotoIds.count == 1
+                    ? "Delete 1 photo"
+                    : "Delete \(viewModel.selectedPhotoIds.count) photos",
+                isPresented: $confirmingSelectionDelete,
+                titleVisibility: .visible,
+            ) {
+                Button("Delete", role: .destructive) { viewModel.deleteSelection() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes them from your server for good. It cannot be undone.")
+            }
+            .sheet(item: $sharingLink) { link in
+                ShareSheet(items: [link.url])
+            }
+            .sheet(item: $taggingPhoto) { photo in
+                PhotoTagsView(photo: photo, viewModel: viewModel)
+            }
+            .sheet(isPresented: $isBulkTagPresented) {
+                BulkTagView(viewModel: viewModel)
+            }
+            .sheet(isPresented: $isAlbumTagsPresented) {
+                NavigationStack {
+                    AlbumTagsSettingsView(viewModel: viewModel)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") { isAlbumTagsPresented = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $isNarrationPresented) {
+                NarrationSetupView(album: album)
+            }
+            .fullScreenCover(isPresented: $isPresentationPresented) {
+                PresentationView(album: album)
+            }
+            .confirmationDialog(
+                "Delete album",
+                isPresented: $confirmingAlbumDelete,
+                titleVisibility: .visible,
+            ) {
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteAlbum { deleted in
+                        if deleted {
+                            onDeleted()
+                            dismiss()
                         }
                     }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes '\(album.name)' and every photo in it for good. It cannot be undone.")
             }
-        }
-        .sheet(isPresented: $isNarrationPresented) {
-            NarrationSetupView(album: album)
-        }
-        .fullScreenCover(isPresented: $isPresentationPresented) {
-            PresentationView(album: album)
-        }
-        .confirmationDialog(
-            "Delete album",
-            isPresented: $confirmingAlbumDelete,
-            titleVisibility: .visible,
-        ) {
-            Button("Delete", role: .destructive) {
-                viewModel.deleteAlbum { deleted in
-                    if deleted {
-                        onDeleted()
-                        dismiss()
-                    }
+            .confirmationDialog(
+                "Reorder album",
+                isPresented: sortConfirmationShown,
+                titleVisibility: .visible,
+                presenting: pendingSort,
+            ) { action in
+                Button("Reorder") {
+                    pendingSort = nil
+                    viewModel.reorder(by: action)
+                }
+                Button("Cancel", role: .cancel) { pendingSort = nil }
+            } message: { action in
+                Text(action.confirmationMessage)
+            }
+            .alert(state: $viewModel.alertState)
+            .onAppear {
+                if viewModel.photos.isEmpty {
+                    viewModel.fetchPhotos()
+                } else {
+                    // Coming back to a screen that already has its list: anything the worker was
+                    // still busy with when we left needs watching again.
+                    viewModel.startProcessingPollingIfNeeded()
                 }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This deletes '\(album.name)' and every photo in it for good. It cannot be undone.")
-        }
-        .confirmationDialog(
-            "Reorder album",
-            isPresented: sortConfirmationShown,
-            titleVisibility: .visible,
-            presenting: pendingSort,
-        ) { action in
-            Button("Reorder") {
-                pendingSort = nil
-                viewModel.reorder(by: action)
+            .onDisappear {
+                viewModel.stopProcessingPolling()
             }
-            Button("Cancel", role: .cancel) { pendingSort = nil }
-        } message: { action in
-            Text(action.confirmationMessage)
-        }
-        .alert(state: $viewModel.alertState)
-        .onAppear {
-            if viewModel.photos.isEmpty {
-                viewModel.fetchPhotos()
-            } else {
-                // Coming back to a screen that already has its list: anything the worker was
-                // still busy with when we left needs watching again.
-                viewModel.startProcessingPollingIfNeeded()
-            }
-        }
-        .onDisappear {
-            viewModel.stopProcessingPolling()
-        }
     }
 
     // MARK: - Upload Banner
@@ -346,7 +359,9 @@ struct AlbumDetailView: View {
     }
 
     private var selectionCountLabel: String {
-        if viewModel.isBulkWorking { return "Working…" }
+        if viewModel.isBulkWorking {
+            return "Working…"
+        }
 
         switch viewModel.selectedPhotoIds.count {
         case 0: return "Select photos to tag, rotate or delete"

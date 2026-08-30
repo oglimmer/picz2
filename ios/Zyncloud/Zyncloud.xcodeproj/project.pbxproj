@@ -70,6 +70,7 @@
 				AttachmentLoading.swift,
 				Credentials.swift,
 				LastAlbumStore.swift,
+				SharedItemsLoader.swift,
 				TusChunking.swift,
 				UploadService.swift,
 			);

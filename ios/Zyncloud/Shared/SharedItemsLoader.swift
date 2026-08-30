@@ -1,6 +1,6 @@
 import Foundation
-import UniformTypeIdentifiers
 import os
+import UniformTypeIdentifiers
 
 /// Loads the attachments handed to the share extension into `MediaItem`s.
 ///
@@ -8,6 +8,10 @@ import os
 /// the hops back to the main actor and the `AttachmentLoadTally` bookkeeping, so the view
 /// controller sees exactly one callback with the finished batch instead of a
 /// per-attachment trickle it has to reassemble.
+///
+/// Lives in `Shared/` rather than `ShareExtension/` for the reason `AttachmentLoading.swift`
+/// does: only the app target is testable, and the accounting here is exactly the part whose
+/// failure mode is a share that never finishes preparing.
 @MainActor
 final class SharedItemsLoader {
     /// Everything one share produced: the usable media, plus how many attachments were not.
@@ -98,7 +102,7 @@ final class SharedItemsLoader {
 
     /// `nonisolated` because `NSItemProvider` calls its completion on whichever thread it
     /// likes, and this is called from one of those. It touches no loader state.
-    nonisolated private func loadItemAlternative(attachment: NSItemProvider) {
+    private nonisolated func loadItemAlternative(attachment: NSItemProvider) {
         switch AttachmentRoute.fallbackRoute(for: attachment) {
         case .image:
             attachment.loadItem(forTypeIdentifier: UTType.image.identifier, options: nil) { [weak self] item, error in
@@ -121,7 +125,7 @@ final class SharedItemsLoader {
     /// Counts an attachment we cannot use, and completes the batch if it was the last one.
     /// `nonisolated`: reached both from the main-actor routing loop and from an
     /// `NSItemProvider` callback on an arbitrary thread. It hops before touching anything.
-    nonisolated private func noteUnusableAttachment() {
+    private nonisolated func noteUnusableAttachment() {
         Task { @MainActor [weak self] in
             self?.recordSkipped()
         }
@@ -131,7 +135,7 @@ final class SharedItemsLoader {
     ///
     /// The `Error` stays on this side of the hop: `any Error` is not `Sendable`, and all
     /// that is wanted from it is a line for the log.
-    nonisolated private func handleLoadedURL(url: URL, error: Error?) {
+    private nonisolated func handleLoadedURL(url: URL, error: Error?) {
         let errorText = error?.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -143,7 +147,7 @@ final class SharedItemsLoader {
             recordLoaded(MediaItem(
                 url: url,
                 type: Self.mediaType(forPathExtension: url.pathExtension),
-                filename: url.lastPathComponent
+                filename: url.lastPathComponent,
             ))
         }
     }
@@ -155,7 +159,7 @@ final class SharedItemsLoader {
     /// another thread is a real hazard rather than a paperwork one — and the two things this
     /// method wants from it, "is it a file URL" and "what was it instead", are both
     /// answerable on the thread it arrived on.
-    nonisolated private func handleLoadedItem(item: NSSecureCoding?, error: Error?, type: MediaItem.MediaType) {
+    private nonisolated func handleLoadedItem(item: NSSecureCoding?, error: Error?, type: MediaItem.MediaType) {
         let errorText = error?.localizedDescription
         let url = item as? URL
         let describedType = String(describing: item.map { Swift.type(of: $0) })
@@ -208,8 +212,12 @@ final class SharedItemsLoader {
         let imageExtensions = ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tiff", "bmp"]
         let videoExtensions = ["mov", "mp4", "m4v", "avi", "wmv", "flv", "mkv", "webm"]
         let lowered = ext.lowercased()
-        if imageExtensions.contains(lowered) { return .image }
-        if videoExtensions.contains(lowered) { return .video }
+        if imageExtensions.contains(lowered) {
+            return .image
+        }
+        if videoExtensions.contains(lowered) {
+            return .video
+        }
         return .image
     }
 }
