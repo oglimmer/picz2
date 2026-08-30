@@ -110,6 +110,32 @@
               </label>
             </div>
 
+            <!-- The one thing nobody can guess: push is matched to a subscription purely by
+                 e-mail address. Somebody who installs the app and signs in with a different
+                 address gets e-mail and silently no push, and nothing anywhere would tell them
+                 why. So it is said here, next to the field it is about. -->
+            <aside class="subdlg-push">
+              <span
+                class="subdlg-push-icon"
+                aria-hidden="true"
+              >📱</span>
+              <span class="subdlg-push-text">
+                <strong>Want these on your phone too?</strong>
+                Get <em>Zyncloud</em>
+                <a
+                  v-if="appStoreUrl"
+                  class="subdlg-push-link"
+                  :href="appStoreUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >on the App&nbsp;Store</a>
+                <template v-else>from the App&nbsp;Store</template>
+                and sign in with <strong>this same email address</strong>. Push notifications only
+                reach a phone signed in with the address you enter above — anything else still gets
+                the emails.
+              </span>
+            </aside>
+
             <p
               v-if="error"
               class="subdlg-error"
@@ -213,6 +239,15 @@
 import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useApi } from '../composables/useApi'
 
+/**
+ * Where the iOS app lives, or '' while it is not on the App Store yet.
+ *
+ * Empty renders the note as plain text rather than a dead link: telling someone to fetch the app
+ * is still true and still useful, and a link that goes nowhere is worse than no link. Fill this in
+ * once the listing exists — it is the only thing that has to change.
+ */
+const APP_STORE_URL = ''
+
 export default {
   name: 'SubscriptionDialog',
   props: {
@@ -236,6 +271,7 @@ export default {
   emits: ['close', 'subscribed'],
   setup(props, { emit }) {
     const { apiUrl } = useApi()
+    const appStoreUrl = APP_STORE_URL
     const loading = ref(false)
     const error = ref('')
     const sentTo = ref('')
@@ -363,6 +399,7 @@ export default {
     }
 
     return {
+      appStoreUrl,
       formData,
       loading,
       error,
@@ -670,6 +707,43 @@ export default {
   font-size: .75rem;
   line-height: 1.4;
 }
+
+/* === THE PHONE NOTE ===
+   An aside, not an option: it changes nothing about the subscription, it explains why the address
+   above decides whether a push can ever arrive. Tinted rather than boxed in the accent, so it
+   reads as a helpful footnote and does not compete with the submit button. */
+.subdlg-push {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: 3px;
+  background: var(--c-surface-alt);
+}
+
+.subdlg-push-icon {
+  flex: none;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.subdlg-push-text {
+  color: var(--c-text-2);
+  font-size: .8125rem;
+  line-height: 1.45;
+}
+
+.subdlg-push-text strong { color: var(--c-text); font-weight: 600; }
+.subdlg-push-text em { font-style: normal; font-weight: 600; color: var(--c-text); }
+
+.subdlg-push-link {
+  color: var(--c-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.subdlg-push-link:hover { color: var(--c-accent-h); }
 
 /* === FOCUS ===
    Inputs and option rows carry their own accent ring, so the outline goes
