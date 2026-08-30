@@ -46,6 +46,11 @@ struct WelcomeView: View {
                 actions
                 footer
             }
+            // The landing page is a column of prose. Left to run the full width of an iPad it
+            // reads as a banner, not a page, so it is capped and centred; on a phone the cap is
+            // wider than the screen and changes nothing.
+            .frame(maxWidth: 700)
+            .frame(maxWidth: .infinity)
         }
         .background(LandingStyle.ink.ignoresSafeArea())
         .preferredColorScheme(.dark)

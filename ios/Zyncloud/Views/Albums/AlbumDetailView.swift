@@ -57,11 +57,11 @@ struct AlbumDetailView: View {
         _viewModel = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-    ]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var columns: [GridItem] {
+        AdaptiveGrid.photoColumns(horizontalSizeClass)
+    }
 
     /// Flat grid, or day-and-place sections. Kept in app storage rather than on the view model
     /// because it is a reading preference, not a fact about this album — whichever way the user

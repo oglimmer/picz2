@@ -57,6 +57,19 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
+The app ships for **iPhone and iPad** (`TARGETED_DEVICE_FAMILY = "1,2"`), so build both:
+
+```bash
+xcodebuild test -project Zyncloud.xcodeproj -scheme Zyncloud \
+  -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M5)'
+```
+
+iPad support is three things that must stay together, and `Scripts/check-infoplist.sh` fails
+if any one of them goes missing: the device family, the 152x152 and 167x167 iPad app icons,
+and `UISupportedInterfaceOrientations~ipad` with all four orientations. iPhone stays
+portrait-only. Column counts come from the horizontal size class through `AdaptiveGrid`, not
+from the device — an iPad in Slide Over is `.compact` and gets the phone layout.
+
 **Do not pass `CODE_SIGNING_ALLOWED=NO`.** It fails every `KeychainHelperTests` case with
 `errSecMissingEntitlement` — keychain access needs the signed host app, and the failures look
 like broken tests rather than a broken invocation.

@@ -48,19 +48,57 @@ else
 fi
 
 # --- device family ------------------------------------------------------------
-# App Store validation rejected a build that declared iPad support ("1,2" is the
-# Xcode default) while shipping only iPhone icons and a portrait-only orientation
-# list: "does not contain an app icon for iPad of exactly 167x167", and the same
-# for 152x152, plus a demand for all four iPad multitasking orientations.
-# iPhone-only is the deliberate choice. Supporting iPad means adding those icons
-# AND the ~ipad orientation list AND actually testing the layout.
+# App Store validation once rejected a build that declared iPad support ("1,2" is
+# the Xcode default) while shipping only iPhone icons and a portrait-only
+# orientation list: "does not contain an app icon for iPad of exactly 167x167",
+# and the same for 152x152, plus a demand for all four iPad multitasking
+# orientations. iPad is now supported on purpose, so the three parts must stay
+# together: the family, the two icon sizes, and the ~ipad orientation list.
+icons=Assets.xcassets/AppIcon.appiconset
 if grep -q 'TARGETED_DEVICE_FAMILY = "1,2"' Zyncloud.xcodeproj/project.pbxproj; then
-    echo "error: TARGETED_DEVICE_FAMILY claims iPad support, but no iPad icons are shipped"
-    echo "note: App Store validation rejects this. Either set it to 1, or add 152x152 and"
-    echo "      167x167 icons plus UISupportedInterfaceOrientations~ipad with all four."
-    fail=1
-else
+    for px in 152 167; do
+        file=$(python3 - "$icons" "$px" <<'PYEOF'
+import json, sys
+root, px = sys.argv[1], int(sys.argv[2])
+for image in json.load(open(f"{root}/Contents.json"))["images"]:
+    if image["idiom"] != "ipad":
+        continue
+    if round(float(image["size"].split("x")[0]) * float(image["scale"].rstrip("x"))) == px:
+        print(image.get("filename", ""))
+        break
+PYEOF
+        )
+        if [[ -z $file || ! -f $icons/$file ]]; then
+            echo "error: no iPad app icon of ${px}x${px} in $icons"
+            fail=1
+            continue
+        fi
+        actual=$(sips -g pixelWidth -g pixelHeight "$icons/$file" | awk '/pixel/ {print $2}' | paste -sd x -)
+        if [[ $actual != "${px}x${px}" ]]; then
+            echo "error: $file is $actual, not ${px}x${px}"
+            fail=1
+        else
+            echo "ok: iPad app icon ${px}x${px} ($file)"
+        fi
+    done
+
+    ipad_orientations=$(read_key 'UISupportedInterfaceOrientations~ipad')
+    missing=""
+    for o in Portrait PortraitUpsideDown LandscapeLeft LandscapeRight; do
+        [[ $ipad_orientations == *"UIInterfaceOrientation$o"* ]] || missing="$missing $o"
+    done
+    if [[ -n $missing ]]; then
+        echo "error: UISupportedInterfaceOrientations~ipad is missing:$missing"
+        echo "note: iPad multitasking requires all four."
+        fail=1
+    else
+        echo "ok: UISupportedInterfaceOrientations~ipad lists all four"
+    fi
+elif grep -q 'TARGETED_DEVICE_FAMILY = 1;' Zyncloud.xcodeproj/project.pbxproj; then
     echo "ok: TARGETED_DEVICE_FAMILY is iPhone-only"
+else
+    echo "error: TARGETED_DEVICE_FAMILY is neither 1 nor \"1,2\""
+    fail=1
 fi
 
 # --- export compliance --------------------------------------------------------
