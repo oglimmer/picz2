@@ -44,11 +44,16 @@ struct AlbumDetailView: View {
     /// it. Without it the album would still be on the grid the pop lands back on.
     private let onDeleted: () -> Void
 
+    /// Called with the server's album after a publish or unpublish, so the list behind this
+    /// screen shows the new label. The list pushed a value, so it cannot see the change itself.
+    private let onChanged: (Album) -> Void
+
     @Environment(\.dismiss) private var dismiss
 
-    init(album: Album, onDeleted: @escaping () -> Void = {}) {
+    init(album: Album, onDeleted: @escaping () -> Void = {}, onChanged: @escaping (Album) -> Void = { _ in }) {
         self.album = album
         self.onDeleted = onDeleted
+        self.onChanged = onChanged
         _viewModel = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
     }
 
@@ -212,6 +217,10 @@ struct AlbumDetailView: View {
                 matching: .any(of: [.images, .videos]),
                 photoLibrary: .shared(),
             )
+            .onChange(of: viewModel.revisedAlbum) { _, revised in
+                guard let revised else { return }
+                onChanged(revised)
+            }
             .onChange(of: pickedItems) { _, items in
                 guard !items.isEmpty else { return }
                 viewModel.upload(
