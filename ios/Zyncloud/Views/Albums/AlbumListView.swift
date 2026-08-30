@@ -9,10 +9,11 @@ struct AlbumListView: View {
     /// presented from a context menu goes away with the menu.
     @State private var sharingLink: ShareableLink?
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 16),
-        GridItem(.flexible(), spacing: 16),
-    ]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var columns: [GridItem] {
+        AdaptiveGrid.cardColumns(horizontalSizeClass)
+    }
 
     var body: some View {
         NavigationStack {

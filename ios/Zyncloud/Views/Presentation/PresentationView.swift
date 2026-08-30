@@ -31,11 +31,11 @@ struct PresentationView: View {
         _viewModel = StateObject(wrappedValue: PresentationViewModel(album: album))
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-    ]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var columns: [GridItem] {
+        AdaptiveGrid.photoColumns(horizontalSizeClass)
+    }
 
     var body: some View {
         // Its own navigation container: this arrives as a full-screen cover, which starts with
