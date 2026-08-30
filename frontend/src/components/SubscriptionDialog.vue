@@ -121,7 +121,10 @@
               >📱</span>
               <span class="subdlg-push-text">
                 <strong>Want these on your phone too?</strong>
-                Get <em>Zyncloud</em>
+                <!-- The space is explicit because Vue's default `whitespace: 'condense'` drops a
+                     whitespace-only text node between two elements when it contains a newline —
+                     which glued "Zyncloud" to "on the App Store". Do not "tidy" this away. -->
+                Get <em>Zyncloud</em>{{ ' ' }}
                 <a
                   v-if="appStoreUrl"
                   class="subdlg-push-link"
