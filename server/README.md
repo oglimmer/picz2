@@ -118,14 +118,14 @@ sequenceDiagram
 
 `JobType` values and what each one does:
 
-| JobType | Purpose |
-| --- | --- |
-| `PROCESS` | Full first pass: derivatives, capture date, GPS. |
-| `ROTATE_LEFT` | Turn an asset 90 degrees and rebuild derivatives. |
-| `REGEN_THUMBNAILS` | Rebuild missing thumbnail / medium / large. |
-| `EXTRACT_CAPTURE_DATE` | Re-read the capture date from the original. |
-| `EXTRACT_GPS` | Re-read the capture location from the original. |
-| `TRANSCODE_AUDIO_AAC` | Make the AAC sibling of a slideshow recording. Here `asset_id` is a recording id. |
+|        JobType         |                                      Purpose                                      |
+|------------------------|-----------------------------------------------------------------------------------|
+| `PROCESS`              | Full first pass: derivatives, capture date, GPS.                                  |
+| `ROTATE_LEFT`          | Turn an asset 90 degrees and rebuild derivatives.                                 |
+| `REGEN_THUMBNAILS`     | Rebuild missing thumbnail / medium / large.                                       |
+| `EXTRACT_CAPTURE_DATE` | Re-read the capture date from the original.                                       |
+| `EXTRACT_GPS`          | Re-read the capture location from the original.                                   |
+| `TRANSCODE_AUDIO_AAC`  | Make the AAC sibling of a slideshow recording. Here `asset_id` is a recording id. |
 
 ### Domain model
 
@@ -266,20 +266,20 @@ recording id, so the queue table is reused instead of duplicated.
 
 ### Class groups and what they are for
 
-| Package | Purpose |
-| --- | --- |
-| `controller` | HTTP endpoints. Thin. They validate and call a service. |
-| `service` | All business logic. Split by profile: api writes and reads, worker processes, retention deletes. |
-| `repository` | Spring Data JPA interfaces. The only place that talks to MariaDB. |
-| `entity` | JPA tables. Every field needs a Flyway column, or startup fails (`ddl-auto: validate`). |
-| `model` | Request and response DTOs sent over HTTP. Never JPA entities. |
-| `mapper` | MapStruct converters from entity to DTO. |
-| `config` | Beans and typed properties, plus `Profiles` (the api / worker / retention names). |
-| `security` | Basic auth, share tokens, upload tokens, and `UserContext` (the current user). |
-| `storage` | `StoragePaths`: deterministic S3 keys from the asset id. Paths cannot drift. |
-| `exception` | Typed errors plus `GlobalExceptionHandler`, which maps them to status codes. |
-| `health` | `MinioHealthIndicator` for the actuator health endpoint. |
-| `util` / `web` | Range requests, MIME checks, upload backpressure filter. |
+|    Package     |                                             Purpose                                              |
+|----------------|--------------------------------------------------------------------------------------------------|
+| `controller`   | HTTP endpoints. Thin. They validate and call a service.                                          |
+| `service`      | All business logic. Split by profile: api writes and reads, worker processes, retention deletes. |
+| `repository`   | Spring Data JPA interfaces. The only place that talks to MariaDB.                                |
+| `entity`       | JPA tables. Every field needs a Flyway column, or startup fails (`ddl-auto: validate`).          |
+| `model`        | Request and response DTOs sent over HTTP. Never JPA entities.                                    |
+| `mapper`       | MapStruct converters from entity to DTO.                                                         |
+| `config`       | Beans and typed properties, plus `Profiles` (the api / worker / retention names).                |
+| `security`     | Basic auth, share tokens, upload tokens, and `UserContext` (the current user).                   |
+| `storage`      | `StoragePaths`: deterministic S3 keys from the asset id. Paths cannot drift.                     |
+| `exception`    | Typed errors plus `GlobalExceptionHandler`, which maps them to status codes.                     |
+| `health`       | `MinioHealthIndicator` for the actuator health endpoint.                                         |
+| `util` / `web` | Range requests, MIME checks, upload backpressure filter.                                         |
 
 ## API Endpoints
 
