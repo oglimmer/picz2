@@ -14,6 +14,8 @@ public interface AlbumMapper {
       target = "coverImageFilename",
       ignore = true) // Computed field, not in entity
   @org.mapstruct.Mapping(target = "coverImageToken", ignore = true) // Computed field, not in entity
+  @org.mapstruct.Mapping(target = "storageBackendId", source = "storageBackend.id")
+  @org.mapstruct.Mapping(target = "storageBackendName", source = "storageBackend.name")
   AlbumInfo albumToAlbumInfo(Album album);
 
   List<AlbumInfo> albumsToAlbumInfos(List<Album> albums);

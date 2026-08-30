@@ -112,6 +112,10 @@ struct SyncOptionsView: View {
                     NavigationLink("Tags") {
                         TagManagerView()
                     }
+
+                    NavigationLink("Photo Storage") {
+                        StorageBackendsView()
+                    }
                 }
 
                 // Account Section

@@ -8,6 +8,7 @@ import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.GpsSource;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -17,6 +18,7 @@ import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import java.time.Instant;
@@ -39,6 +41,7 @@ class AlbumServiceTest {
   @Mock TagRepository tagRepository;
   @Mock ImageTagRepository imageTagRepository;
   @Mock AlbumEnabledTagRepository albumEnabledTagRepository;
+  @Mock StorageBackendRepository storageBackendRepository;
   @Mock FileStorageService fileStorageService;
   @Mock UserContext userContext;
   @Mock SystemTagProvisioner systemTagProvisioner;
@@ -59,6 +62,9 @@ class AlbumServiceTest {
 
   @Test
   void createAlbumGeneratesTokenAndOrder() {
+    // No backend id in the request means the instance's own storage — the row V44 seeds.
+    when(storageBackendRepository.findBySystemDefaultTrue())
+        .thenReturn(Optional.of(systemBackend()));
     when(albumRepository.findByUserAndName(testUser, "Summer")).thenReturn(Optional.empty());
     when(albumRepository.findMaxDisplayOrderByUser(testUser)).thenReturn(3);
     when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(anyLong(), eq(1L)))
@@ -232,5 +238,13 @@ class AlbumServiceTest {
     assertEquals(2, f3.getDisplayOrder());
 
     verify(fileMetadataRepository).saveAll(list);
+  }
+
+  private static StorageBackend systemBackend() {
+    StorageBackend backend = new StorageBackend();
+    backend.setId(1L);
+    backend.setName("Default storage");
+    backend.setSystemDefault(true);
+    return backend;
   }
 }

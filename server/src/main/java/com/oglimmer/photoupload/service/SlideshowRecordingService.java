@@ -21,6 +21,7 @@ import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ProcessingJobRepository;
 import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.security.UserContext;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
@@ -56,6 +57,7 @@ public class SlideshowRecordingService {
   private final FileStorageProperties fileStorageProperties;
   private final AudioReencodingService audioReencodingService;
   private final UserContext userContext;
+  private final StorageQuotaService storageQuotaService;
   private final RecordingInfoMapper recordingInfoMapper;
   private final RecordingAudioService recordingAudioService;
   private final JobEnqueueService jobEnqueueService;
@@ -107,7 +109,12 @@ public class SlideshowRecordingService {
             : ".webm";
     String audioFilename = UUID.randomUUID() + extension;
 
-    String storedAudioPath = persistAudio(audioFile, audioFilename);
+    // Narration counts against the quota like any other object we keep. Checked on the upload's
+    // own size: re-encoding changes it a little, never by an order of magnitude.
+    storageQuotaService.requireRoomFor(currentUser, albumId, audioFile.getSize());
+
+    StoredAudio storedAudio = persistAudio(audioFile, audioFilename, albumId);
+    String storedAudioPath = storedAudio.path();
 
     // Create recording entity
     SlideshowRecording recording = new SlideshowRecording();
@@ -116,6 +123,7 @@ public class SlideshowRecordingService {
     recording.setLanguage(request.getLanguage());
     recording.setAudioFilename(audioFilename);
     recording.setAudioPath(storedAudioPath);
+    recording.setAudioBytes(storedAudio.bytes());
     // Generate public token for unauthenticated access
     recording.setPublicToken(UUID.randomUUID().toString().replace("-", "").toLowerCase());
     recording.setDurationMs(request.getDurationMs());
@@ -161,7 +169,11 @@ public class SlideshowRecordingService {
    * then either PUT to S3 (and delete the temp) or move to the durable {@code recordings/}
    * directory. Returns the value to store in {@code audio_path}.
    */
-  private String persistAudio(MultipartFile audioFile, String audioFilename) throws IOException {
+  /** Where the narration ended up, and what it costs — master plus its derived AAC sibling. */
+  private record StoredAudio(String path, long bytes) {}
+
+  private StoredAudio persistAudio(MultipartFile audioFile, String audioFilename, Long albumId)
+      throws IOException {
     Path uploadDir = uploadDir();
     Path tempDir = uploadDir.resolve(AUDIO_TMP);
     Files.createDirectories(tempDir);
@@ -193,19 +205,22 @@ public class SlideshowRecordingService {
       }
 
       if (objectStorage.isPresent()) {
+        // Commentary follows its album's storage, same as the photos it talks over — otherwise a
+        // user on their own S3 would have the pictures on their bill and the audio on ours.
+        BackendStorage storage = objectStorage.get().forAlbumId(albumId);
         String key = StoragePaths.audioKey(audioFilename);
-        objectStorage.get().putFile(key, tempPath, contentTypeFor(audioFilename));
+        // Sized before the PUTs, while both files are still on disk.
+        long bytes = Files.size(tempPath) + (haveAac ? Files.size(aacPath) : 0);
+        storage.putFile(key, tempPath, contentTypeFor(audioFilename));
         if (haveAac) {
-          objectStorage
-              .get()
-              .putFile(
-                  StoragePaths.audioAacKey(audioFilename),
-                  aacPath,
-                  RecordingAudioService.AAC_CONTENT_TYPE);
+          storage.putFile(
+              StoragePaths.audioAacKey(audioFilename),
+              aacPath,
+              RecordingAudioService.AAC_CONTENT_TYPE);
         }
         Files.deleteIfExists(tempPath);
         Files.deleteIfExists(aacPath);
-        return key;
+        return new StoredAudio(key, bytes);
       }
 
       // Legacy path: move re-encoded file to the durable recordings dir, keep DB pointer
@@ -216,7 +231,12 @@ public class SlideshowRecordingService {
       if (haveAac) {
         Files.move(aacPath, durable.resolveSibling(StoragePaths.aacFilename(audioFilename)));
       }
-      return "recordings/" + audioFilename;
+      long localBytes =
+          Files.size(durable)
+              + (haveAac
+                  ? Files.size(durable.resolveSibling(StoragePaths.aacFilename(audioFilename)))
+                  : 0);
+      return new StoredAudio("recordings/" + audioFilename, localBytes);
     } catch (IOException e) {
       try {
         Files.deleteIfExists(tempPath);
@@ -402,8 +422,9 @@ public class SlideshowRecordingService {
     String audioPath = recording.getAudioPath();
     String aacFilename = StoragePaths.aacFilename(recording.getAudioFilename());
     if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
+      BackendStorage storage = objectStorage.get().forAlbumId(recording.getAlbum().getId());
       try {
-        objectStorage.get().delete(audioPath);
+        storage.delete(audioPath);
         log.info("Deleted audio object: s3://.../{}", audioPath);
       } catch (Exception e) {
         // Non-fatal: leaves an orphan object but the row is gone. Logged for follow-up.
@@ -413,7 +434,7 @@ public class SlideshowRecordingService {
       // legitimately not exist — it is only made on demand for older recordings.
       String aacKey = StoragePaths.audioAacKey(recording.getAudioFilename());
       try {
-        objectStorage.get().delete(aacKey);
+        storage.delete(aacKey);
       } catch (Exception e) {
         log.warn("Could not delete AAC sibling {}: {}", aacKey, e.toString());
       }
@@ -446,10 +467,12 @@ public class SlideshowRecordingService {
     if (StoragePaths.isAudioS3Key(audioPath)) {
       // S3-backed: pass the key, leave audioPath null so the controller branches to presigned-URL
       // serving.
-      return new RecordingAudioInfo(recording.getAudioFilename(), null, audioPath);
+      return new RecordingAudioInfo(
+          recording.getAudioFilename(), null, audioPath, recording.getAlbum().getId());
     }
     Path local = uploadDir().resolve(audioPath);
-    return new RecordingAudioInfo(recording.getAudioFilename(), local, null);
+    return new RecordingAudioInfo(
+        recording.getAudioFilename(), local, null, recording.getAlbum().getId());
   }
 
   /**

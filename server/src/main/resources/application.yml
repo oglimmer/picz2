@@ -75,6 +75,11 @@ file:
     duplicate-detection-enabled: "${FILE_UPLOAD_DUPLICATE_DETECTION_ENABLED:true}"
     thumbnailer: "${FILE_UPLOAD_THUMBNAILER:vips}"
 storage:
+  # AES key (base64, 16/24/32 bytes) used to encrypt the secret access keys of user-registered
+  # storage backends. Without it the instance still runs on its own MinIO, but users cannot bring
+  # their own S3 — the API says so rather than failing at upload time. Generate with:
+  #   openssl rand -base64 32
+  backend-secret-key: "${STORAGE_BACKEND_SECRET_KEY:}"
   s3:
     enabled: "${STORAGE_S3_ENABLED:false}"
     endpoint: "${STORAGE_S3_ENDPOINT:}"

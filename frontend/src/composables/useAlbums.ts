@@ -12,7 +12,11 @@ export interface AlbumsComposable {
     albumId: number,
     startPresentation?: boolean,
   ) => Promise<Album | null>;
-  createAlbum: (name: string, description?: string) => Promise<Album | null>;
+  createAlbum: (
+    name: string,
+    description?: string,
+    storageBackendId?: number | null,
+  ) => Promise<Album | null>;
   deleteAlbum: (albumId: number) => Promise<void>;
   updateAlbum: (albumId: number, updates: Partial<Album>) => Promise<void>;
   saveMapView: (albumId: number, view: MapView | null) => Promise<void>;
@@ -102,9 +106,14 @@ export function useAlbums(): AlbumsComposable {
   /**
    * Create a new album
    */
+  /**
+   * `storageBackendId` null/undefined means the instance's own storage. It is only honoured here,
+   * at creation — the server refuses to move an album's bytes later.
+   */
   async function createAlbum(
     name: string,
     description: string = "",
+    storageBackendId: number | null = null,
   ): Promise<Album | null> {
     if (!name || name.trim() === "") {
       throw new Error("Album name is required");
@@ -116,7 +125,7 @@ export function useAlbums(): AlbumsComposable {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name, description }),
+        body: JSON.stringify({ name, description, storageBackendId }),
       });
 
       const data = await response.json();

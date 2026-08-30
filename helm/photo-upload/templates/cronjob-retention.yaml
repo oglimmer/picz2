@@ -118,6 +118,15 @@ spec:
                   name: {{ include "photo-upload.fullname" . }}-secret
                   key: objectStorage.secretKey
             {{- end }}
+            {{- if .Values.objectStorage.backendSecretKey }}
+            # The orphan sweep runs a bucket at a time and now includes user-registered storage,
+            # so this pod has to be able to decrypt their credentials too.
+            - name: STORAGE_BACKEND_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "photo-upload.fullname" . }}-secret
+                  key: objectStorage.backendSecretKey
+            {{- end }}
             resources:
               {{- toYaml .Values.retention.resources | nindent 14 }}
           {{- with .Values.nodeSelector }}

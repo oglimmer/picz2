@@ -37,4 +37,10 @@ public class FileServeInfo {
    * is null. Mutually exclusive with {@code filePath} — exactly one of the two is set.
    */
   private String storageKey;
+
+  /**
+   * The album the asset belongs to. The serve layer needs it to pick the storage backend: albums
+   * can sit on their owner's own S3, so a key alone does not say which endpoint holds it.
+   */
+  private Long albumId;
 }

@@ -263,6 +263,27 @@
             @keyup.enter="handleCreateAlbum"
             @keyup.esc="cancelCreateAlbum"
           >
+          <!-- Only worth a row of the form once the user has storage of their own; with just the
+               instance default there is nothing to choose. -->
+          <label
+            v-if="storageBackends.length > 1"
+            class="create-field"
+          >
+            <span class="create-field-label">Store photos in</span>
+            <select
+              v-model="newAlbumStorageBackendId"
+              class="create-input"
+            >
+              <option
+                v-for="backend in storageBackends"
+                :key="backend.id"
+                :value="backend.id"
+              >
+                {{ backend.name }}{{ backend.systemDefault ? ' (default)' : '' }}
+              </option>
+            </select>
+            <span class="create-field-hint">This cannot be changed later.</span>
+          </label>
         </div>
         <div class="create-panel-actions">
           <button
@@ -416,12 +437,14 @@ import AccountMenu from '../components/AccountMenu.vue'
 import MenuButton from '../components/MenuButton.vue'
 import TagManager from '../components/TagManager.vue'
 import LanguageManager from '../components/LanguageManager.vue'
+import { useStorageBackends } from '../composables/useStorageBackends'
 import type { Album } from '@/types'
 
 const router = useRouter()
 const { isLoggedIn } = useAuth()
 const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
 const { availableTags, loadTags } = useTags()
+const { backends: storageBackends, loadBackends } = useStorageBackends()
 const { targetAlbumId, loadTargetAlbum, updateTargetAlbum, clearTargetAlbum } = useSettings()
 const { error: showError, info, success: showSuccess, removeNotification } = useNotifications()
 const deletingAlbumId = ref<number | null>(null)
@@ -437,6 +460,9 @@ const showManageLanguages = ref(false)
 const newAlbumName = ref('')
 const newAlbumDescription = ref('')
 const newAlbumInput = ref<HTMLInputElement | null>(null)
+// null = the instance's own storage. Reset after each create so the next album starts from the
+// default rather than inheriting a one-off choice.
+const newAlbumStorageBackendId = ref<number | null>(null)
 
 // The line says "Paused" when nothing is set, so don't render it until the setting has
 // actually arrived — otherwise a fast /api/albums flashes a false alarm.
@@ -502,9 +528,14 @@ function handleOpenAlbum(album: Album) {
 async function handleCreateAlbum() {
   if (!newAlbumName.value.trim()) return
   try {
-    await createAlbum(newAlbumName.value, newAlbumDescription.value)
+    await createAlbum(
+      newAlbumName.value,
+      newAlbumDescription.value,
+      newAlbumStorageBackendId.value,
+    )
     newAlbumName.value = ''
     newAlbumDescription.value = ''
+    newAlbumStorageBackendId.value = defaultStorageBackendId()
     showCreateAlbum.value = false
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
@@ -516,10 +547,22 @@ function cancelCreateAlbum() {
   showCreateAlbum.value = false
   newAlbumName.value = ''
   newAlbumDescription.value = ''
+  newAlbumStorageBackendId.value = defaultStorageBackendId()
+}
+
+/** The instance's own storage, which the API always lists first. Null until the list arrives. */
+function defaultStorageBackendId(): number | null {
+  return storageBackends.value.find(b => b.systemDefault)?.id ?? null
 }
 
 watch(showCreateAlbum, async open => {
   if (!open) return
+  // Fetched when the panel opens rather than on mount: most visits never create an album, and
+  // the picker is the only thing that needs the list.
+  if (storageBackends.value.length === 0) {
+    await loadBackends()
+    newAlbumStorageBackendId.value = defaultStorageBackendId()
+  }
   await nextTick()
   newAlbumInput.value?.focus()
 })

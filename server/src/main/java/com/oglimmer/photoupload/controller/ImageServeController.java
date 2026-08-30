@@ -7,6 +7,7 @@ import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.util.RangeRequestHandler;
 import java.io.OutputStream;
 import java.time.Instant;
@@ -186,13 +187,22 @@ public class ImageServeController {
         .body(resource);
   }
 
-  private ResponseEntity<Resource> serveFromObjectStorage(FileServeInfo fileInfo) {
+  /**
+   * The storage backend holding this asset. An S3 key is not self-describing — the same key can
+   * exist in the instance's MinIO and in a user's own bucket — so the album decides the endpoint.
+   */
+  private BackendStorage storageFor(FileServeInfo fileInfo) {
     ObjectStorageService os =
         objectStorage.orElseThrow(
             () ->
                 new IllegalStateException(
                     "Asset path is an S3 key but ObjectStorageService is not enabled — "
                         + "check storage.s3.enabled"));
+    return os.forAlbumId(fileInfo.getAlbumId());
+  }
+
+  private ResponseEntity<Resource> serveFromObjectStorage(FileServeInfo fileInfo) {
+    BackendStorage os = storageFor(fileInfo);
 
     ResponseInputStream<GetObjectResponse> stream = os.openStream(fileInfo.getStorageKey());
     GetObjectResponse meta = stream.response();
@@ -224,12 +234,7 @@ public class ImageServeController {
    */
   private ResponseEntity<StreamingResponseBody> serveRangeFromObjectStorage(
       FileServeInfo fileInfo, String rangeHeader) {
-    ObjectStorageService os =
-        objectStorage.orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "Asset path is an S3 key but ObjectStorageService is not enabled — "
-                        + "check storage.s3.enabled"));
+    BackendStorage os = storageFor(fileInfo);
 
     ResponseInputStream<GetObjectResponse> stream =
         os.openStream(fileInfo.getStorageKey(), rangeHeader);

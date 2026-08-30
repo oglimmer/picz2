@@ -15,6 +15,8 @@ import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.RetentionProperties;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import java.time.Instant;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -35,7 +37,15 @@ import org.springframework.transaction.PlatformTransactionManager;
 class RetentionServiceTusCleanupTest {
 
   @Mock FileMetadataRepository metadataRepository;
+  @Mock StorageBackendRepository storageBackendRepository;
   @Mock ObjectStorageService objectStorage;
+
+  /**
+   * The staging bucket handle. tus-uploads/ only ever exists on the instance's own storage, so this
+   * pass asks the router for the system default and never touches a user's backend.
+   */
+  @Mock BackendStorage staging;
+
   @Mock RetentionProperties properties;
   @Mock PlatformTransactionManager transactionManager;
 
@@ -50,22 +60,23 @@ class RetentionServiceTusCleanupTest {
   void emptyPrefixIsNoOp() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
-        .thenReturn(List.of());
+    when(objectStorage.forSystemDefault()).thenReturn(staging);
+    when(staging.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class))).thenReturn(List.of());
 
     RetentionService.Result result = service.runTusCleanup();
 
     assertEquals(0, result.eligible());
     assertEquals(0, result.purged());
     assertEquals(0, result.failed());
-    verify(objectStorage, never()).delete(any());
+    verify(staging, never()).delete(any());
   }
 
   @Test
   void deletesEachStaleKey() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
+    when(objectStorage.forSystemDefault()).thenReturn(staging);
+    when(staging.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
         .thenReturn(List.of("tus-uploads/abc", "tus-uploads/abc.info", "tus-uploads/def"));
 
     RetentionService.Result result = service.runTusCleanup();
@@ -73,16 +84,17 @@ class RetentionServiceTusCleanupTest {
     assertEquals(3, result.eligible());
     assertEquals(3, result.purged());
     assertEquals(0, result.failed());
-    verify(objectStorage, times(1)).delete("tus-uploads/abc");
-    verify(objectStorage, times(1)).delete("tus-uploads/abc.info");
-    verify(objectStorage, times(1)).delete("tus-uploads/def");
+    verify(staging, times(1)).delete("tus-uploads/abc");
+    verify(staging, times(1)).delete("tus-uploads/abc.info");
+    verify(staging, times(1)).delete("tus-uploads/def");
   }
 
   @Test
   void dryRunSkipsDelete() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(true);
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
+    when(objectStorage.forSystemDefault()).thenReturn(staging);
+    when(staging.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
         .thenReturn(List.of("tus-uploads/abc", "tus-uploads/def"));
 
     RetentionService.Result result = service.runTusCleanup();
@@ -90,7 +102,7 @@ class RetentionServiceTusCleanupTest {
     assertEquals(2, result.eligible());
     assertEquals(0, result.purged());
     assertTrue(result.dryRun());
-    verify(objectStorage, never()).delete(any());
+    verify(staging, never()).delete(any());
   }
 
   @Test
@@ -98,8 +110,8 @@ class RetentionServiceTusCleanupTest {
     when(properties.getMaxRowsPerRun()).thenReturn(2);
     when(properties.isDryRun()).thenReturn(false);
     List<String> tenKeys = IntStream.range(0, 10).mapToObj(i -> "tus-uploads/key" + i).toList();
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
-        .thenReturn(tenKeys);
+    when(objectStorage.forSystemDefault()).thenReturn(staging);
+    when(staging.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class))).thenReturn(tenKeys);
 
     RetentionService.Result result = service.runTusCleanup();
 
@@ -107,14 +119,15 @@ class RetentionServiceTusCleanupTest {
     // unit per run; remaining keys flow through on the next nightly firing.
     assertEquals(2, result.eligible());
     assertEquals(2, result.purged());
-    verify(objectStorage, times(2)).delete(any());
+    verify(staging, times(2)).delete(any());
   }
 
   @Test
   void deleteFailureCountsAsFailed() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(objectStorage.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
+    when(objectStorage.forSystemDefault()).thenReturn(staging);
+    when(staging.listKeysOlderThan(eq("tus-uploads/"), any(Instant.class)))
         .thenReturn(List.of("tus-uploads/ok", "tus-uploads/dead"));
     // Single answer stub: throws only for the "dead" key. Mixing a literal-arg doThrow with
     // an unstubbed-arg call confuses Mockito's strict-stubbing tracking.
@@ -125,7 +138,7 @@ class RetentionServiceTusCleanupTest {
               }
               return null;
             })
-        .when(objectStorage)
+        .when(staging)
         .delete(anyString());
 
     RetentionService.Result result = service.runTusCleanup();

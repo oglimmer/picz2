@@ -238,7 +238,10 @@ public class SlideshowRecordingController {
               + "check storage.s3.enabled");
     }
     ResponseInputStream<GetObjectResponse> stream =
-        objectStorage.get().openStream(audioInfo.getStorageKey(), rangeHeader);
+        objectStorage
+            .get()
+            .forAlbumId(audioInfo.getAlbumId())
+            .openStream(audioInfo.getStorageKey(), rangeHeader);
     GetObjectResponse meta = stream.response();
     boolean partial = meta.contentRange() != null;
 

@@ -36,6 +36,15 @@ struct Album: Codable, Identifiable, Hashable {
     /// it, so a republished album is not re-announced to subscribers.
     var publishedAt: String?
 
+    /// Which storage holds this album's photos. Chosen when the album is created and fixed after
+    /// that — the server refuses a change rather than half-moving the objects. Optional `var` for
+    /// the same reason as the fields above: a server that predates per-album storage omits them.
+    var storageBackendId: Int?
+
+    /// The storage's display name, so a detail screen can say where the photos live without
+    /// fetching the whole backend list.
+    var storageBackendName: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -53,9 +62,11 @@ struct Album: Codable, Identifiable, Hashable {
         case mapSpanLng
         case published
         case publishedAt
+        case storageBackendId
+        case storageBackendName
     }
 
-    // Computed property for backwards compatibility
+    /// Computed property for backwards compatibility
     var imageCount: Int? {
         fileCount
     }

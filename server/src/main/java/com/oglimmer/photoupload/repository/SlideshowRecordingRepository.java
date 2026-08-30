@@ -24,6 +24,34 @@ public interface SlideshowRecordingRepository extends JpaRepository<SlideshowRec
   @Query("SELECT r.audioFilename FROM SlideshowRecording r WHERE r.audioFilename IS NOT NULL")
   List<String> findAllAudioFilenames();
 
+  /** Backend-scoped variants, for the per-backend orphan sweep. */
+  @Query(
+      "SELECT r.audioPath FROM SlideshowRecording r"
+          + " WHERE r.audioPath IS NOT NULL AND r.album.storageBackend.id = :backendId")
+  List<String> findAudioPathsByStorageBackend(@Param("backendId") Long backendId);
+
+  @Query(
+      "SELECT r.audioFilename FROM SlideshowRecording r"
+          + " WHERE r.audioFilename IS NOT NULL AND r.album.storageBackend.id = :backendId")
+  List<String> findAudioFilenamesByStorageBackend(@Param("backendId") Long backendId);
+
+  /**
+   * Narration bytes this user keeps on one backend. No DISTINCT needed: {@code duplicateAlbum}
+   * copies files and tags but not recordings, so no two rows ever share an audio object.
+   */
+  @Query(
+      "SELECT COALESCE(SUM(r.audioBytes), 0) FROM SlideshowRecording r"
+          + " WHERE r.album.user.id = :userId AND r.album.storageBackend.id = :backendId"
+          + " AND r.audioBytes IS NOT NULL")
+  long sumAudioBytes(@Param("userId") Long userId, @Param("backendId") Long backendId);
+
+  /** Recordings on one backend whose audio size was never recorded — the backfill's worklist. */
+  @Query(
+      "SELECT r FROM SlideshowRecording r WHERE r.album.storageBackend.id = :backendId"
+          + " AND r.audioBytes IS NULL AND r.audioPath IS NOT NULL")
+  List<SlideshowRecording> findByStorageBackendWithUnknownAudioBytes(
+      @Param("backendId") Long backendId);
+
   // User-scoped queries via album relationship
   @Query(
       "SELECT s FROM SlideshowRecording s WHERE s.album.id = :albumId AND s.album.user.id = :userId ORDER BY s.createdAt DESC")

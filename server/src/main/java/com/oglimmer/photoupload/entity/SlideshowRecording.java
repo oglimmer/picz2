@@ -48,6 +48,14 @@ public class SlideshowRecording {
   @Column(name = "audio_path", nullable = false, length = 1024)
   private String audioPath;
 
+  /**
+   * Bytes the narration occupies — the master plus its derived {@code .m4a} sibling. Null on a row
+   * written before the column existed; a null means "unknown", not "free", so the quota reader
+   * treats it as zero and the admin backfill fills it in.
+   */
+  @Column(name = "audio_bytes")
+  private Long audioBytes;
+
   @Column(name = "public_token", unique = true, length = 64)
   private String publicToken;
 

@@ -1,6 +1,6 @@
 import Foundation
-import Photos
 import os
+import Photos
 
 /// Phase 5 — TUS resumable uploads. Drop-in alternative to ``Uploader`` selected at runtime by
 /// ``SyncCoordinator`` based on the server-advertised capabilities
@@ -18,7 +18,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
 
     let sessionId = "com.oglimmer.photosync.tus"
     /// Assigned once by ``configureSession()`` before any callback can arrive, then never again.
-    nonisolated(unsafe) private(set) var session: URLSession!
+    private(set) nonisolated(unsafe) var session: URLSession!
     private let fileManager = FileManager.default
 
     /// Mirrors ``Uploader/UploadOutcome`` so ``SyncCoordinator`` can route either uploader's
@@ -44,14 +44,18 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
     /// every other callback the session owes us.
     private let sliceQueue = DispatchQueue(label: "com.oglimmer.photosync.tus.slice", qos: .utility)
 
-    override private init() { super.init() }
+    override private init() {
+        super.init()
+    }
 
     /// Creates the background session, once. Call from the main thread.
     /// See ``Uploader/configureSession(with:)`` for why this is idempotent and why the
     /// Wi‑Fi Only setting is applied per request instead of on the configuration.
     func configureSession(with identifier: String? = nil) {
         let id = identifier ?? sessionId
-        if let session, session.configuration.identifier == id { return }
+        if let session, session.configuration.identifier == id {
+            return
+        }
 
         let config = URLSessionConfiguration.background(withIdentifier: id)
         config.sessionSendsLaunchEvents = true
@@ -88,7 +92,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         api: APIClient,
         maxUploadBytes: Int64? = nil,
         albumId: Int? = nil,
-        completion: (@Sendable (Result<Void, Error>) -> Void)? = nil
+        completion: (@Sendable (Result<Void, Error>) -> Void)? = nil,
     ) {
         UploadStore.shared.markAsUploading(asset.localIdentifier)
         Uploader.shared.exportAssetToTempFile(asset) { [weak self] result in
@@ -99,8 +103,8 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 completion?(.failure(error))
             case let .success(exp):
                 UploadStore.shared.storeChecksumMapping(checksum: exp.checksum, localId: asset.localIdentifier)
-                self.createUpload(api: api, asset: asset, exp: exp, maxUploadBytes: maxUploadBytes,
-                                  albumId: albumId, completion: completion)
+                createUpload(api: api, asset: asset, exp: exp, maxUploadBytes: maxUploadBytes,
+                             albumId: albumId, completion: completion)
             }
         }
     }
@@ -111,7 +115,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         exp: Uploader.ExportResult,
         maxUploadBytes: Int64?,
         albumId: Int?,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         let tusURL = api.tusEndpointURL()
         let fileSize: Int64
@@ -157,7 +161,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         maxUploadBytes: Int64?,
         albumId: Int?,
         mayRetryWithFreshToken: Bool,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         var request = URLRequest(url: tusURL)
         request.httpMethod = "POST"
@@ -168,22 +172,24 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             api.tusUploadMetadata(filename: exp.filename, mimeType: exp.mimeType,
                                   contentId: asset.localIdentifier, albumId: albumId,
                                   auth: authValue),
-            forHTTPHeaderField: "Upload-Metadata"
+            forHTTPHeaderField: "Upload-Metadata",
         )
         api.addBasicAuth(to: &request)
 
         let assetId = asset.localIdentifier
-        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        // The body is kept, not discarded: a 507 answers with the server's own sentence naming
+        // how much room is left, which is the only thing that makes the log entry actionable.
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             if let error {
-                self.discardExport(exp)
+                discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: error.localizedDescription)
                 UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(error))
                 return
             }
             guard let http = response as? HTTPURLResponse else {
-                self.discardExport(exp)
+                discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "no response from server")
                 UploadStore.shared.removeFromUploading(assetId)
                 completion?(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
@@ -192,18 +198,19 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             switch http.statusCode {
             case 200, 201:
                 guard let location = http.value(forHTTPHeaderField: "Location"),
-                      let uploadURL = self.resolveLocation(location, against: tusURL)
+                      let uploadURL = resolveLocation(location, against: tusURL)
                 else {
-                    self.discardExport(exp)
+                    discardExport(exp)
                     SyncLogger.shared.logUploadFailure(assetId: assetId, error: "missing Location header")
                     UploadStore.shared.removeFromUploading(assetId)
                     completion?(.failure(AppError.api(
-                        message: "The server did not say where to send the file.", statusCode: nil)))
+                        message: "The server did not say where to send the file.", statusCode: nil,
+                    )))
                     return
                 }
                 // A freshly created TUS resource is empty by definition, so the offset is 0
                 // and a HEAD here would only cost a round-trip. HEAD is the *resume* path.
-                self.patchChunk(
+                patchChunk(
                     assetId: assetId,
                     originalURL: exp.fileURL,
                     uploadURL: uploadURL,
@@ -218,10 +225,10 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 // in the account, and refuses the bytes. Reported as its own outcome rather than
                 // as a success: nothing was stored, so an upload aimed at a particular album
                 // produces no new photo there, and the caller has to be able to say so.
-                self.discardExport(exp)
+                discardExport(exp)
                 SyncLogger.shared.logUploadDeduped(assetId: assetId)
                 UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
-                self.onTaskFinished?(assetId, .deduped)
+                onTaskFinished?(assetId, .deduped)
                 completion?(.success(()))
             case 401 where mayRetryWithFreshToken:
                 // The token was refused — expired early, or revoked by a password change. Mint a
@@ -232,31 +239,38 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                 UploadTokenStore.shared.token(api: api) { [weak self] fresh in
                     guard let self else { return }
                     AppLog.upload.notice("Upload token refused — retrying with a fresh one")
-                    self.performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
-                                       tusURL: tusURL, authValue: fresh,
-                                       maxUploadBytes: maxUploadBytes, albumId: albumId,
-                                       mayRetryWithFreshToken: false, completion: completion)
+                    performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
+                                  tusURL: tusURL, authValue: fresh,
+                                  maxUploadBytes: maxUploadBytes, albumId: albumId,
+                                  mayRetryWithFreshToken: false, completion: completion)
                 }
             case 413:
                 // The local check above did not catch it — capabilities were never fetched, or
                 // the cap was lowered since. Same outcome, same message, limit left unstated
                 // when we genuinely do not know it.
-                self.refuseForSize(asset: asset, exp: exp, size: fileSize,
-                                   limit: maxUploadBytes, completion: completion)
+                refuseForSize(asset: asset, exp: exp, size: fileSize,
+                              limit: maxUploadBytes, completion: completion)
+            case 507:
+                // The account's storage on the server is full. Not retryable on any timer — it
+                // clears when the user frees space or registers their own storage — so it is
+                // reported like the too-large refusal rather than deferred: the asset stays
+                // un-uploaded and is picked up again by a later scan once there is room.
+                refuseForStorageFull(asset: asset, exp: exp, response: data)
+                completion?(.success(()))
             case 429, 503:
-                let retry = self.parseRetryAfter(from: http) ?? 30
+                let retry = parseRetryAfter(from: http) ?? 30
                 // Safe to delete: a deferred asset is re-queued and re-exported from the photo
                 // library when its turn comes round again, not resumed from this file.
-                self.discardExport(exp)
+                discardExport(exp)
                 SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
                 UploadStore.shared.removeFromUploading(assetId)
-                self.onTaskFinished?(assetId, .backpressure(retry))
+                onTaskFinished?(assetId, .backpressure(retry))
                 completion?(.success(()))
             default:
-                self.discardExport(exp)
+                discardExport(exp)
                 SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
                 UploadStore.shared.removeFromUploading(assetId)
-                self.onTaskFinished?(assetId, .clientError)
+                onTaskFinished?(assetId, .clientError)
                 completion?(.failure(AppError.api(message: APIClient.plainMeaning(of: http.statusCode),
                                                   statusCode: http.statusCode)))
             }
@@ -276,7 +290,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         originalURL: URL,
         uploadURL: URL,
         checksum: String,
-        fileSize: Int64
+        fileSize: Int64,
     ) {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "HEAD"
@@ -304,7 +318,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         patch: TusTask,
         originalURL: URL,
         error: Error?,
-        response: URLResponse?
+        response: URLResponse?,
     ) {
         let assetId = patch.assetId
         if let error {
@@ -362,7 +376,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         fileSize: Int64,
         offset: Int64,
         api: APIClient,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         guard let range = TusChunking.nextChunk(offset: offset, fileSize: fileSize) else {
             finishSuccessfully(
@@ -382,17 +396,17 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             if wholeFile {
                 chunkURL = originalURL
             } else {
-                chunkURL = self.fileManager.temporaryDirectory
+                chunkURL = fileManager.temporaryDirectory
                     .appendingPathComponent("tus-chunk-\(UUID().uuidString)")
                 do {
                     try TusChunking.writeSlice(from: originalURL, range: range, to: chunkURL)
                 } catch {
-                    self.failCreate(assetId: assetId, originalURL: originalURL,
-                                    message: error.localizedDescription, completion: completion)
+                    failCreate(assetId: assetId, originalURL: originalURL,
+                               message: error.localizedDescription, completion: completion)
                     return
                 }
             }
-            self.sendPatch(
+            sendPatch(
                 assetId: assetId, originalURL: originalURL, uploadURL: uploadURL,
                 checksum: checksum, fileSize: fileSize, range: range, chunkURL: chunkURL,
                 api: api, completion: completion,
@@ -411,7 +425,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         range: Range<Int64>,
         chunkURL: URL,
         api: APIClient,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "PATCH"
@@ -440,7 +454,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         assetId: String,
         originalURL: URL,
         message: String,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         try? fileManager.removeItem(at: originalURL)
         clearResumeAttempts(for: assetId)
@@ -459,7 +473,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         assetId: String,
         originalURL: URL,
         checksum: String,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         clearResumeAttempts(for: assetId)
         try? fileManager.removeItem(at: originalURL)
@@ -501,21 +515,56 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         exp: Uploader.ExportResult,
         size: Int64,
         limit: Int64?,
-        completion: (@Sendable (Result<Void, Error>) -> Void)?
+        completion: (@Sendable (Result<Void, Error>) -> Void)?,
     ) {
         let assetId = asset.localIdentifier
         discardExport(exp)
         SyncLogger.shared.logUploadSkippedTooLarge(filename: exp.filename, size: size, limit: limit)
         UploadStore.shared.markSkippedTooLarge(
             assetId,
-            limit: limit ?? UploadSizeLimit.impliedLimit(forRefusedSize: size)
+            limit: limit ?? UploadSizeLimit.impliedLimit(forRefusedSize: size),
         )
         onTaskFinished?(assetId, .clientError)
         completion?(.success(()))
     }
 
+    /// Records a refusal for lack of room. Answers `.success` for the same reason the 409-dedupe
+    /// path does: a `.failure` routes into SyncCoordinator's export-retry branch and re-queues the
+    /// asset every ten seconds, and nothing about the next ten seconds will have made space.
+    private func refuseForStorageFull(asset: PHAsset, exp: Uploader.ExportResult, response: Data?) {
+        let assetId = asset.localIdentifier
+        discardExport(exp)
+        SyncLogger.shared.logUploadSkippedStorageFull(
+            filename: exp.filename,
+            serverMessage: Self.serverMessage(from: response),
+        )
+        // Deliberately not marked uploaded: the bytes are not on the server, and a later run
+        // must try again once the user has made room.
+        UploadStore.shared.removeFromUploading(assetId)
+        onTaskFinished?(assetId, .clientError)
+    }
+
+    /// The server's own sentence, which names both numbers. Falls back to nil rather than to a
+    /// guess — an invented limit would send the user deleting the wrong amount.
+    static func serverMessage(from data: Data?) -> String? {
+        guard let data, !data.isEmpty else { return nil }
+        if let decoded = try? JSONDecoder().decode(ServerErrorBody.self, from: data),
+           let message = decoded.message, !message.isEmpty
+        {
+            return message
+        }
+        let raw = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? nil : raw
+    }
+
+    private struct ServerErrorBody: Decodable {
+        let message: String?
+    }
+
     private func resolveLocation(_ location: String, against base: URL) -> URL? {
-        if let abs = URL(string: location), abs.scheme != nil { return abs }
+        if let abs = URL(string: location), abs.scheme != nil {
+            return abs
+        }
         return URL(string: location, relativeTo: base)?.absoluteURL
     }
 
@@ -634,7 +683,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         uploadURL: URL,
         checksum: String,
         fileSize: Int64,
-        message: String
+        message: String,
     ) {
         guard fileManager.fileExists(atPath: originalURL.path), consumeResumeAttempt(for: assetId) else {
             try? fileManager.removeItem(at: originalURL)

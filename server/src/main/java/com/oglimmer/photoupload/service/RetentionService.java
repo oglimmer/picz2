@@ -4,7 +4,10 @@ package com.oglimmer.photoupload.service;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.config.RetentionProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import java.time.Duration;
 import java.time.Instant;
@@ -35,6 +38,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class RetentionService {
 
   private final FileMetadataRepository metadataRepository;
+  private final StorageBackendRepository storageBackendRepository;
   private final ObjectStorageService objectStorage;
   private final RetentionProperties properties;
   private final PlatformTransactionManager transactionManager;
@@ -107,7 +111,7 @@ public class RetentionService {
    */
   private void purgeOne(FileMetadata row) {
     String key = row.getFilePath();
-    objectStorage.delete(key);
+    objectStorage.forFile(row).delete(key);
 
     new TransactionTemplate(transactionManager)
         .executeWithoutResult(
@@ -159,7 +163,11 @@ public class RetentionService {
         maxRows,
         properties.isDryRun());
 
-    List<String> candidates = objectStorage.listKeysOlderThan("tus-uploads/", cutoff);
+    // tusd stages every upload in the instance's own bucket regardless of the album's backend,
+    // so this prefix only ever exists on the system default. Sweeping user backends for it would
+    // be pointless traffic on someone else's account.
+    BackendStorage staging = objectStorage.forSystemDefault();
+    List<String> candidates = staging.listKeysOlderThan("tus-uploads/", cutoff);
     if (candidates.size() > maxRows) {
       log.warn(
           "TUS cleanup eligibility ({}) exceeds maxRowsPerRun ({}) — truncating to cap",
@@ -175,7 +183,7 @@ public class RetentionService {
         if (properties.isDryRun()) {
           log.info("Dry run — would delete tus-uploads object {}", key);
         } else {
-          objectStorage.delete(key);
+          staging.delete(key);
           purged++;
         }
       } catch (Exception e) {
@@ -235,48 +243,78 @@ public class RetentionService {
         maxRows,
         properties.isDryRun());
 
-    Set<String> liveKeys = new HashSet<>(metadataRepository.findAllOriginalsKeys());
-    List<String> aged = objectStorage.listKeysOlderThan(StoragePaths.ORIGINALS_PREFIX, cutoff);
-
-    List<String> orphans = new java.util.ArrayList<>();
-    for (String key : aged) {
-      if (!liveKeys.contains(key)) {
-        orphans.add(key);
-      }
-    }
-    if (orphans.size() > maxRows) {
-      log.warn(
-          "Orphan eligibility ({}) exceeds maxRowsPerRun ({}) — truncating to cap",
-          orphans.size(),
-          maxRows);
-      orphans = orphans.subList(0, maxRows);
-    }
-
+    int listed = 0;
+    int liveRows = 0;
+    int eligible = 0;
     int purged = 0;
     int failed = 0;
-    for (String key : orphans) {
+
+    // One bucket at a time, each compared only against the albums that live in it. A key absent
+    // from the DB is garbage relative to its own bucket only — pooling every album's paths would
+    // mean two backends holding the same key protect each other's orphans, and worse, a backend
+    // whose listing failed would look like it had none.
+    for (StorageBackend backend : storageBackendRepository.findAll()) {
+      Set<String> liveKeys =
+          new HashSet<>(metadataRepository.findOriginalsKeysByStorageBackend(backend.getId()));
+      BackendStorage storage;
+      List<String> aged;
       try {
-        if (properties.isDryRun()) {
-          log.info("Dry run — would delete orphan original {}", key);
-        } else {
-          objectStorage.delete(key);
-          purged++;
-          log.info("Deleted orphan original {}", key);
-        }
+        storage = objectStorage.forBackend(backend);
+        aged = storage.listKeysOlderThan(StoragePaths.ORIGINALS_PREFIX, cutoff);
       } catch (Exception e) {
         failed++;
-        log.warn("Failed to delete orphan original {}: {}", key, e.getMessage(), e);
+        log.warn(
+            "Skipping orphan sweep of storage backend {} ({}): {}",
+            backend.getId(),
+            backend.getName(),
+            e.getMessage());
+        continue;
+      }
+
+      listed += aged.size();
+      liveRows += liveKeys.size();
+
+      List<String> orphans = new java.util.ArrayList<>();
+      for (String key : aged) {
+        if (!liveKeys.contains(key)) {
+          orphans.add(key);
+        }
+      }
+      if (orphans.size() > maxRows) {
+        log.warn(
+            "Orphan eligibility ({}) on backend {} exceeds maxRowsPerRun ({}) — truncating to cap",
+            orphans.size(),
+            backend.getId(),
+            maxRows);
+        orphans = orphans.subList(0, maxRows);
+      }
+      eligible += orphans.size();
+
+      for (String key : orphans) {
+        try {
+          if (properties.isDryRun()) {
+            log.info(
+                "Dry run — would delete orphan original {} on backend {}", key, backend.getId());
+          } else {
+            storage.delete(key);
+            purged++;
+            log.info("Deleted orphan original {} on backend {}", key, backend.getId());
+          }
+        } catch (Exception e) {
+          failed++;
+          log.warn("Failed to delete orphan original {}: {}", key, e.getMessage(), e);
+        }
       }
     }
 
     log.info(
         "Orphan-detection sweep complete — listed={}, liveRows={}, eligible={}, purged={}, failed={}, dryRun={}",
-        aged.size(),
-        liveKeys.size(),
-        orphans.size(),
+        listed,
+        liveRows,
+        eligible,
         purged,
         failed,
         properties.isDryRun());
-    return new Result(orphans.size(), purged, failed, properties.isDryRun());
+    return new Result(eligible, purged, failed, properties.isDryRun());
   }
 }

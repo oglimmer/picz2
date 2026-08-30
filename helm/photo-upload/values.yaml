@@ -245,6 +245,11 @@ objectStorage:
   # over committing real values to this file.
   accessKey: ""
   secretKey: ""
+  # "Bring your own storage": base64 AES key (16/24/32 bytes) used to encrypt the secret access
+  # keys users register for their own S3 endpoints. Leave empty to keep the feature off — every
+  # album then uses the MinIO above. Generate once per environment with `openssl rand -base64 32`
+  # and never rotate it in place: a new key makes every stored user credential unreadable.
+  backendSecretKey: ""
 
 # Phase 5 — TUS resumable uploads. tusd Deployment serves /files/* directly to MinIO via the
 # S3 backend; a thin hook callback to /api/tus/hooks/{secret} on the api pod creates the

@@ -79,8 +79,12 @@ struct AlbumListView: View {
                 await viewModel.refreshAlbums()
             }
             .sheet(isPresented: $showingCreateSheet) {
-                AlbumFormView(mode: .create) { name, description in
-                    viewModel.createAlbum(name: name, description: description) { success in
+                AlbumFormView(mode: .create) { name, description, storageBackendId in
+                    viewModel.createAlbum(
+                        name: name,
+                        description: description,
+                        storageBackendId: storageBackendId,
+                    ) { success in
                         if success {
                             showingCreateSheet = false
                         }
@@ -91,7 +95,7 @@ struct AlbumListView: View {
                 ShareSheet(items: [link.url])
             }
             .sheet(item: $albumToEdit) { album in
-                AlbumFormView(mode: .edit(album)) { name, description in
+                AlbumFormView(mode: .edit(album)) { name, description, _ in
                     viewModel.updateAlbum(id: album.id, name: name, description: description) { success in
                         if success {
                             albumToEdit = nil

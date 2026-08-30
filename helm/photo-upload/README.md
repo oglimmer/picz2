@@ -155,6 +155,7 @@ The api and worker pods run **the same image** with different `SPRING_PROFILES_A
 | `objectStorage.region`       | S3 region (MinIO ignores this but the SDK requires it)                     | `us-east-1`                              |
 | `objectStorage.accessKey`    | Access key — **must** be overridden                                        | `""`                                     |
 | `objectStorage.secretKey`    | Secret key — **must** be overridden                                        | `""`                                     |
+| `objectStorage.backendSecretKey` | Base64 AES key encrypting user-registered storage credentials. Empty = "bring your own storage" is off | `""`                        |
 
 ### TUS resumable uploads
 
@@ -435,6 +436,7 @@ The four secrets that **must** be overridden:
 | ----------------------------- | --------------------------------------------- |
 | `objectStorage.accessKey`     | MinIO access key                              |
 | `objectStorage.secretKey`     | MinIO secret key                              |
+| `objectStorage.backendSecretKey` | AES key for user storage credentials (optional) |
 | `database.external.password`  | MariaDB password                              |
 | `tus.hookSecret`              | tusd → api hook URL path-secret (`openssl rand -hex 32`) |
 
@@ -488,7 +490,53 @@ The MinIO circuit breaker is wired into `MinioHealthIndicator`: when it OPENs, K
 
 ## Storage model
 
-All bytes live in MinIO under one bucket, partitioned by prefix:
+Every album names the storage its bytes live in (`albums.storage_backend_id`). By default that is
+the MinIO configured above — the row `storage_backends` seeds with `system_default = TRUE`, which
+deliberately holds no endpoint and no credentials and resolves `storage.s3.*` at runtime, so the
+cluster secret is never copied into the database.
+
+A user can register their own S3-compatible endpoint ("bring your own storage") and point new
+albums at it. That needs `objectStorage.backendSecretKey` — a base64 AES key encrypting their
+secret access keys. Leave it empty and the feature is simply off: every album uses the MinIO
+above, and the API says so instead of failing at upload time. **Do not rotate the key in place**;
+a new one makes every stored user credential unreadable and each user has to re-enter theirs.
+
+### Per-user quota
+
+What a user keeps on the MinIO above is capped — 100 MiB by default, from the
+`users.storage_quota_bytes` column. There is no UI and no API for it; raise a specific account's
+allowance with SQL:
+
+```sql
+UPDATE users SET storage_quota_bytes = 5368709120 WHERE email = 'someone@example.com';  -- 5 GiB
+```
+
+`0` refuses every further upload, which is a usable way to freeze an abusive account. An album on
+a user's own storage is neither counted nor capped.
+
+Counted: originals, derivatives (thumb/medium/large/transcoded) and narration audio. **Not**
+counted: anything under `tus-uploads/`, which is in flight and swept by retention either way — an
+album on a user's own storage passes its bytes through that prefix, and charging for it would bill
+transport as storage.
+
+**Run once after upgrading to the chart version that ships V45:**
+
+```bash
+kubectl exec deploy/photo-upload-backend -- \
+  curl -sS -u 'admin@example.com:PASSWORD' -X POST localhost:8080/api/admin/recalculate-derivative-bytes
+```
+
+Rows written before V45 have no recorded derivative size, so they meter as free until this reads
+the real sizes out of the bucket. It is idempotent — only rows with an unknown size are touched.
+
+Two consequences worth knowing before operating this:
+
+- An album's storage is fixed at creation. There is no move; the API refuses the change.
+- tusd always stages into the MinIO above, whatever the album's backend. Finishing an upload for
+  an album on a user's own storage streams the bytes through the api pod once, so watch api
+  egress rather than tusd's if that traffic ever matters.
+
+The prefix layout below is the same in every backend:
 
 | Prefix              | Contents                                              | Owner / writer                                |
 | ------------------- | ----------------------------------------------------- | --------------------------------------------- |

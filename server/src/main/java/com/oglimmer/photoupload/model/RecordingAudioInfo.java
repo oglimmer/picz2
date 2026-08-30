@@ -19,4 +19,7 @@ public class RecordingAudioInfo {
   private String audioFilename;
   private Path audioPath;
   private String storageKey;
+
+  /** Album the recording belongs to — decides which storage backend holds {@link #storageKey}. */
+  private Long albumId;
 }

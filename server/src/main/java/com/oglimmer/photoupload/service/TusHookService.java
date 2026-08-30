@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.User;
+import com.oglimmer.photoupload.exception.StorageQuotaExceededException;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.tus.TusHookRequest;
 import com.oglimmer.photoupload.model.tus.TusHookResponse;
@@ -78,6 +79,7 @@ public class TusHookService {
   private final UploadTokenService uploadTokenService;
   private final JobsProperties jobsProperties;
   private final JobQueueDepthService queueDepthService;
+  private final StorageQuotaService storageQuotaService;
 
   public TusHookResponse handlePreCreate(TusHookRequest request) {
     Map<String, String> meta = metadataOf(request);
@@ -113,6 +115,17 @@ public class TusHookService {
             existing.get(0).getId());
         return TusHookResponse.reject(409, "duplicate-content-id");
       }
+    }
+
+    // Storage quota, checked here rather than only at post-finish so a phone on a train does not
+    // spend ten minutes uploading a video that has nowhere to land. The size is the client's
+    // declared Upload-Length, so this is advisory — post-finish re-checks against the real one.
+    long declaredSize = uploadOf(request).size();
+    try {
+      storageQuotaService.requireRoomFor(user, parseLong(meta.get(META_ALBUM_ID)), declaredSize);
+    } catch (StorageQuotaExceededException e) {
+      log.info("TUS pre-create rejected: {} (user {})", e.getMessage(), user.getId());
+      return TusHookResponse.reject(507, "storage-quota-exceeded");
     }
 
     return TusHookResponse.allow();

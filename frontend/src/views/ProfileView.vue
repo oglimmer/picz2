@@ -74,6 +74,11 @@
         </form>
       </div>
 
+      <div class="profile-section">
+        <h2>Photo storage</h2>
+        <StorageBackendManager />
+      </div>
+
       <div class="profile-section danger-section">
         <h2>Danger Zone</h2>
 
@@ -111,6 +116,7 @@ import { useAuth } from '../composables/useAuth'
 import { useApi } from '../composables/useApi'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
+import StorageBackendManager from '../components/StorageBackendManager.vue'
 
 const router = useRouter()
 const { authEmail, logout } = useAuth()

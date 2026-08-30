@@ -59,7 +59,10 @@ public class AlbumController {
     }
 
     AlbumInfo album =
-        albumService.createAlbum(albumRequest.getName(), albumRequest.getDescription());
+        albumService.createAlbum(
+            albumRequest.getName(),
+            albumRequest.getDescription(),
+            albumRequest.getStorageBackendId());
 
     AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
 
@@ -201,7 +204,11 @@ public class AlbumController {
   public ResponseEntity<AlbumResponse> updateAlbum(
       @PathVariable Long id, @RequestBody AlbumRequest albumRequest) {
     AlbumInfo album =
-        albumService.updateAlbum(id, albumRequest.getName(), albumRequest.getDescription());
+        albumService.updateAlbum(
+            id,
+            albumRequest.getName(),
+            albumRequest.getDescription(),
+            albumRequest.getStorageBackendId());
 
     AlbumResponse response = AlbumResponse.builder().success(true).album(album).build();
 

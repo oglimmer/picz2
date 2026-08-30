@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.repository;
 
 import com.oglimmer.photoupload.entity.Album;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.User;
 import java.time.Instant;
 import java.util.List;
@@ -19,6 +20,14 @@ public interface AlbumRepository extends JpaRepository<Album, Long> {
   Optional<Album> findByUserAndName(User user, String name);
 
   Optional<Album> findByUserAndId(User user, Long id);
+
+  /**
+   * The album's storage backend, without loading the album. {@code open-in-view} is off, so a lazy
+   * {@code album.getStorageBackend()} outside a transaction would throw; the storage layer needs
+   * the backend on every serve and every upload, so it asks for it directly.
+   */
+  @Query("SELECT a.storageBackend FROM Album a WHERE a.id = :albumId")
+  Optional<StorageBackend> findStorageBackendByAlbumId(@Param("albumId") Long albumId);
 
   List<Album> findByUserOrderByDisplayOrderAsc(User user);
 

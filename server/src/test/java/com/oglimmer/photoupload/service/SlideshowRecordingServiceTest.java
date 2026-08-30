@@ -77,6 +77,11 @@ class SlideshowRecordingServiceTest {
     when(props.getUploadDir()).thenReturn("/base");
     SlideshowRecording r = new SlideshowRecording();
     r.setId(1L);
+    // The album is what says which storage backend holds the audio, so the row needs one even
+    // on the legacy local-disk path.
+    Album album = new Album();
+    album.setId(1L);
+    r.setAlbum(album);
     r.setAudioPath("recordings/a.webm");
     r.setAudioFilename("a.webm");
     when(recRepo.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(r));

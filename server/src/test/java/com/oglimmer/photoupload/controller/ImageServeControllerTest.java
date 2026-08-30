@@ -58,7 +58,8 @@ class ImageServeControllerTest {
             "photo.heic",
             ProcessingStatus.PROCESSING,
             false,
-            null);
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
@@ -85,7 +86,8 @@ class ImageServeControllerTest {
             "served.jpg",
             ProcessingStatus.DONE,
             false,
-            null);
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
@@ -102,7 +104,15 @@ class ImageServeControllerTest {
 
     FileServeInfo info =
         new FileServeInfo(
-            "image/jpeg", "abc", UPLOADED_AT, file, "thumb.jpg", ProcessingStatus.DONE, true, null);
+            "image/jpeg",
+            "abc",
+            UPLOADED_AT,
+            file,
+            "thumb.jpg",
+            ProcessingStatus.DONE,
+            true,
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
@@ -172,7 +182,15 @@ class ImageServeControllerTest {
 
     FileServeInfo info =
         new FileServeInfo(
-            "video/mp4", "abc", UPLOADED_AT, file, "clip.mp4", ProcessingStatus.DONE, false, null);
+            "video/mp4",
+            "abc",
+            UPLOADED_AT,
+            file,
+            "clip.mp4",
+            ProcessingStatus.DONE,
+            false,
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
     request.addHeader(HttpHeaders.RANGE, "bytes=2-5");
 
@@ -193,7 +211,15 @@ class ImageServeControllerTest {
 
     FileServeInfo info =
         new FileServeInfo(
-            "video/mp4", "abc", UPLOADED_AT, file, "clip.mp4", ProcessingStatus.DONE, false, null);
+            "video/mp4",
+            "abc",
+            UPLOADED_AT,
+            file,
+            "clip.mp4",
+            ProcessingStatus.DONE,
+            false,
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", null, webRequest);
@@ -212,6 +238,7 @@ class ImageServeControllerTest {
         path.getFileName().toString(),
         status,
         derivativeReady,
-        null);
+        null,
+        1L);
   }
 }

@@ -236,6 +236,13 @@ function translateUploadError(
       return size && size.maxSize > 0
         ? tooLargeMessage(size.fileSize, size.maxSize)
         : "File is too large for this server.";
+    case 507:
+      // Out of storage, not a broken request. The server's own message names both numbers, so
+      // prefer it; the fallback matters because the TUS path only sees the reject body.
+      return (
+        fallbackMessage ||
+        "Your storage on this site is full. Delete something, or add your own storage in settings."
+      );
     case 429:
     case 503:
       return retryAfter

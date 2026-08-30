@@ -73,7 +73,13 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
-    func createAlbum(name: String, description: String?, completion: @escaping @Sendable @MainActor (Bool) -> Void) {
+    /// - Parameter storageBackendId: which storage to put the photos in, nil for the site's own.
+    func createAlbum(
+        name: String,
+        description: String?,
+        storageBackendId: Int? = nil,
+        completion: @escaping @Sendable @MainActor (Bool) -> Void,
+    ) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -95,7 +101,11 @@ class AlbumsViewModel: ViewModelProtocol {
         isLoading = true
         alertState = nil
 
-        apiClient.createAlbum(name: name, description: description) { [weak self] result in
+        apiClient.createAlbum(
+            name: name,
+            description: description,
+            storageBackendId: storageBackendId,
+        ) { [weak self] result in
             guard let self else { return }
 
             Task { @MainActor in
