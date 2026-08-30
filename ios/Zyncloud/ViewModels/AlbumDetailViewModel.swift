@@ -89,6 +89,11 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// new truth. Seeded from the album, then owned by ``setPublished(_:)``.
     @Published private(set) var isPublished: Bool
 
+    /// The album as the server last handed it back, or nil while nothing on this screen has
+    /// changed it. The list behind this screen reads it, because the album it pushed is a value:
+    /// without this the card would still say Private after the detail screen made it public.
+    @Published private(set) var revisedAlbum: Album?
+
     let album: Album
 
     /// Readable across the file boundary so the tag actions in `AlbumDetailViewModel+Tags.swift`
@@ -819,6 +824,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
                 switch result {
                 case let .success(album):
                     self.isPublished = album.isPublished
+                    self.revisedAlbum = album
                     self.showSuccess(message: published
                         ? "This album is public. The share link works and subscribers will be notified."
                         : "This album is private. The share link no longer opens and notifications stop.")

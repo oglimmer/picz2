@@ -159,6 +159,16 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
+    /// Patches one row with a newer version of the same album.
+    ///
+    /// Used by the detail screen, which is pushed with a value: a publish made down there is
+    /// invisible up here until the row is replaced. A missing id is ignored — the album was
+    /// deleted while the detail screen was open.
+    func replace(_ album: Album) {
+        guard let index = albums.firstIndex(where: { $0.id == album.id }) else { return }
+        albums[index] = album
+    }
+
     /// Opens or closes public access to an album.
     ///
     /// A new album is private: its share link 404s and subscribers hear nothing until this is
@@ -185,9 +195,7 @@ class AlbumsViewModel: ViewModelProtocol {
 
                 switch result {
                 case let .success(album):
-                    if let index = self.albums.firstIndex(where: { $0.id == id }) {
-                        self.albums[index] = album
-                    }
+                    self.replace(album)
                     self.showSuccess(message: published
                         ? "Album is public. The share link works now."
                         : "Album is private. The share link no longer opens.")

@@ -25,9 +25,11 @@ struct AlbumListView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(viewModel.albums) { album in
-                            NavigationLink(destination: AlbumDetailView(album: album) {
-                                viewModel.albums.removeAll { $0.id == album.id }
-                            }) {
+                            NavigationLink(destination: AlbumDetailView(
+                                album: album,
+                                onDeleted: { viewModel.albums.removeAll { $0.id == album.id } },
+                                onChanged: { viewModel.replace($0) },
+                            )) {
                                 AlbumCardView(
                                     album: album,
                                     onEdit: {
