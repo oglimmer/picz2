@@ -1,8 +1,8 @@
 import Combine
 import Foundation
+import os
 import Photos
 import SwiftUI
-import os
 
 @MainActor
 class AlbumDetailViewModel: ViewModelProtocol {
@@ -401,7 +401,6 @@ class AlbumDetailViewModel: ViewModelProtocol {
             }
         }
     }
-
 
     // MARK: - Bulk Actions
 

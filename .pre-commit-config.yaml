@@ -55,17 +55,23 @@ repos:
     hooks:
       - id: swiftlint
         name: SwiftLint
-        entry: bash -c "cd ios/PhotoCloudSync/ && swiftlint --quiet"
-        files: ^ios/
-        language: system
-        types_or: [swift]
-      - id: swiftformat
-        name: SwiftFormat
-        entry: swiftformat --swift-version 6.2 .
+        # The app moved to ios/Zyncloud/ long ago; this pointed at the old name and every run
+        # died on the `cd`, so the hook has been passing by never running. Rules live in
+        # ios/Zyncloud/.swiftlint.yml.
+        entry: bash -c "cd ios/Zyncloud/ && swiftlint --quiet"
         files: ^ios/
         language: system
         types_or: [swift]
         pass_filenames: false
+      - id: swiftformat
+        name: SwiftFormat
+        # `.` from the repo root, not just the staged files: SwiftFormat rewrites whatever it is
+        # pointed at, and pointing it at the whole tree reformats ~90 files that were never
+        # formatted to its rules. Scoped to the app, and to the files actually being committed.
+        entry: swiftformat --swift-version 6.2
+        files: ^ios/
+        language: system
+        types_or: [swift]
 
   # Node (JS/TS) – eslint + prettier via mirrors
   - repo: local

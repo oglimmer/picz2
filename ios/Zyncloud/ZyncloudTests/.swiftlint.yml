@@ -1,0 +1,6 @@
+# Test-only relaxations, on top of the app's `.swiftlint.yml` one level up.
+
+disabled_rules:
+  # A `try!` in a fixture is the right call: a fixture that cannot be built is a broken test,
+  # and it should stop the run loudly rather than be swallowed into an optional.
+  - force_try

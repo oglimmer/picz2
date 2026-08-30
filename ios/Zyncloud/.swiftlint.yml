@@ -1,0 +1,66 @@
+# SwiftLint for the Zyncloud iOS app.
+#
+# Deliberately narrow. The rules left on are the ones that catch a mistake; the ones that argue
+# with SwiftFormat about layout are off. Two hooks rewriting the same files in opposite
+# directions is worse than one hook, so where the two disagree SwiftFormat wins here.
+#
+# The size limits are set just above what this codebase is today rather than at SwiftLint's
+# defaults. They are a ratchet against getting worse, not a backlog of 336 violations nobody is
+# going to work through. Tighten one whenever the code that needs the slack is broken up.
+
+included:
+  - .
+
+excluded:
+  - build
+  - Zyncloud.xcodeproj
+
+disabled_rules:
+  # SwiftFormat writes a trailing comma into every multi-line literal and call; this rule
+  # forbids exactly those. 89 violations, all of them SwiftFormat's own output.
+  - trailing_comma
+  # The same disagreement about where the brace goes after a multi-line signature.
+  - opening_brace
+  # Wants the failable `String(bytes:encoding:)` over `String(decoding:as:)`. Backwards: the
+  # decoding initialiser cannot fail, which is the reason this codebase uses it.
+  - optional_data_string_conversion
+  # Fires on `override class func`, which cannot be written `static`. Nothing to act on.
+  - static_over_final_class
+
+line_length:
+  # Loose on purpose. Wrapping code is SwiftFormat's job and it already does it; what is left
+  # over the limit here is user-facing prose in a string literal, and breaking a sentence across
+  # three source lines to satisfy a column makes the copy harder to read and to edit. This
+  # catches a runaway line, not a long sentence.
+  warning: 300
+  error: 400
+  ignores_comments: true
+  ignores_urls: true
+
+identifier_name:
+  # `i`, `x`, `y`, `a`/`b` in a comparator. Short names in a two-line scope read fine.
+  min_length: 1
+
+file_length:
+  warning: 1200
+  error: 1600
+
+type_body_length:
+  warning: 800
+  error: 1000
+
+function_body_length:
+  warning: 160
+  error: 250
+
+function_parameter_count:
+  warning: 10
+  error: 12
+
+large_tuple:
+  warning: 4
+  error: 5
+
+cyclomatic_complexity:
+  warning: 20
+  error: 25
