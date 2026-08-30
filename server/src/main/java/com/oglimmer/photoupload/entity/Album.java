@@ -40,6 +40,16 @@ public class Album {
   @Column(name = "name", nullable = false)
   private String name;
 
+  /**
+   * Where this album's bytes live. Fixed at creation: moving an album between backends would mean
+   * copying every original and derivative, and a half-moved album has no correct answer for a
+   * presigned URL, so the API rejects the change rather than doing it badly. Defaults to the system
+   * backend (the operator's MinIO) when the client does not pick one.
+   */
+  @ManyToOne(fetch = FetchType.LAZY, optional = false)
+  @JoinColumn(name = "storage_backend_id", nullable = false)
+  private StorageBackend storageBackend;
+
   @Column(name = "description")
   private String description;
 

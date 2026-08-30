@@ -1,7 +1,7 @@
 import Combine
 import Foundation
-import SwiftUI
 import os
+import SwiftUI
 
 /// - Note: `@unchecked Sendable` — `logs` and `saveScheduled` are main-queue only (every path in
 ///   goes through ``runOnMain(_:)``), and encoding happens on ``persistQueue`` over a snapshot.
@@ -42,68 +42,78 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
         addLog(isManual: false, success: false, message: message)
     }
 
-    // Server asked us to back off (HTTP 429/503). Not a failure — the upload
-    // will be retried automatically after the given delay, so render this
-    // as an informational success-styled entry rather than a red error.
+    /// Server asked us to back off (HTTP 429/503). Not a failure — the upload
+    /// will be retried automatically after the given delay, so render this
+    /// as an informational success-styled entry rather than a red error.
     func logUploadDeferred(assetId: String, retryAfter: TimeInterval) {
         let message = "Server busy, will retry \(assetId.prefix(8))... in \(Int(retryAfter))s"
         addLog(isManual: false, success: true, message: message)
     }
 
-    // Worker-pod processing landed on FAILED / DEAD_LETTER after the upload
-    // 2xx. The bytes are on the server but no thumbnails / transcoded variants
-    // exist, so the asset will not appear in gallery — surface this so the
-    // user knows to investigate.
+    /// Worker-pod processing landed on FAILED / DEAD_LETTER after the upload
+    /// 2xx. The bytes are on the server but no thumbnails / transcoded variants
+    /// exist, so the asset will not appear in gallery — surface this so the
+    /// user knows to investigate.
     func logProcessingFailure(assetId: String, error: String) {
         let message = "Processing failed for \(assetId.prefix(8))...: \(error)"
         addLog(isManual: false, success: false, message: message)
     }
 
-    // Polling exhausted its 60 s budget without seeing a terminal status. Not
-    // a failure — the worker may still be catching up — but worth logging so
-    // the user sees that the asset isn't necessarily ready in gallery yet.
+    /// Polling exhausted its 60 s budget without seeing a terminal status. Not
+    /// a failure — the worker may still be catching up — but worth logging so
+    /// the user sees that the asset isn't necessarily ready in gallery yet.
     func logProcessingTimeout(assetId: String) {
         let message = "Still processing \(assetId.prefix(8))... on server"
         addLog(isManual: false, success: true, message: message)
     }
 
-    // TUS pre-create returned 409: server already has a row for this contentId.
-    // Bytes weren't transferred this run — log informationally so the user sees
-    // "this one was already on the server" instead of nothing at all.
+    /// TUS pre-create returned 409: server already has a row for this contentId.
+    /// Bytes weren't transferred this run — log informationally so the user sees
+    /// "this one was already on the server" instead of nothing at all.
     func logUploadDeduped(assetId: String) {
         let message = "Already on server: \(assetId.prefix(8))..."
         addLog(isManual: false, success: true, message: message)
     }
 
-    // TUS bytes landed (PATCH 2xx logged via logUploadSuccess), but the follow-up
-    // contentId → serverAssetId lookup exhausted its retries. Processing-status
-    // polling is disabled for this asset, so any FAILED / DEAD_LETTER outcome
-    // won't surface. Log informationally so the user knows the asset uploaded
-    // but post-upload visibility is degraded for this one.
+    /// TUS bytes landed (PATCH 2xx logged via logUploadSuccess), but the follow-up
+    /// contentId → serverAssetId lookup exhausted its retries. Processing-status
+    /// polling is disabled for this asset, so any FAILED / DEAD_LETTER outcome
+    /// won't surface. Log informationally so the user knows the asset uploaded
+    /// but post-upload visibility is degraded for this one.
     func logProcessingStatusUnavailable(assetId: String) {
         let message = "Processing status unavailable for \(assetId.prefix(8))..."
         addLog(isManual: false, success: true, message: message)
     }
 
-    // The file is larger than the server's advertised tus.maxSize, so it was never sent. This
-    // is the one failure the user can actually act on (trim the clip, or ask for a bigger cap),
-    // so it names the file and both sizes instead of the usual truncated asset id — "HTTP 413"
-    // told nobody that their videos were missing from the backup (D43).
+    /// The file is larger than the server's advertised tus.maxSize, so it was never sent. This
+    /// is the one failure the user can actually act on (trim the clip, or ask for a bigger cap),
+    /// so it names the file and both sizes instead of the usual truncated asset id — "HTTP 413"
+    /// told nobody that their videos were missing from the backup (D43).
     func logUploadSkippedTooLarge(filename: String, size: Int64, limit: Int64?) {
         addLog(isManual: false, success: false,
                message: UploadSizeLimit.message(filename: filename, size: size, limit: limit))
     }
 
-    // Uploads are held back by the link, not failing on it. Logged as an informational entry
-    // on purpose: with Wi‑Fi Only on and the phone on cellular, every attempt used to surface
-    // as a red "Failed to upload …: The Internet connection appears to be offline", which is
-    // both untrue and the fastest way to teach someone to ignore the red ones that matter.
+    /// The account's storage on the server is full, so the bytes were refused before they were
+    /// sent. Like the too-large case, this is a failure the user can act on — free space, or add
+    /// their own storage in settings — so it says that instead of "HTTP 507", which would tell
+    /// them nothing and read as a server fault they should wait out.
+    func logUploadSkippedStorageFull(filename: String, serverMessage: String?) {
+        let detail = serverMessage ?? "Your storage on this site is full."
+        addLog(isManual: false, success: false,
+               message: "Could not upload \(filename) — \(detail)")
+    }
+
+    /// Uploads are held back by the link, not failing on it. Logged as an informational entry
+    /// on purpose: with Wi‑Fi Only on and the phone on cellular, every attempt used to surface
+    /// as a red "Failed to upload …: The Internet connection appears to be offline", which is
+    /// both untrue and the fastest way to teach someone to ignore the red ones that matter.
     func logUploadsPaused(_ pause: UploadPause) {
         addLog(isManual: false, success: true, message: "Uploads paused — \(pause.detail)")
     }
 
-    // The counterpart, so a paused stretch in the log has a visible end rather than just
-    // stopping.
+    /// The counterpart, so a paused stretch in the log has a visible end rather than just
+    /// stopping.
     func logUploadsResumed() {
         addLog(isManual: false, success: true, message: "Network is usable — uploads resumed")
     }
@@ -135,9 +145,9 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
     func flushPendingWrites() {
         runOnMain { [weak self] in
             guard let self else { return }
-            self.saveScheduled = false
-            let snapshot = self.logs
-            self.persistQueue.sync { self.write(snapshot) }
+            saveScheduled = false
+            let snapshot = logs
+            persistQueue.sync { self.write(snapshot) }
         }
     }
 
@@ -159,11 +169,11 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
 
         runOnMain { [weak self] in
             guard let self else { return }
-            self.logs.insert(logEntry, at: 0)
-            if self.logs.count > self.maxLogs {
-                self.logs = Array(self.logs.prefix(self.maxLogs))
+            logs.insert(logEntry, at: 0)
+            if logs.count > maxLogs {
+                logs = Array(logs.prefix(maxLogs))
             }
-            self.scheduleSave()
+            scheduleSave()
         }
     }
 
@@ -197,9 +207,9 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + saveDelay) { [weak self] in
             guard let self else { return }
-            self.saveScheduled = false
-            let snapshot = self.logs
-            self.persistQueue.async { self.write(snapshot) }
+            saveScheduled = false
+            let snapshot = logs
+            persistQueue.async { self.write(snapshot) }
         }
     }
 

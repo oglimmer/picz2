@@ -9,6 +9,7 @@ import com.oglimmer.photoupload.exception.StorageException;
 import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.model.GpsCoordinates;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
 import java.io.IOException;
@@ -84,7 +85,7 @@ public class FileProcessingService {
                     .resolve(PROCESSING_TMP)
                     .resolve(String.valueOf(fileMetadataId)));
         currentFile = workdir.resolve(storedFilename);
-        objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
+        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
         currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
       }
@@ -107,9 +108,9 @@ public class FileProcessingService {
           if (s3Backed) {
             // Upload the JPEG as the new original, drop the old HEIC key.
             String newKey = StoragePaths.ORIGINALS_PREFIX + convertedFilename;
-            objectStorage.get().putFile(newKey, convertedLocation, "image/jpeg");
+            storageFor(metadata).putFile(newKey, convertedLocation, "image/jpeg");
             try {
-              objectStorage.get().delete(metadata.getFilePath());
+              storageFor(metadata).delete(metadata.getFilePath());
             } catch (Exception e) {
               // Non-fatal: leaves an orphan key but the row is correct. Log and continue.
               log.warn(
@@ -144,6 +145,9 @@ public class FileProcessingService {
         }
       }
 
+      // Everything below rebuilds this asset's derivative set, so the byte count starts over.
+      resetDerivativeBytes(metadata);
+
       // 2) Thumbnails (images)
       if (MimeTypePredicates.isImageFile(mimeType)) {
         Path[] thumbnails = thumbnailService.generateAllThumbnails(currentFile, currentFile);
@@ -155,6 +159,7 @@ public class FileProcessingService {
         if (thumbnails[0] != null) {
           metadata.setThumbnailPath(
               storeDerivative(
+                  metadata,
                   fileStorageLocation,
                   thumbnails[0],
                   s3Backed ? StoragePaths.derivativeThumbnailKey(fileMetadataId) : null,
@@ -163,6 +168,7 @@ public class FileProcessingService {
         if (thumbnails[1] != null) {
           metadata.setMediumPath(
               storeDerivative(
+                  metadata,
                   fileStorageLocation,
                   thumbnails[1],
                   s3Backed ? StoragePaths.derivativeMediumKey(fileMetadataId) : null,
@@ -171,6 +177,7 @@ public class FileProcessingService {
         if (thumbnails[2] != null) {
           metadata.setLargePath(
               storeDerivative(
+                  metadata,
                   fileStorageLocation,
                   thumbnails[2],
                   s3Backed ? StoragePaths.derivativeLargeKey(fileMetadataId) : null,
@@ -190,6 +197,7 @@ public class FileProcessingService {
         if (thumbnailService.transcodeVideo(currentFile, transcodedLocation)) {
           metadata.setTranscodedVideoPath(
               storeDerivative(
+                  metadata,
                   fileStorageLocation,
                   transcodedLocation,
                   s3Backed ? StoragePaths.derivativeTranscodedKey(fileMetadataId) : null,
@@ -205,6 +213,7 @@ public class FileProcessingService {
         if (thumbnailService.generateVideoThumbnail(currentFile, thumbnailLocation)) {
           metadata.setThumbnailPath(
               storeDerivative(
+                  metadata,
                   fileStorageLocation,
                   thumbnailLocation,
                   s3Backed ? StoragePaths.derivativeThumbnailKey(fileMetadataId) : null,
@@ -322,7 +331,7 @@ public class FileProcessingService {
           Files.createDirectories(
               fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
       Path localOriginal = workdir.resolve(metadata.getStoredFilename());
-      objectStorage.get().getToFile(sourceKey, localOriginal);
+      storageFor(metadata).getToFile(sourceKey, localOriginal);
 
       log.info(
           "🔄 Rotating asset {} ({}) 90° left (source={})",
@@ -338,7 +347,7 @@ public class FileProcessingService {
       // already purged it, we deliberately don't recreate the key — that would resurrect bytes
       // the operator decided to drop, and would still only contain ≤2400px of pixels.
       if (originalRetained) {
-        objectStorage.get().putFile(metadata.getFilePath(), localOriginal, mimeType);
+        storageFor(metadata).putFile(metadata.getFilePath(), localOriginal, mimeType);
         try {
           metadata.setFileSize(Files.size(localOriginal));
         } catch (IOException sizeError) {
@@ -347,11 +356,14 @@ public class FileProcessingService {
       }
 
       // Regenerate thumbnails from the rotated original. Derivative keys are deterministic per
-      // assetId, so the PUT overwrites the old derivative bytes — no separate delete needed.
+      // assetId, so the PUT overwrites the old derivative bytes — no separate delete needed, and
+      // the byte count restarts for the same reason.
+      resetDerivativeBytes(metadata);
       Path[] thumbnails = thumbnailService.generateAllThumbnails(localOriginal, localOriginal);
       if (thumbnails[0] != null) {
         metadata.setThumbnailPath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[0],
                 StoragePaths.derivativeThumbnailKey(fileMetadataId),
@@ -360,6 +372,7 @@ public class FileProcessingService {
       if (thumbnails[1] != null) {
         metadata.setMediumPath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[1],
                 StoragePaths.derivativeMediumKey(fileMetadataId),
@@ -368,6 +381,7 @@ public class FileProcessingService {
       if (thumbnails[2] != null) {
         metadata.setLargePath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[2],
                 StoragePaths.derivativeLargeKey(fileMetadataId),
@@ -476,13 +490,14 @@ public class FileProcessingService {
           Files.createDirectories(
               fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
       Path localSource = workdir.resolve(metadata.getStoredFilename());
-      objectStorage.get().getToFile(sourceKey, localSource);
+      storageFor(metadata).getToFile(sourceKey, localSource);
 
       log.info(
           "🖼️  Regenerating derivatives for asset {} ({}, source={})",
           fileMetadataId,
           originalName,
           fromOriginal ? "original" : sourceKey);
+      resetDerivativeBytes(metadata);
       Path[] thumbnails = thumbnailService.generateAllThumbnails(localSource, localSource);
       if (thumbnails[0] == null && thumbnails[1] == null && thumbnails[2] == null) {
         throw new StorageException("Thumbnail regeneration produced no output for " + originalName);
@@ -490,6 +505,7 @@ public class FileProcessingService {
       if (thumbnails[0] != null) {
         metadata.setThumbnailPath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[0],
                 StoragePaths.derivativeThumbnailKey(fileMetadataId),
@@ -498,6 +514,7 @@ public class FileProcessingService {
       if (thumbnails[1] != null) {
         metadata.setMediumPath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[1],
                 StoragePaths.derivativeMediumKey(fileMetadataId),
@@ -506,6 +523,7 @@ public class FileProcessingService {
       if (thumbnails[2] != null) {
         metadata.setLargePath(
             storeDerivative(
+                metadata,
                 fileStorageLocation,
                 thumbnails[2],
                 StoragePaths.derivativeLargeKey(fileMetadataId),
@@ -594,7 +612,7 @@ public class FileProcessingService {
                     .resolve(PROCESSING_TMP)
                     .resolve(String.valueOf(fileMetadataId)));
         currentFile = workdir.resolve(metadata.getStoredFilename());
-        objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
+        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
         currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
       }
@@ -696,7 +714,7 @@ public class FileProcessingService {
                     .resolve(PROCESSING_TMP)
                     .resolve(String.valueOf(fileMetadataId)));
         currentFile = workdir.resolve(metadata.getStoredFilename());
-        objectStorage.get().getToFile(metadata.getFilePath(), currentFile);
+        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
         currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
       }
@@ -738,10 +756,26 @@ public class FileProcessingService {
    * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
    * fall back to storing the derivative on the PVC and returning its relative path.
    */
+  /**
+   * The album's storage backend for this asset. Resolved per call rather than once per job: the
+   * lookup is memoised in {@link ObjectStorageService}, and holding a handle across a long
+   * transcode would pin credentials that the owner may have corrected in the meantime.
+   */
+  private BackendStorage storageFor(FileMetadata metadata) {
+    return objectStorage
+        .orElseThrow(() -> new StorageException("Object storage is not enabled"))
+        .forFile(metadata);
+  }
+
   private String storeDerivative(
-      Path fileStorageLocation, Path local, String s3Key, String contentType) throws IOException {
+      FileMetadata metadata, Path fileStorageLocation, Path local, String s3Key, String contentType)
+      throws IOException {
     if (s3Key != null) {
-      objectStorage.get().putFile(s3Key, local, contentType);
+      // Measured before the PUT, while the file is still on disk — afterwards it is deleted, and
+      // asking S3 for the size would be a second round trip per derivative.
+      long size = Files.size(local);
+      storageFor(metadata).putFile(s3Key, local, contentType);
+      metadata.setDerivativeBytes(nullToZero(metadata.getDerivativeBytes()) + size);
       try {
         Files.deleteIfExists(local);
       } catch (IOException cleanup) {
@@ -750,6 +784,21 @@ public class FileProcessingService {
       return s3Key;
     }
     return toRelativePath(fileStorageLocation, local);
+  }
+
+  /**
+   * Start counting this asset's derivative bytes from scratch.
+   *
+   * <p>Called by every job that rebuilds the whole set (first pass, rotate, regenerate). Without it
+   * the running total from {@link #storeDerivative} would accumulate across reprocessings, and an
+   * asset rotated four times would meter as if it held four copies of its own thumbnails.
+   */
+  private void resetDerivativeBytes(FileMetadata metadata) {
+    metadata.setDerivativeBytes(0L);
+  }
+
+  private static long nullToZero(Long value) {
+    return value != null ? value : 0L;
   }
 
   /**

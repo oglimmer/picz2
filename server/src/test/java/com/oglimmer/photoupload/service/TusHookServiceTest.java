@@ -48,6 +48,12 @@ class TusHookServiceTest {
   @Mock JobsProperties.Backpressure backpressure;
   @Mock JobQueueDepthService queueDepthService;
 
+  /**
+   * Quota check on pre-create. A permissive mock by default: these tests are about auth,
+   * backpressure and duplicate detection, and the quota has its own coverage.
+   */
+  @Mock StorageQuotaService storageQuotaService;
+
   @InjectMocks TusHookService service;
 
   private User testUser;

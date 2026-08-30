@@ -83,6 +83,26 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
   }
 
+  /**
+   * 507 rather than 400: the request was well-formed and the file was fine, the account simply has
+   * no room. Retrying it unchanged cannot succeed, so a client must show the message rather than
+   * back off and try again — which is exactly what it would do for a 5xx it did not recognise.
+   */
+  @ExceptionHandler(StorageQuotaExceededException.class)
+  public ResponseEntity<ErrorResponse> handleStorageQuotaExceeded(
+      StorageQuotaExceededException ex, HttpServletRequest request) {
+    log.warn("Storage quota exceeded: {}", ex.getMessage());
+
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.INSUFFICIENT_STORAGE.value(),
+            "Insufficient Storage",
+            ex.getMessage(),
+            request.getRequestURI());
+
+    return ResponseEntity.status(HttpStatus.INSUFFICIENT_STORAGE).body(error);
+  }
+
   @ExceptionHandler(MinioUnavailableException.class)
   public ResponseEntity<ErrorResponse> handleMinioUnavailable(
       MinioUnavailableException ex, HttpServletRequest request) {

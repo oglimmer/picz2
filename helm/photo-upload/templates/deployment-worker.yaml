@@ -119,6 +119,15 @@ spec:
               name: {{ include "photo-upload.fullname" . }}-secret
               key: objectStorage.secretKey
         {{- end }}
+        {{- if .Values.objectStorage.backendSecretKey }}
+        # The worker writes thumbnails into whichever backend the album lives on, so it needs to
+        # decrypt user credentials just like the api pod does.
+        - name: STORAGE_BACKEND_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.backendSecretKey
+        {{- end }}
         # Same probe topology as backend — actuator on the management port, full /health for
         # startup, cheap probe groups for live/ready so a slow DB doesn't take the pod down.
         startupProbe:

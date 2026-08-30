@@ -7,7 +7,6 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
-import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -40,7 +39,11 @@ public class ResilienceConfig {
             .permittedNumberOfCallsInHalfOpenState(2)
             .automaticTransitionFromOpenToHalfOpenEnabled(true)
             .build();
-    return CircuitBreakerRegistry.of(Map.of(MINIO_BREAKER, minioCfg));
+    // The same config is the registry DEFAULT, not just the `minio` entry: per-album storage
+    // backends each get their own breaker (`s3-backend-{id}`) so one user's unreachable S3
+    // cannot trip the breaker that guards everyone else's uploads. They should all fail over
+    // with the same thresholds, and only the `minio` one feeds the readiness probe.
+    return CircuitBreakerRegistry.of(minioCfg);
   }
 
   @Bean

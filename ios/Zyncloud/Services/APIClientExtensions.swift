@@ -45,9 +45,20 @@ extension APIClient {
 extension APIClient {
     // MARK: - Create Album
 
-    func createAlbum(name: String, description: String?, completion: @escaping @Sendable (Result<Album, Error>) -> Void) {
+    /// - Parameter storageBackendId: which storage to put the photos in. `nil` means the site's
+    ///   own. Only honoured here, at creation — the server rejects a later change.
+    func createAlbum(
+        name: String,
+        description: String?,
+        storageBackendId: Int? = nil,
+        completion: @escaping @Sendable (Result<Album, Error>) -> Void,
+    ) {
         send(.post, "api/albums",
-             body: AlbumBody(name: name, description: description ?? ""),
+             body: AlbumBody(
+                 name: name,
+                 description: description ?? "",
+                 storageBackendId: storageBackendId,
+             ),
              expecting: AlbumResponse.self)
         { result in
             completion(result.map(\.album))
@@ -118,7 +129,8 @@ extension APIClient {
             return .failure(AppError.api(message: "Invalid response", statusCode: nil))
         }
         AppLog.api.debug(
-            "Received \(data.count, privacy: .public) bytes — HTTP \(httpResponse.statusCode, privacy: .public)")
+            "Received \(data.count, privacy: .public) bytes — HTTP \(httpResponse.statusCode, privacy: .public)",
+        )
         guard (200 ... 299).contains(httpResponse.statusCode) else {
             if let errorMessage = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
                 return .failure(AppError.api(message: errorMessage.message, statusCode: httpResponse.statusCode))
@@ -335,6 +347,10 @@ struct AlbumResponse: Codable {
 struct AlbumBody: Encodable {
     let name: String
     let description: String
+
+    /// Absent on an update: the server rejects a request that tries to move an existing album,
+    /// so an edit must not send the field at all. Encoded as null on create to mean "the default".
+    var storageBackendId: Int?
 }
 
 struct SuccessResponse: Codable {

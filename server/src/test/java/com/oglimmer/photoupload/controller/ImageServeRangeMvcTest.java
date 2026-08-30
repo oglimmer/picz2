@@ -46,7 +46,15 @@ class ImageServeRangeMvcTest {
   private MockMvc mockMvc(Path file) {
     FileServeInfo info =
         new FileServeInfo(
-            "video/mp4", "abc", UPLOADED_AT, file, "clip.mp4", ProcessingStatus.DONE, false, null);
+            "video/mp4",
+            "abc",
+            UPLOADED_AT,
+            file,
+            "clip.mp4",
+            ProcessingStatus.DONE,
+            false,
+            null,
+            1L);
     when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
     return MockMvcBuilders.standaloneSetup(
             new ImageServeController(fileStorageService, Optional.empty()))

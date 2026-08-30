@@ -14,7 +14,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.RetentionProperties;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import java.time.Instant;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -35,7 +38,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 class RetentionServiceOrphanCleanupTest {
 
   @Mock FileMetadataRepository metadataRepository;
+  @Mock StorageBackendRepository storageBackendRepository;
   @Mock ObjectStorageService objectStorage;
+
+  /** The one backend these tests sweep. The pass now runs a bucket at a time. */
+  @Mock BackendStorage storage;
+
+  private final StorageBackend backend = backend(1L, "Default storage");
   @Mock RetentionProperties properties;
   @Mock PlatformTransactionManager transactionManager;
 
@@ -50,40 +59,45 @@ class RetentionServiceOrphanCleanupTest {
   void emptyListIsNoOp() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(metadataRepository.findAllOriginalsKeys()).thenReturn(List.of());
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
-        .thenReturn(List.of());
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L)).thenReturn(List.of());
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class))).thenReturn(List.of());
 
     RetentionService.Result result = service.runOriginalsOrphanCleanup();
 
     assertEquals(0, result.eligible());
     assertEquals(0, result.purged());
     assertEquals(0, result.failed());
-    verify(objectStorage, never()).delete(any());
+    verify(storage, never()).delete(any());
   }
 
   @Test
   void liveKeysAreNotDeleted() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(metadataRepository.findAllOriginalsKeys())
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L))
         .thenReturn(List.of("originals/keep-me.jpg", "originals/also-live.heic"));
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
         .thenReturn(List.of("originals/keep-me.jpg", "originals/also-live.heic"));
 
     RetentionService.Result result = service.runOriginalsOrphanCleanup();
 
     assertEquals(0, result.eligible());
-    verify(objectStorage, never()).delete(any());
+    verify(storage, never()).delete(any());
   }
 
   @Test
   void deletesOnlyKeysWithNoLiveRow() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(metadataRepository.findAllOriginalsKeys())
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L))
         .thenReturn(List.of("originals/live-1.jpg", "originals/live-2.jpg"));
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
         .thenReturn(
             List.of(
                 "originals/live-1.jpg",
@@ -96,18 +110,20 @@ class RetentionServiceOrphanCleanupTest {
     assertEquals(2, result.eligible());
     assertEquals(2, result.purged());
     assertEquals(0, result.failed());
-    verify(objectStorage, times(1)).delete("originals/orphan-a.jpg");
-    verify(objectStorage, times(1)).delete("originals/orphan-b.heic");
-    verify(objectStorage, never()).delete("originals/live-1.jpg");
-    verify(objectStorage, never()).delete("originals/live-2.jpg");
+    verify(storage, times(1)).delete("originals/orphan-a.jpg");
+    verify(storage, times(1)).delete("originals/orphan-b.heic");
+    verify(storage, never()).delete("originals/live-1.jpg");
+    verify(storage, never()).delete("originals/live-2.jpg");
   }
 
   @Test
   void dryRunSkipsDelete() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(true);
-    when(metadataRepository.findAllOriginalsKeys()).thenReturn(List.of());
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L)).thenReturn(List.of());
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
         .thenReturn(List.of("originals/orphan-a.jpg", "originals/orphan-b.jpg"));
 
     RetentionService.Result result = service.runOriginalsOrphanCleanup();
@@ -115,17 +131,19 @@ class RetentionServiceOrphanCleanupTest {
     assertEquals(2, result.eligible());
     assertEquals(0, result.purged());
     assertTrue(result.dryRun());
-    verify(objectStorage, never()).delete(any());
+    verify(storage, never()).delete(any());
   }
 
   @Test
   void respectsMaxRowsCap() {
     when(properties.getMaxRowsPerRun()).thenReturn(2);
     when(properties.isDryRun()).thenReturn(false);
-    when(metadataRepository.findAllOriginalsKeys()).thenReturn(List.of());
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L)).thenReturn(List.of());
     List<String> tenKeys =
         IntStream.range(0, 10).mapToObj(i -> "originals/orphan-" + i + ".jpg").toList();
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class))).thenReturn(tenKeys);
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class))).thenReturn(tenKeys);
 
     RetentionService.Result result = service.runOriginalsOrphanCleanup();
 
@@ -133,15 +151,17 @@ class RetentionServiceOrphanCleanupTest {
     // orphans flow through on the next nightly firing.
     assertEquals(2, result.eligible());
     assertEquals(2, result.purged());
-    verify(objectStorage, times(2)).delete(any());
+    verify(storage, times(2)).delete(any());
   }
 
   @Test
   void deleteFailureCountsAsFailed() {
     when(properties.getMaxRowsPerRun()).thenReturn(5000);
     when(properties.isDryRun()).thenReturn(false);
-    when(metadataRepository.findAllOriginalsKeys()).thenReturn(List.of());
-    when(objectStorage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
+    when(metadataRepository.findOriginalsKeysByStorageBackend(1L)).thenReturn(List.of());
+    when(storageBackendRepository.findAll()).thenReturn(List.of(backend));
+    when(objectStorage.forBackend(backend)).thenReturn(storage);
+    when(storage.listKeysOlderThan(eq("originals/"), any(Instant.class)))
         .thenReturn(List.of("originals/ok.jpg", "originals/dead.jpg"));
     doAnswer(
             inv -> {
@@ -150,7 +170,7 @@ class RetentionServiceOrphanCleanupTest {
               }
               return null;
             })
-        .when(objectStorage)
+        .when(storage)
         .delete(anyString());
 
     RetentionService.Result result = service.runOriginalsOrphanCleanup();
@@ -170,5 +190,14 @@ class RetentionServiceOrphanCleanupTest {
     assertEquals(0, result.eligible());
     verifyNoInteractions(objectStorage);
     verifyNoInteractions(metadataRepository);
+    verifyNoInteractions(storageBackendRepository);
+  }
+
+  private static StorageBackend backend(Long id, String name) {
+    StorageBackend b = new StorageBackend();
+    b.setId(id);
+    b.setName(name);
+    b.setSystemDefault(true);
+    return b;
   }
 }

@@ -8,6 +8,7 @@ import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -23,8 +24,10 @@ import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
 import jakarta.annotation.PostConstruct;
@@ -110,11 +113,13 @@ public class FileStorageService {
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
   private final SlideshowRecordingRepository slideshowRecordingRepository;
+  private final StorageBackendRepository storageBackendRepository;
   private final FileInfoMapper fileInfoMapper;
   private final UserContext userContext;
   private final TransactionTemplate transactionTemplate;
   private final JobEnqueueService jobEnqueueService;
   private final SystemTagProvisioner systemTagProvisioner;
+  private final StorageQuotaService storageQuotaService;
   // Optional: present iff storage.s3.enabled=true. When present, the upload path PUTs the body
   // directly to MinIO and stores an S3 key in file_path; the local PVC is used only for Spring's
   // transient .multipart-tmp staging (auto-cleaned per request) and per-job processing scratch.
@@ -130,11 +135,13 @@ public class FileStorageService {
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
       SlideshowRecordingRepository slideshowRecordingRepository,
+      StorageBackendRepository storageBackendRepository,
       FileInfoMapper fileInfoMapper,
       UserContext userContext,
       PlatformTransactionManager transactionManager,
       JobEnqueueService jobEnqueueService,
       SystemTagProvisioner systemTagProvisioner,
+      StorageQuotaService storageQuotaService,
       Optional<ObjectStorageService> objectStorage) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
@@ -146,11 +153,13 @@ public class FileStorageService {
     this.fileInfoMapper = fileInfoMapper;
     this.albumRepository = albumRepository;
     this.slideshowRecordingRepository = slideshowRecordingRepository;
+    this.storageBackendRepository = storageBackendRepository;
     this.userContext = userContext;
     this.fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.jobEnqueueService = jobEnqueueService;
     this.systemTagProvisioner = systemTagProvisioner;
+    this.storageQuotaService = storageQuotaService;
     this.objectStorage = objectStorage;
   }
 
@@ -220,6 +229,10 @@ public class FileStorageService {
     // Validate file
     validateFile(file);
 
+    // Before anything is staged or PUT: an upload that cannot be kept should not be carried.
+    // A no-op when the album lives on the user's own storage — that disk is theirs to fill.
+    storageQuotaService.requireRoomFor(currentUser, effectiveAlbumId, file.getSize());
+
     // Check for duplicate by contentId first (if provided)
     // ContentId is a stable identifier from the source (e.g., iOS PHAsset.localIdentifier)
     // This is more reliable than checksum for detecting duplicates, especially for HEIC files
@@ -263,6 +276,11 @@ public class FileStorageService {
         System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
     boolean useObjectStorage = objectStorage.isPresent();
+    // Resolve the album's storage backend BEFORE any byte is written. An album can live on its
+    // owner's own S3, so choosing the backend after the PUT would mean the bytes went to the
+    // instance's MinIO while the row claims otherwise — unreadable, and invisible until serve time.
+    final BackendStorage albumStorage =
+        useObjectStorage ? objectStorage.get().forAlbumId(effectiveAlbumId) : null;
 
     // Write the multipart body to a stable temp file exactly once.
     // Calling file.getInputStream() twice is unreliable: some Part implementations back the
@@ -326,7 +344,7 @@ public class FileStorageService {
     if (useObjectStorage) {
       String storageKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
       try {
-        objectStorage.get().putFile(storageKey, tempFile, contentType);
+        albumStorage.putFile(storageKey, tempFile, contentType);
       } finally {
         Files.deleteIfExists(tempFile);
       }
@@ -437,6 +455,12 @@ public class FileStorageService {
 
     validateTusUpload(originalName, contentType, fileSize);
 
+    // Re-checked here even though pre-create already asked: the pre-create hook sees the size the
+    // client *declared*, and the album it names can be changed between the two calls. Rejecting
+    // now leaves the object in tus-uploads/, which retention sweeps — the user is never charged
+    // for bytes that never became an asset.
+    storageQuotaService.requireRoomFor(currentUser, effectiveAlbumId, fileSize);
+
     String extension = getFileExtension(originalName);
     String nameWithoutExtension = getFilenameWithoutExtension(originalName);
     String uniqueSuffix =
@@ -444,8 +468,15 @@ public class FileStorageService {
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
     String originalKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
 
+    // tusd always stages into the instance's own bucket — it is one process with one set of
+    // credentials and it does not know which album the upload is for. So the finish hook is where
+    // the bytes reach the album's actual backend. Same backend: a server-side COPY, no JVM bytes.
+    // Different backend: transfer() streams them through this pod, which is the unavoidable price
+    // of an album on the user's own S3.
     ObjectStorageService storage = objectStorage.get();
-    storage.copy(tusS3Key, originalKey, contentType);
+    BackendStorage staging = storage.forSystemDefault();
+    BackendStorage target = storage.forAlbumId(effectiveAlbumId);
+    storage.transfer(staging, tusS3Key, target, originalKey, contentType);
 
     final String finalContentType = contentType;
     final String finalNewFilename = newFilename;
@@ -489,7 +520,7 @@ public class FileStorageService {
             });
 
     try {
-      storage.deleteKeys(java.util.List.of(tusS3Key, tusS3Key + ".info"));
+      staging.deleteKeys(java.util.List.of(tusS3Key, tusS3Key + ".info"));
     } catch (Exception e) {
       log.warn("TUS cleanup failed for {} ({}); orphan job will mop up", tusS3Key, e.toString());
     }
@@ -699,34 +730,63 @@ public class FileStorageService {
     }
     ObjectStorageService s3 = objectStorage.get();
 
-    Set<String> knownPaths = new HashSet<>(metadataRepository.findAllStoredPaths());
-    knownPaths.addAll(slideshowRecordingRepository.findAllAudioPaths());
-    for (String audioFilename : slideshowRecordingRepository.findAllAudioFilenames()) {
-      knownPaths.add(StoragePaths.audioAacKey(audioFilename));
-    }
-    List<String> bucketKeys = s3.listKeys();
-
+    int totalBucketKeys = 0;
+    int knownDbPaths = 0;
     int orphaned = 0;
     int deleted = 0;
     int failed = 0;
     int skippedInFlight = 0;
-    for (String key : bucketKeys) {
-      if (key.startsWith(StoragePaths.TUS_UPLOADS_PREFIX)) {
-        skippedInFlight++;
+
+    // One pass per backend. A key is only garbage relative to the bucket it was found in: two
+    // backends can legitimately hold the same key for different albums, so comparing one bucket's
+    // listing against every album's paths would spare real orphans and, worse, delete live objects.
+    for (StorageBackend backend : storageBackendRepository.findAll()) {
+      Set<String> knownPaths =
+          new HashSet<>(metadataRepository.findStoredPathsByStorageBackend(backend.getId()));
+      knownPaths.addAll(
+          slideshowRecordingRepository.findAudioPathsByStorageBackend(backend.getId()));
+      for (String audioFilename :
+          slideshowRecordingRepository.findAudioFilenamesByStorageBackend(backend.getId())) {
+        knownPaths.add(StoragePaths.audioAacKey(audioFilename));
+      }
+
+      BackendStorage storage;
+      List<String> bucketKeys;
+      try {
+        storage = s3.forBackend(backend);
+        bucketKeys = storage.listKeys();
+      } catch (Exception e) {
+        // A user's endpoint being down must not abort the sweep of every other backend.
+        failed++;
+        log.warn(
+            "Skipping orphan sweep of storage backend {} ({}): {}",
+            backend.getId(),
+            backend.getName(),
+            e.getMessage());
         continue;
       }
-      if (!knownPaths.contains(key)) {
-        orphaned++;
-        if (dryRun) {
-          log.info("Dry run — orphaned S3 object: {}", key);
-        } else {
-          try {
-            s3.delete(key);
-            deleted++;
-            log.info("Deleted orphaned S3 object: {}", key);
-          } catch (Exception e) {
-            failed++;
-            log.warn("Failed to delete orphaned S3 object {}: {}", key, e.getMessage());
+
+      totalBucketKeys += bucketKeys.size();
+      knownDbPaths += knownPaths.size();
+
+      for (String key : bucketKeys) {
+        if (key.startsWith(StoragePaths.TUS_UPLOADS_PREFIX)) {
+          skippedInFlight++;
+          continue;
+        }
+        if (!knownPaths.contains(key)) {
+          orphaned++;
+          if (dryRun) {
+            log.info("Dry run — orphaned S3 object on backend {}: {}", backend.getId(), key);
+          } else {
+            try {
+              storage.delete(key);
+              deleted++;
+              log.info("Deleted orphaned S3 object on backend {}: {}", backend.getId(), key);
+            } catch (Exception e) {
+              failed++;
+              log.warn("Failed to delete orphaned S3 object {}: {}", key, e.getMessage());
+            }
           }
         }
       }
@@ -735,8 +795,8 @@ public class FileStorageService {
     log.info(
         "S3 orphan purge complete (dryRun={}): {} bucket keys, {} known DB paths, {} skipped in-flight, {} orphaned, {} deleted, {} failed",
         dryRun,
-        bucketKeys.size(),
-        knownPaths.size(),
+        totalBucketKeys,
+        knownDbPaths,
         skippedInFlight,
         orphaned,
         deleted,
@@ -744,8 +804,8 @@ public class FileStorageService {
 
     Map<String, Object> result = new HashMap<>();
     result.put("dryRun", dryRun);
-    result.put("totalBucketKeys", bucketKeys.size());
-    result.put("knownDbPaths", knownPaths.size());
+    result.put("totalBucketKeys", totalBucketKeys);
+    result.put("knownDbPaths", knownDbPaths);
     result.put("skippedInFlight", skippedInFlight);
     result.put("orphaned", orphaned);
     result.put("deleted", deleted);
@@ -760,7 +820,7 @@ public class FileStorageService {
           metadata.getFilePath());
       return;
     }
-    ObjectStorageService s3 = objectStorage.get();
+    BackendStorage s3 = objectStorage.get().forFile(metadata);
     deleteS3Key(s3, metadata.getFilePath(), "original");
     deleteS3Key(s3, metadata.getThumbnailPath(), "thumbnail");
     deleteS3Key(s3, metadata.getMediumPath(), "medium");
@@ -768,7 +828,7 @@ public class FileStorageService {
     deleteS3Key(s3, metadata.getTranscodedVideoPath(), "transcoded");
   }
 
-  private void deleteS3Key(ObjectStorageService s3, String key, String label) {
+  private void deleteS3Key(BackendStorage s3, String key, String label) {
     if (key == null) {
       return;
     }
@@ -850,7 +910,7 @@ public class FileStorageService {
             albumId,
             s3KeysToDelete.size());
       } else {
-        objectStorage.get().deleteKeys(s3KeysToDelete);
+        objectStorage.get().forAlbumId(albumId).deleteKeys(s3KeysToDelete);
       }
     }
     log.info(
@@ -1318,7 +1378,8 @@ public class FileStorageService {
         metadata.getStoredFilename(),
         metadata.getProcessingStatus(),
         derivativeReady,
-        s3Backed ? filePath : null);
+        s3Backed ? filePath : null,
+        metadata.getAlbum() != null ? metadata.getAlbum().getId() : null);
   }
 
   /**

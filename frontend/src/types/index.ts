@@ -28,6 +28,53 @@ export interface Album {
   mapCenterLng?: number | null;
   mapSpanLat?: number | null;
   mapSpanLng?: number | null;
+  // Which storage the album's bytes live in. Chosen at creation and fixed afterwards — the
+  // server rejects a change rather than half-moving the objects.
+  storageBackendId?: number;
+  storageBackendName?: string;
+}
+
+/**
+ * An S3-compatible endpoint photos can be stored in. The instance's own storage is always in the
+ * list as `systemDefault`, which nobody can edit or delete; the rest are the user's own, and they
+ * pay for them. The secret key is write-only — it is never sent back.
+ */
+export interface StorageBackend {
+  id: number;
+  name: string;
+  systemDefault: boolean;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  accessKey?: string;
+  pathStyleAccess: boolean;
+  /** Albums already stored here. Non-zero means it cannot be deleted. */
+  albumCount: number;
+  createdAt?: string;
+  /**
+   * Bytes kept here and the allowance, for the site's own storage only. Both absent on a user's
+   * own bucket: that one is theirs to fill, so there is nothing to meter and nothing to cap.
+   */
+  usedBytes?: number | null;
+  quotaBytes?: number | null;
+}
+
+/** What the add/edit form sends. `secretKey` omitted on edit means "keep the stored one". */
+export interface StorageBackendInput {
+  name: string;
+  endpoint: string;
+  region?: string;
+  bucket: string;
+  accessKey: string;
+  secretKey?: string;
+  pathStyleAccess?: boolean;
+}
+
+/** Result of a connection check. `ok: false` is a normal answer, not a request failure. */
+export interface StorageBackendTestResult {
+  ok: boolean;
+  failedStep?: string | null;
+  message?: string | null;
 }
 
 /** Reads an album's saved view, or null when it has none (any missing field disqualifies it). */

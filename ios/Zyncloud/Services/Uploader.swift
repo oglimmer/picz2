@@ -11,33 +11,36 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
 
     let sessionId = "com.oglimmer.photosync.upload"
     /// Assigned once by ``configureSession()`` before any callback can arrive, then never again.
-    nonisolated(unsafe) private(set) var session: URLSession!
+    private(set) nonisolated(unsafe) var session: URLSession!
     private let fileManager = FileManager.default
 
-    // Buffered response bodies, keyed by URLSessionTask.taskIdentifier, used to
-    // extract the server-side asset id from the upload 202 response so the
-    // SyncCoordinator can poll /api/assets/{id}/status afterwards. Mutated
-    // only on the URLSession's delegate queue (single-threaded per session).
+    /// Buffered response bodies, keyed by URLSessionTask.taskIdentifier, used to
+    /// extract the server-side asset id from the upload 202 response so the
+    /// SyncCoordinator can poll /api/assets/{id}/status afterwards. Mutated
+    /// only on the URLSession's delegate queue (single-threaded per session).
     private var responseBodyByTaskId: [Int: Data] = [:]
 
-    // Called by AppDelegate when background session finished delivering events
+    /// Called by AppDelegate when background session finished delivering events
     var onAllBackgroundEventsComplete: ((String) -> Void)?
 
-    // Fires for every task that finished (success, failure, backpressure).
-    // SyncCoordinator uses this to free a concurrency slot and re-enqueue
-    // on HTTP 503 with the honored Retry-After delay. The server-side asset
-    // id (when parseable from the 2xx body) rides along on .success so the
-    // coordinator can spin up status polling for it.
+    /// Fires for every task that finished (success, failure, backpressure).
+    /// SyncCoordinator uses this to free a concurrency slot and re-enqueue
+    /// on HTTP 503 with the honored Retry-After delay. The server-side asset
+    /// id (when parseable from the 2xx body) rides along on .success so the
+    /// coordinator can spin up status polling for it.
     enum UploadOutcome {
         case success(serverAssetId: Int?)
-        case deduped           // server already holds this contentId; no bytes were sent
-        case clientError       // non-retryable 4xx (except 429)
-        case transport         // network / session error, system will retry
+        case deduped // server already holds this contentId; no bytes were sent
+        case clientError // non-retryable 4xx (except 429)
+        case transport // network / session error, system will retry
         case backpressure(TimeInterval) // HTTP 429/503, with retry delay
     }
+
     var onTaskFinished: ((String, UploadOutcome) -> Void)?
 
-    override private init() { super.init() }
+    override private init() {
+        super.init()
+    }
 
     /// Creates the background session, once. Call from the main thread.
     ///
@@ -50,7 +53,9 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
     /// after creation, so the toggle is applied per request via `applyNetworkPolicy()`.
     func configureSession(with identifier: String? = nil) {
         let id = identifier ?? sessionId
-        if let session, session.configuration.identifier == id { return }
+        if let session, session.configuration.identifier == id {
+            return
+        }
 
         let config = URLSessionConfiguration.background(withIdentifier: id)
         config.sessionSendsLaunchEvents = true
@@ -134,7 +139,9 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         defer { try? handle.close() }
         while true {
             let data = try handle.read(upToCount: chunkSize) ?? Data()
-            if data.isEmpty { break }
+            if data.isEmpty {
+                break
+            }
             hasher.update(data: data)
         }
         let digest = hasher.finalize()
@@ -280,6 +287,23 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                     SyncLogger.shared.logUploadSuccess(assetId: assetId)
                     onTaskFinished?(assetId, .success(serverAssetId: serverAssetId))
                 }
+            } else if code == 507 {
+                // The account's storage on the server is full. A failure the user can act on —
+                // free space, or add their own storage — so it says that rather than "HTTP 507",
+                // which reads as a server fault to wait out. Not marked uploaded: the bytes are
+                // not there, and a later run must try again once there is room.
+                // Index 1 is the exported file's path; its last component is the name the user
+                // would recognise. The descriptor carries no separate filename field.
+                let filename =
+                    components.count > 1
+                        ? (components[1] as NSString).lastPathComponent
+                        : assetId
+                SyncLogger.shared.logUploadSkippedStorageFull(
+                    filename: filename,
+                    serverMessage: bufferedBody.flatMap(TusUploader.serverMessage(from:)),
+                )
+                UploadStore.shared.removeFromUploading(assetId)
+                onTaskFinished?(assetId, .clientError)
             } else if code == 429 || code == 503 {
                 // Server backpressure — expected signal, not a failure. Log as
                 // informational so the user doesn't see a red error entry.
@@ -302,9 +326,9 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         }
     }
 
-    // Pulls `file.id` out of the upload 202 body. Defensive: any decoding
-    // failure (truncated body in background relaunch, server schema change)
-    // falls back to nil and just disables polling for that asset.
+    /// Pulls `file.id` out of the upload 202 body. Defensive: any decoding
+    /// failure (truncated body in background relaunch, server schema change)
+    /// falls back to nil and just disables polling for that asset.
     func parseServerAssetId(from data: Data) -> Int? {
         parseUploadResponse(data)?.file.id
     }
@@ -331,7 +355,8 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
         // flow into a retry deadline, so reject them and let the caller apply its own
         // default rather than scheduling a nonsense delay.
         if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespaces)),
-           seconds.isFinite, seconds >= 0 {
+           seconds.isFinite, seconds >= 0
+        {
             return seconds
         }
         // HTTP-date form — not expected from our server; fall through to default

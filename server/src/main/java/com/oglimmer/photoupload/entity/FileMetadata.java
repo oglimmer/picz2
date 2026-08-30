@@ -124,6 +124,17 @@ public class FileMetadata {
   @Column(name = "public_token", unique = true, length = 64)
   private String publicToken;
 
+  /**
+   * Bytes the derivatives of this asset occupy — thumb + medium + large + transcoded, summed as the
+   * worker writes them and reset whenever it rebuilds them.
+   *
+   * <p>Tracked rather than derived because retention deletes the original after a week: without it
+   * a month-old account would meter as nearly empty while its thumbnails and transcoded videos sit
+   * on the disk for good.
+   */
+  @Column(name = "derivative_bytes", nullable = false)
+  private Long derivativeBytes = 0L;
+
   @Column(name = "thumbnail_path")
   private String thumbnailPath;
 

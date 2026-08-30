@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.SlideshowRecording;
 import com.oglimmer.photoupload.model.RecordingAudioInfo;
 import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -44,6 +45,13 @@ public class RecordingAudioService {
   private final AudioReencodingService audioReencodingService;
   private final Optional<ObjectStorageService> objectStorage;
 
+  /** The storage backend of the album this commentary belongs to. */
+  private BackendStorage storageFor(SlideshowRecording recording) {
+    return objectStorage
+        .orElseThrow(() -> new IllegalStateException("Object storage is not enabled"))
+        .forAlbumId(recording.getAlbum().getId());
+  }
+
   /** True when the sibling already exists and can be served straight away. */
   public boolean isAacReady(SlideshowRecording recording) {
     String audioPath = recording.getAudioPath();
@@ -52,7 +60,7 @@ public class RecordingAudioService {
     }
     try {
       if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
-        return objectStorage.get().exists(StoragePaths.audioAacKey(recording.getAudioFilename()));
+        return storageFor(recording).exists(StoragePaths.audioAacKey(recording.getAudioFilename()));
       }
       return Files.exists(localAac(recording));
     } catch (Exception e) {
@@ -69,9 +77,13 @@ public class RecordingAudioService {
     String aacFilename = StoragePaths.aacFilename(recording.getAudioFilename());
     if (StoragePaths.isAudioS3Key(recording.getAudioPath()) && objectStorage.isPresent()) {
       return new RecordingAudioInfo(
-          aacFilename, null, StoragePaths.audioAacKey(recording.getAudioFilename()));
+          aacFilename,
+          null,
+          StoragePaths.audioAacKey(recording.getAudioFilename()),
+          recording.getAlbum().getId());
     }
-    return new RecordingAudioInfo(aacFilename, localAac(recording), null);
+    return new RecordingAudioInfo(
+        aacFilename, localAac(recording), null, recording.getAlbum().getId());
   }
 
   /**
@@ -107,13 +119,13 @@ public class RecordingAudioService {
       if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
         Path master = tempDir.resolve("aac-src-" + UUID.randomUUID());
         try {
-          objectStorage.get().getToFile(audioPath, master);
+          storageFor(recording).getToFile(audioPath, master);
           audioReencodingService.transcodeToAac(master, scratch);
         } finally {
           Files.deleteIfExists(master);
         }
         String aacKey = StoragePaths.audioAacKey(masterFilename);
-        objectStorage.get().putFile(aacKey, scratch, AAC_CONTENT_TYPE);
+        storageFor(recording).putFile(aacKey, scratch, AAC_CONTENT_TYPE);
         log.info("Stored AAC sibling s3://.../{}", aacKey);
         return;
       }

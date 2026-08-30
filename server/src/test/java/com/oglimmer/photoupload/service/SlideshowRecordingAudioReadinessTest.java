@@ -71,7 +71,7 @@ class SlideshowRecordingAudioReadinessTest {
   void readySiblingIsServedWithoutQueueingAnything() {
     when(recordingAudioService.isAacReady(recording)).thenReturn(true);
     when(recordingAudioService.aacLocation(recording))
-        .thenReturn(new RecordingAudioInfo("abc.m4a", null, "audio/abc.m4a"));
+        .thenReturn(new RecordingAudioInfo("abc.m4a", null, "audio/abc.m4a", 1L));
 
     RecordingAudioInfo info = service.getRecordingAudioInfoByPublicToken(TOKEN, "m4a");
 

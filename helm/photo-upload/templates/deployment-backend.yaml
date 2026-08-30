@@ -111,6 +111,15 @@ spec:
               name: {{ include "photo-upload.fullname" . }}-secret
               key: objectStorage.secretKey
         {{- end }}
+        {{- if .Values.objectStorage.backendSecretKey }}
+        # Without this, the instance still runs on its own MinIO; users just cannot register their
+        # own S3 endpoint, and the API says so instead of failing at upload time.
+        - name: STORAGE_BACKEND_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "photo-upload.fullname" . }}-secret
+              key: objectStorage.backendSecretKey
+        {{- end }}
         {{- if .Values.apns.enabled }}
         # Apple push credentials. Api pod only — the worker sends no notifications. The key
         # arrives from the secret, so it is never in the image and rotating it is a secret edit

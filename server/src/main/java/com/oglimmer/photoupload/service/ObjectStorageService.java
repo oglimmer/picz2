@@ -1,48 +1,37 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
-import com.oglimmer.photoupload.config.ObjectStorageProperties;
-import com.oglimmer.photoupload.exception.MinioUnavailableException;
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import com.oglimmer.photoupload.entity.Album;
+import com.oglimmer.photoupload.entity.FileMetadata;
+import com.oglimmer.photoupload.entity.StorageBackend;
+import com.oglimmer.photoupload.exception.StorageException;
+import com.oglimmer.photoupload.repository.AlbumRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
+import com.oglimmer.photoupload.storage.StorageClientFactory;
 import java.io.InputStream;
-import java.net.URL;
-import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.function.Supplier;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
-import software.amazon.awssdk.services.s3.model.Delete;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
-import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
-import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
-import software.amazon.awssdk.services.s3.model.MetadataDirective;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
-import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.model.S3Object;
-import software.amazon.awssdk.services.s3.presigner.S3Presigner;
-import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
 /**
- * Thin wrapper around the S3 SDK. Each upload uses {@link RequestBody#fromFile(Path)} which streams
- * directly from disk — never reading the whole file into the JVM heap. That is the entire reason we
- * bother with this layer instead of {@code S3Client.putObject(... InputStream ...)}.
+ * Entry point to object storage. Answers one question — <em>which</em> backend do these bytes live
+ * in — and hands back a {@link BackendStorage} bound to it.
+ *
+ * <p>Storage is per album ({@code albums.storage_backend_id}), because a user may bring their own
+ * S3 endpoint and pay for it themselves. Every asset belongs to exactly one album, so the backend
+ * is always derivable from the row; nothing needs to be guessed and nothing needs a fallback.
+ *
+ * <p>Callers should route through {@link #forFile(FileMetadata)} or {@link #forAlbum(Album)}.
+ * {@link #forSystemDefault()} is only for objects that belong to the instance rather than to an
+ * album — in practice the {@code tus-uploads/} staging prefix, which tusd writes to before any
+ * album is known.
  */
 @Service
 @ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
@@ -50,272 +39,143 @@ import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignReques
 @Slf4j
 public class ObjectStorageService {
 
-  private final S3Client s3;
-  private final S3Presigner presigner;
-  private final ObjectStorageProperties properties;
-  private final CircuitBreaker minioCircuitBreaker;
+  /**
+   * How long an album→backend answer is reused. An album's backend never changes, so this cache
+   * could live forever; the row's <em>credentials</em> can change, and the worker pod never sees
+   * the api pod's edit, so the entry expires and is re-read. A minute is short enough that a
+   * corrected access key takes effect without a restart and long enough that a gallery scroll does
+   * not add one SELECT per thumbnail.
+   */
+  private static final Duration BACKEND_CACHE_TTL = Duration.ofSeconds(60);
+
+  private final StorageClientFactory factory;
+  private final StorageBackendRepository backendRepository;
+  private final AlbumRepository albumRepository;
+
+  private record CachedBackend(StorageBackend backend, long expiresAtMillis) {}
+
+  private final Map<Long, CachedBackend> backendByAlbum = new ConcurrentHashMap<>();
 
   /**
-   * Run an SDK call through the breaker. {@link CallNotPermittedException} (breaker OPEN) is
-   * translated to {@link MinioUnavailableException} so {@code GlobalExceptionHandler} can map it to
-   * a 503 with {@code Retry-After}. Any other SDK exception bubbles up unchanged AND is recorded as
-   * a failure by the breaker.
+   * Cached because it is read on every TUS upload and never changes: the system default row is
+   * seeded by V44 and has no API that can edit or remove it.
    */
-  private <T> T withBreaker(Supplier<T> supplier) {
-    try {
-      return minioCircuitBreaker.executeSupplier(supplier);
-    } catch (CallNotPermittedException e) {
-      throw new MinioUnavailableException("MinIO circuit breaker is OPEN; refusing call fast", e);
+  private volatile StorageBackend cachedSystemBackend;
+
+  public StorageBackend systemBackend() {
+    StorageBackend cached = cachedSystemBackend;
+    if (cached != null) {
+      return cached;
     }
+    StorageBackend found =
+        backendRepository
+            .findBySystemDefaultTrue()
+            .orElseThrow(
+                () ->
+                    new StorageException(
+                        "No system default storage backend row — V44 migration did not run"));
+    cachedSystemBackend = found;
+    return found;
   }
 
-  private void runWithBreaker(Runnable r) {
-    try {
-      minioCircuitBreaker.executeRunnable(r);
-    } catch (CallNotPermittedException e) {
-      throw new MinioUnavailableException("MinIO circuit breaker is OPEN; refusing call fast", e);
+  public BackendStorage forBackend(StorageBackend backend) {
+    return factory.storageFor(backend);
+  }
+
+  public BackendStorage forAlbum(Album album) {
+    if (album == null) {
+      throw new StorageException("Cannot resolve storage: no album");
     }
+    return forAlbumId(album.getId());
   }
 
-  /**
-   * Upload a file. The {@code key} is the object name within the bucket (e.g. {@code
-   * originals/abc.jpg}). {@code contentType} is stored as metadata so file-serve can hand it to the
-   * browser without re-sniffing.
-   */
-  public void putFile(String key, Path source, String contentType) {
-    PutObjectRequest.Builder req =
-        PutObjectRequest.builder().bucket(properties.getBucket()).key(key);
-    if (contentType != null && !contentType.isBlank()) {
-      req.contentType(contentType);
+  public BackendStorage forAlbumId(Long albumId) {
+    return forBackend(backendForAlbum(albumId));
+  }
+
+  public BackendStorage forFile(FileMetadata metadata) {
+    if (metadata == null || metadata.getAlbum() == null) {
+      throw new StorageException("Cannot resolve storage: file has no album");
     }
-    runWithBreaker(() -> s3.putObject(req.build(), RequestBody.fromFile(source)));
-    log.debug("S3 PUT s3://{}/{}", properties.getBucket(), key);
+    // getId() on a lazy proxy reads the foreign key already in hand; it does not initialise the
+    // album, so this is safe with open-in-view disabled.
+    return forAlbumId(metadata.getAlbum().getId());
   }
 
-  /**
-   * Stream an {@link InputStream} of known length straight to S3. Used by the upload path so we
-   * never have to materialise the upload to durable disk before PUTting it. The stream is read
-   * exactly once — the SDK does not retry the body, so the caller must have already validated
-   * inputs before calling.
-   */
-  public void putStream(String key, InputStream in, long contentLength, String contentType) {
-    PutObjectRequest.Builder req =
-        PutObjectRequest.builder().bucket(properties.getBucket()).key(key);
-    if (contentType != null && !contentType.isBlank()) {
-      req.contentType(contentType);
+  /** The backend row an album's bytes live in, memoised for {@link #BACKEND_CACHE_TTL}. */
+  public StorageBackend backendForAlbum(Long albumId) {
+    if (albumId == null) {
+      throw new StorageException("Cannot resolve storage: no album id");
     }
-    runWithBreaker(() -> s3.putObject(req.build(), RequestBody.fromInputStream(in, contentLength)));
-    log.debug("S3 PUT s3://{}/{} ({} bytes, streamed)", properties.getBucket(), key, contentLength);
-  }
-
-  /**
-   * Download an object to a local file. Used by the worker pipeline, which always operates on local
-   * files (libvips, ffmpeg, etc).
-   */
-  public void getToFile(String key, Path destination) {
-    GetObjectRequest req =
-        GetObjectRequest.builder().bucket(properties.getBucket()).key(key).build();
-    runWithBreaker(() -> s3.getObject(req, destination));
-    log.debug("S3 GET s3://{}/{} → {}", properties.getBucket(), key, destination);
-  }
-
-  /** Stream an object straight to a caller (controller). Closes the {@link ResponseInputStream}. */
-  public ResponseInputStream<GetObjectResponse> openStream(String key) {
-    GetObjectRequest req =
-        GetObjectRequest.builder().bucket(properties.getBucket()).key(key).build();
-    return withBreaker(() -> s3.getObject(req));
-  }
-
-  /**
-   * Stream a possibly-ranged object — forwards an HTTP {@code Range} header verbatim to S3 so MinIO
-   * does the slicing, not the JVM. Callers should mirror the response's {@link
-   * GetObjectResponse#contentRange()} and {@link GetObjectResponse#contentLength()} into the
-   * outgoing HTTP response. {@code rangeHeader} may be null/blank to fetch the whole object.
-   */
-  public ResponseInputStream<GetObjectResponse> openStream(String key, String rangeHeader) {
-    GetObjectRequest.Builder req =
-        GetObjectRequest.builder().bucket(properties.getBucket()).key(key);
-    if (rangeHeader != null && !rangeHeader.isBlank()) {
-      req.range(rangeHeader);
+    long now = System.currentTimeMillis();
+    CachedBackend cached = backendByAlbum.get(albumId);
+    if (cached != null && cached.expiresAtMillis() > now) {
+      return cached.backend();
     }
-    return withBreaker(() -> s3.getObject(req.build()));
+    StorageBackend backend =
+        albumRepository
+            .findStorageBackendByAlbumId(albumId)
+            .orElseThrow(
+                () -> new StorageException("Album " + albumId + " has no storage backend row"));
+    backendByAlbum.put(albumId, new CachedBackend(backend, now + BACKEND_CACHE_TTL.toMillis()));
+    return backend;
+  }
+
+  /** Drops memoised rows for a backend the caller just changed, so this pod picks it up at once. */
+  public void invalidateBackend(Long backendId) {
+    backendByAlbum.values().removeIf(c -> backendId.equals(c.backend().getId()));
+    factory.invalidate(backendId);
+  }
+
+  /** The operator's own MinIO — the {@code storage.s3.*} endpoint. */
+  public BackendStorage forSystemDefault() {
+    return forBackend(systemBackend());
   }
 
   /**
-   * List object keys under {@code prefix} whose {@code LastModified} is strictly before {@code
-   * cutoff}. Used by the retention CronJob's TUS-cleanup pass — the S3 ListObjectsV2 API doesn't
-   * support a date filter, so we page through and filter client-side. Cheap regardless: pages are
-   * 1000 keys each, and the {@code tus-uploads/} prefix is short-lived in normal operation
-   * (post-finish hook deletes the object) so the prefix is usually nearly empty.
-   */
-  public List<String> listKeysOlderThan(String prefix, java.time.Instant cutoff) {
-    List<String> keys = new ArrayList<>();
-    String continuationToken = null;
-    do {
-      final String token = continuationToken;
-      ListObjectsV2Request.Builder req =
-          ListObjectsV2Request.builder().bucket(properties.getBucket()).prefix(prefix);
-      if (token != null) {
-        req.continuationToken(token);
-      }
-      ListObjectsV2Response page = withBreaker(() -> s3.listObjectsV2(req.build()));
-      for (S3Object obj : page.contents()) {
-        if (obj.lastModified() != null && obj.lastModified().isBefore(cutoff)) {
-          keys.add(obj.key());
-        }
-      }
-      continuationToken = page.isTruncated() ? page.nextContinuationToken() : null;
-    } while (continuationToken != null);
-    return keys;
-  }
-
-  /** List every object key in the bucket, handling S3 pagination transparently. */
-  public List<String> listKeys() {
-    List<String> keys = new ArrayList<>();
-    String continuationToken = null;
-    do {
-      final String token = continuationToken;
-      ListObjectsV2Request.Builder req =
-          ListObjectsV2Request.builder().bucket(properties.getBucket());
-      if (token != null) {
-        req.continuationToken(token);
-      }
-      ListObjectsV2Response page = withBreaker(() -> s3.listObjectsV2(req.build()));
-      page.contents().forEach(obj -> keys.add(obj.key()));
-      continuationToken = page.isTruncated() ? page.nextContinuationToken() : null;
-    } while (continuationToken != null);
-    return keys;
-  }
-
-  /**
-   * True when the bucket holds this key. Uses {@code HeadObject}, which fetches metadata only — no
-   * object bytes cross the wire. A missing key answers false rather than throwing; any other S3
-   * fault still propagates, because "cannot tell" must not read as "not there".
-   */
-  public boolean exists(String key) {
-    // The 404 is caught INSIDE the breaker's supplier on purpose. Catching it outside made every
-    // "not there" answer count as a MinIO failure, and enough of them in the sliding window
-    // tripped the breaker OPEN — which then failed unrelated storage calls for ten seconds.
-    // A key that is legitimately absent is a successful call, not a fault.
-    return withBreaker(
-        () -> {
-          try {
-            s3.headObject(
-                HeadObjectRequest.builder().bucket(properties.getBucket()).key(key).build());
-            return true;
-          } catch (NoSuchKeyException e) {
-            return false;
-          } catch (S3Exception e) {
-            if (e.statusCode() == 404) {
-              return false;
-            }
-            throw e;
-          }
-        });
-  }
-
-  public void delete(String key) {
-    runWithBreaker(
-        () ->
-            s3.deleteObject(
-                DeleteObjectRequest.builder().bucket(properties.getBucket()).key(key).build()));
-    log.debug("S3 DELETE s3://{}/{}", properties.getBucket(), key);
-  }
-
-  /**
-   * Server-side copy within the same bucket. MinIO performs the copy without bytes leaving the
-   * storage layer, so this is the cheap rename we use after a TUS upload finalises (move from
-   * {@code tus-uploads/{uuid}} to {@code originals/{stored_filename}} per D24/D25).
+   * Move an object from one backend to another, or within one.
    *
-   * <p>{@code contentType} is set on the destination object only when non-blank — passing null
-   * keeps the source's content-type via {@link MetadataDirective#COPY} (the default), so
-   * existing-bucket COPYs (e.g. from another module) don't accidentally clobber metadata.
+   * <p>Same backend is a server-side COPY: no bytes touch the JVM. Different backends have no such
+   * shortcut — S3 cannot copy across endpoints — so the object is streamed through this pod,
+   * download and upload at once. That is the cost of an album on a user's own storage, and it is
+   * why the TUS staging area stays on the system default: it keeps the expensive path to exactly
+   * one hop per upload instead of two.
+   *
+   * <p>The source object is left in place; the caller deletes it once the destination is durable.
    */
-  public void copy(String srcKey, String dstKey, String contentType) {
-    CopyObjectRequest.Builder req =
-        CopyObjectRequest.builder()
-            .sourceBucket(properties.getBucket())
-            .sourceKey(srcKey)
-            .destinationBucket(properties.getBucket())
-            .destinationKey(dstKey);
-    if (contentType != null && !contentType.isBlank()) {
-      req.metadataDirective(MetadataDirective.REPLACE).contentType(contentType);
-    }
-    runWithBreaker(() -> s3.copyObject(req.build()));
-    log.debug(
-        "S3 COPY s3://{}/{} → s3://{}/{}",
-        properties.getBucket(),
-        srcKey,
-        properties.getBucket(),
-        dstKey);
-  }
-
-  /**
-   * Bulk delete using the {@code DeleteObjects} API. Splits the input into batches of up to 1000
-   * keys (the S3 per-call limit). Per-key errors reported by S3 are logged but do not throw — the
-   * caller has already orphaned the metadata rows, so a half-deleted set of S3 objects is purged
-   * out-of-band by the orphan sweeper rather than aborting the request.
-   */
-  public void deleteKeys(Collection<String> keys) {
-    if (keys == null || keys.isEmpty()) {
+  public void transfer(
+      BackendStorage source,
+      String sourceKey,
+      BackendStorage destination,
+      String destinationKey,
+      String contentType) {
+    if (source.getBackendId() != null && source.getBackendId().equals(destination.getBackendId())) {
+      source.copy(sourceKey, destinationKey, contentType);
       return;
     }
-    final int batchSize = 1000;
-    List<ObjectIdentifier> batch = new ArrayList<>(batchSize);
-    for (String key : keys) {
-      if (key == null || key.isBlank()) {
-        continue;
-      }
-      batch.add(ObjectIdentifier.builder().key(key).build());
-      if (batch.size() == batchSize) {
-        deleteObjectsBatch(batch);
-        batch = new ArrayList<>(batchSize);
-      }
+    try (ResponseInputStream<GetObjectResponse> in = source.openStream(sourceKey)) {
+      long length = in.response().contentLength();
+      String effectiveType =
+          contentType != null && !contentType.isBlank() ? contentType : in.response().contentType();
+      destination.putStream(destinationKey, in, length, effectiveType);
+      log.info(
+          "Cross-backend transfer {} bytes: backend {} {} → backend {} {}",
+          length,
+          source.getBackendId(),
+          sourceKey,
+          destination.getBackendId(),
+          destinationKey);
+    } catch (StorageException e) {
+      throw e;
+    } catch (java.io.IOException e) {
+      throw new StorageException(
+          "Failed to transfer " + sourceKey + " between storage backends: " + e.getMessage(), e);
     }
-    if (!batch.isEmpty()) {
-      deleteObjectsBatch(batch);
-    }
   }
 
-  private void deleteObjectsBatch(List<ObjectIdentifier> batch) {
-    DeleteObjectsRequest req =
-        DeleteObjectsRequest.builder()
-            .bucket(properties.getBucket())
-            .delete(Delete.builder().objects(batch).quiet(true).build())
-            .build();
-    DeleteObjectsResponse resp = withBreaker(() -> s3.deleteObjects(req));
-    if (resp.hasErrors() && !resp.errors().isEmpty()) {
-      resp.errors()
-          .forEach(
-              e ->
-                  log.warn(
-                      "S3 batch DELETE error key={} code={} message={}",
-                      e.key(),
-                      e.code(),
-                      e.message()));
-    }
-    log.debug("S3 batch DELETE {} keys from s3://{}", batch.size(), properties.getBucket());
-  }
-
-  /**
-   * Returns a time-limited URL the client can use to stream the object directly from MinIO,
-   * bypassing the API pod. Used by file-serve once a request is authorised.
-   */
-  public URL presignGet(String key) {
-    return presignGet(key, Duration.ofSeconds(properties.getPresignSeconds()));
-  }
-
-  public URL presignGet(String key, Duration ttl) {
-    GetObjectPresignRequest req =
-        GetObjectPresignRequest.builder()
-            .signatureDuration(ttl)
-            .getObjectRequest(
-                GetObjectRequest.builder().bucket(properties.getBucket()).key(key).build())
-            .build();
-    return presigner.presignGetObject(req).url();
-  }
-
-  public String getBucket() {
-    return properties.getBucket();
+  /** Overload for callers that already hold the stream (used by tests and probe paths). */
+  public void transfer(
+      InputStream in, long length, BackendStorage destination, String key, String contentType) {
+    destination.putStream(key, in, length, contentType);
   }
 }

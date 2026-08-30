@@ -7,6 +7,7 @@ import com.oglimmer.photoupload.model.AdminOperationResponse;
 import com.oglimmer.photoupload.model.DeadLetterJobResponse;
 import com.oglimmer.photoupload.repository.ProcessingJobRepository;
 import com.oglimmer.photoupload.service.FileStorageService;
+import com.oglimmer.photoupload.service.StorageQuotaService;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ public class AdminController {
 
   private final FileStorageService fileStorageService;
   private final ProcessingJobRepository processingJobRepository;
+  private final StorageQuotaService storageQuotaService;
 
   /**
    * Finds S3 objects with no corresponding DB row and deletes them. Always run with {@code
@@ -44,6 +46,29 @@ public class AdminController {
             .success(true)
             .message(
                 dryRun ? "Dry run complete — no objects deleted" : "Orphaned S3 objects purged")
+            .stats(result)
+            .build();
+
+    return ResponseEntity.ok(response);
+  }
+
+  /**
+   * One-off repair after the storage-quota migration (V45): reads the real object sizes out of the
+   * instance's own bucket and writes them onto rows that predate the byte columns.
+   *
+   * <p>Until this runs, everything uploaded before the quota existed meters as free, so a
+   * long-standing account looks empty and its limit does nothing. Idempotent — it only touches rows
+   * whose recorded size is still unknown — so a repeat run is a no-op.
+   */
+  @PostMapping("/recalculate-derivative-bytes")
+  public ResponseEntity<AdminOperationResponse> recalculateDerivativeBytes() {
+    log.info("Starting storage-usage backfill");
+    var result = storageQuotaService.backfillStoredBytes();
+
+    AdminOperationResponse response =
+        AdminOperationResponse.builder()
+            .success(true)
+            .message("Storage usage recalculated from object sizes")
             .stats(result)
             .build();
 

@@ -121,6 +121,27 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   List<String> findAllStoredPaths();
 
   /**
+   * The same set, narrowed to files whose album sits on one storage backend. The orphan sweep runs
+   * per backend now: a key that is missing from the DB is only garbage relative to the bucket it
+   * was found in, and comparing one bucket's keys against every album's paths would delete a user's
+   * objects the moment two backends happened to hold the same key.
+   */
+  @Query(
+      value =
+          "SELECT f.file_path FROM file_metadata f JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.storage_backend_id = :backendId AND f.file_path IS NOT NULL"
+              + " UNION SELECT f.thumbnail_path FROM file_metadata f JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.storage_backend_id = :backendId AND f.thumbnail_path IS NOT NULL"
+              + " UNION SELECT f.medium_path FROM file_metadata f JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.storage_backend_id = :backendId AND f.medium_path IS NOT NULL"
+              + " UNION SELECT f.large_path FROM file_metadata f JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.storage_backend_id = :backendId AND f.large_path IS NOT NULL"
+              + " UNION SELECT f.transcoded_video_path FROM file_metadata f JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.storage_backend_id = :backendId AND f.transcoded_video_path IS NOT NULL",
+      nativeQuery = true)
+  List<String> findStoredPathsByStorageBackend(@Param("backendId") Long backendId);
+
+  /**
    * Of the given file paths, return those still referenced by rows outside the named album. Used
    * during album deletion to skip physical-storage cleanup for files cross-album-shared via {@code
    * duplicateAlbum} (which copies metadata rows but reuses the same storage paths).
@@ -180,6 +201,53 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       "SELECT f.filePath FROM FileMetadata f "
           + "WHERE f.filePath IS NOT NULL AND f.filePath LIKE 'originals/%'")
   List<String> findAllOriginalsKeys();
+
+  /** Same, narrowed to one storage backend — the orphan sweep runs a bucket at a time. */
+  @Query(
+      "SELECT f.filePath FROM FileMetadata f "
+          + "WHERE f.filePath IS NOT NULL AND f.filePath LIKE 'originals/%' "
+          + "AND f.album.storageBackend.id = :backendId")
+  List<String> findOriginalsKeysByStorageBackend(@Param("backendId") Long backendId);
+
+  /**
+   * Original bytes this user keeps on one storage backend, counting each object once.
+   *
+   * <p>The DISTINCT is not defensive tidiness: {@code duplicateAlbum} copies metadata rows that
+   * point at the *same* keys, so a user who duplicates an album would otherwise appear to have
+   * doubled their usage without a byte being written. {@code file_path IS NULL} rows are
+   * retention-purged and genuinely occupy nothing.
+   */
+  @Query(
+      value =
+          "SELECT COALESCE(SUM(t.file_size), 0) FROM ("
+              + " SELECT DISTINCT f.file_path, f.file_size FROM file_metadata f"
+              + " JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.user_id = :userId AND a.storage_backend_id = :backendId"
+              + " AND f.file_path IS NOT NULL) t",
+      nativeQuery = true)
+  long sumOriginalBytes(@Param("userId") Long userId, @Param("backendId") Long backendId);
+
+  /**
+   * Derivative bytes for the same set. Deduplicated on the derivative keys rather than on the row,
+   * for the same duplicate-album reason — a copy points at the source asset's {@code
+   * derivatives/{id}/} objects, so the two rows describe one set of bytes.
+   */
+  @Query(
+      value =
+          "SELECT COALESCE(SUM(t.derivative_bytes), 0) FROM ("
+              + " SELECT DISTINCT COALESCE(f.thumbnail_path, f.medium_path, f.large_path,"
+              + " f.transcoded_video_path) AS k, f.derivative_bytes FROM file_metadata f"
+              + " JOIN albums a ON a.id = f.album_id"
+              + " WHERE a.user_id = :userId AND a.storage_backend_id = :backendId"
+              + " AND f.derivative_bytes > 0) t",
+      nativeQuery = true)
+  long sumDerivativeBytes(@Param("userId") Long userId, @Param("backendId") Long backendId);
+
+  /** Assets on one backend whose derivative sizes were never recorded — the backfill's worklist. */
+  @Query(
+      "SELECT f FROM FileMetadata f WHERE f.album.storageBackend.id = :backendId"
+          + " AND f.derivativeBytes = 0")
+  List<FileMetadata> findWithUnknownDerivativeBytes(@Param("backendId") Long backendId);
 
   /**
    * Phase 4.5 follow-up — image-typed DONE rows missing at least one of the three image

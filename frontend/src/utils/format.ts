@@ -1,13 +1,20 @@
 import type { AlbumFile } from "@/types";
 
 /**
- * Format bytes to human-readable size
+ * Format bytes to human-readable size.
+ *
+ * The unit list runs to PB and the index is clamped to it. It used to stop at GB, which was fine
+ * while this only ever formatted one photo — then a storage quota of 1 PB rendered as
+ * "1 undefined", because the computed index ran off the end of the array. Clamping keeps a very
+ * large number readable ("1024 TB") instead of unreadable, and the same clamp at the bottom stops
+ * a fractional byte count from producing a negative index.
  */
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 Bytes";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 Bytes";
   const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB"];
+  const exponent = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.min(Math.max(exponent, 0), sizes.length - 1);
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
 }
 

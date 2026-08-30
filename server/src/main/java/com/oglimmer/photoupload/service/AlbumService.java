@@ -6,10 +6,12 @@ import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumEnabledTag;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
+import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.mapper.AlbumMapper;
 import com.oglimmer.photoupload.model.AlbumInfo;
 import com.oglimmer.photoupload.model.MapView;
@@ -17,6 +19,7 @@ import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import java.security.SecureRandom;
@@ -43,6 +46,7 @@ public class AlbumService {
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
+  private final StorageBackendRepository storageBackendRepository;
   private final JdbcTemplate jdbcTemplate;
   private final FileStorageService fileStorageService;
   private final UserContext userContext;
@@ -51,6 +55,18 @@ public class AlbumService {
 
   @Transactional
   public AlbumInfo createAlbum(String name, String description) {
+    return createAlbum(name, description, null);
+  }
+
+  /**
+   * Creates an album on a chosen storage backend. {@code storageBackendId} null means the
+   * instance's own storage; anything else must be a backend this user owns, checked here rather
+   * than trusted from the request — otherwise one user could park albums in another's bucket.
+   *
+   * <p>The choice is permanent. Nothing in the API can move an album afterwards.
+   */
+  @Transactional
+  public AlbumInfo createAlbum(String name, String description, Long storageBackendId) {
     User currentUser = userContext.getCurrentUser();
 
     // Check if album with this name already exists for this user
@@ -60,6 +76,7 @@ public class AlbumService {
 
     Album album = new Album();
     album.setUser(currentUser);
+    album.setStorageBackend(resolveBackend(currentUser, storageBackendId));
     album.setName(name);
     album.setDescription(description);
     album.setCreatedAt(Instant.now());
@@ -84,6 +101,29 @@ public class AlbumService {
     log.info("Created album: {} for user: {} (unpublished)", name, currentUser.getEmail());
 
     return convertToAlbumInfo(album);
+  }
+
+  /**
+   * The backend a new album may use: the system default, or one this user owns. A backend id
+   * belonging to somebody else answers 404 rather than 403 — the caller has no business knowing
+   * whether that id exists.
+   */
+  private StorageBackend resolveBackend(User user, Long storageBackendId) {
+    if (storageBackendId == null) {
+      return storageBackendRepository
+          .findBySystemDefaultTrue()
+          .orElseThrow(
+              () ->
+                  new IllegalStateException(
+                      "No system default storage backend row — V44 migration did not run"));
+    }
+    return storageBackendRepository
+        .findById(storageBackendId)
+        .filter(
+            b ->
+                b.isSystemDefault()
+                    || (b.getUser() != null && b.getUser().getId().equals(user.getId())))
+        .orElseThrow(() -> new ResourceNotFoundException("StorageBackend", "id", storageBackendId));
   }
 
   /**
@@ -152,7 +192,8 @@ public class AlbumService {
   }
 
   @Transactional
-  public AlbumInfo updateAlbum(Long albumId, String name, String description) {
+  public AlbumInfo updateAlbum(
+      Long albumId, String name, String description, Long storageBackendId) {
     User currentUser = userContext.getCurrentUser();
     Album album =
         albumRepository
@@ -169,6 +210,13 @@ public class AlbumService {
 
     if (description != null) {
       album.setDescription(description);
+    }
+
+    if (storageBackendId != null && !storageBackendId.equals(album.getStorageBackend().getId())) {
+      // Honouring this would mean copying every original and derivative to the new backend, and
+      // until that finished the album would serve presigned URLs for objects that are not there.
+      // Refusing is the honest answer; the user can create a new album on the other storage.
+      throw new ValidationException("An album's storage cannot be changed after it is created.");
     }
 
     album.setUpdatedAt(Instant.now());
@@ -418,6 +466,10 @@ public class AlbumService {
     // Create new album
     Album newAlbum = new Album();
     newAlbum.setUser(currentUser);
+    // The copy reuses the source's storage keys rather than re-uploading the bytes, so it has to
+    // stay on the source's backend. Putting it anywhere else would give every copied row a
+    // file_path that resolves to nothing.
+    newAlbum.setStorageBackend(sourceAlbum.getStorageBackend());
     newAlbum.setName(generateCopyName(currentUser, sourceAlbum.getName()));
     newAlbum.setDescription(sourceAlbum.getDescription());
     newAlbum.setCreatedAt(Instant.now());
@@ -567,6 +619,13 @@ public class AlbumService {
     info.setMapCenterLng(album.getMapCenterLng());
     info.setMapSpanLat(album.getMapSpanLat());
     info.setMapSpanLng(album.getMapSpanLng());
+    // Owner-facing only. getAlbumByShareToken builds its own minimal AlbumInfo, so a share-link
+    // visitor is never told whose bucket the photos sit in. Every caller of this method is
+    // @Transactional, which is what lets the lazy backend load for its name.
+    if (album.getStorageBackend() != null) {
+      info.setStorageBackendId(album.getStorageBackend().getId());
+      info.setStorageBackendName(album.getStorageBackend().getName());
+    }
 
     // Get files in this album (use user-scoped query)
     List<FileMetadata> files =

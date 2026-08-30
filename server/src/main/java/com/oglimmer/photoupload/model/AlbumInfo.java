@@ -34,4 +34,9 @@ public class AlbumInfo {
   private Double mapCenterLng;
   private Double mapSpanLat;
   private Double mapSpanLng;
+
+  // Where this album's bytes live. Read-only after creation — the API rejects a change rather
+  // than silently leaving half the objects on the old backend.
+  private Long storageBackendId;
+  private String storageBackendName;
 }
