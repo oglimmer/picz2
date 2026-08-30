@@ -194,12 +194,16 @@
 
     <section class="lp-creed">
       <p class="lp-creed-line">
-        No feed.<br>No algorithm.<br>No ads.
+        No feed.<br>No algorithm.<br>No ads.<br>No lock-in.
       </p>
       <div class="lp-creed-side">
         <p>
           Picz shows your photos to the people you send the link to, in the order you chose,
           and stops there. Nothing is recommended, ranked, or shown to anyone else.
+        </p>
+        <p>
+          And the files can stay on storage you own. Connect your own S3 bucket, put an album on it,
+          and Picz keeps only the gallery around your photos.
         </p>
         <button
           class="lp-btn lp-btn--solid"
@@ -317,6 +321,7 @@ const MORE = [
   { label: 'Groups', body: 'Put several albums together and present them as a single show.' },
   { label: 'Slideshow', body: 'Full-screen playback, with the narration or without it.' },
   { label: 'Video', body: 'Videos upload and play in line with the photos.' },
+  { label: 'Your own storage', body: 'Point an album at your own S3 bucket — AWS, Cloudflare R2, Backblaze, Hetzner and more. The gallery stays here, the files stay yours, and nothing you keep there counts against your space.' },
 ];
 
 /* --- waveform ------------------------------------------------------------ */

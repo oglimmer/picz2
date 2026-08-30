@@ -1,6 +1,9 @@
 # Photo Upload
 
-Personal photo / video gallery with iOS background sync, TUS resumable uploads, and S3-backed storage. Deployed as a Helm chart to a single-node K3s cluster.
+Personal photo / video gallery with iOS background sync, TUS resumable uploads, and S3-backed storage —
+either the instance's own MinIO, under a per-user quota, or a bucket the user brings themselves
+(AWS, Cloudflare R2, Backblaze B2, Hetzner, Wasabi, DigitalOcean, Scaleway, MinIO), chosen per album.
+Deployed as a Helm chart to a single-node K3s cluster.
 
 ## Components
 
@@ -64,9 +67,11 @@ For helm-side configuration (values, upgrade pattern, ops cookbook), see [`helm/
 
 ## Architecture & decisions
 
-The single source of truth for *why* the codebase looks the way it does — phase history, gap inventory, decision log (D1–D31) — is **[`upload-concept-plan.md`](upload-concept-plan.md)**.
+The single source of truth for *why* the codebase looks the way it does — phase history, gap inventory, decision log (D1–D60) — is **[`upload-concept-plan.md`](upload-concept-plan.md)**.
 
 In one paragraph: backend runs as `api` and `worker` pods sharing the same JAR; api handles HTTP and serves bytes from MinIO, worker drains a `processing_jobs` table via `SELECT … FOR UPDATE SKIP LOCKED` (MariaDB ≥ 10.6 required). Every job (PROCESS / ROTATE_LEFT / REGEN_THUMBNAILS) downloads its source from S3 to an `emptyDir` workdir, runs vips/HEIC/ffmpeg locally, and PUTs derivatives back to deterministic `derivatives/{assetId}/...` keys. TUS resumable uploads land in `tus-uploads/{uuid}` via a separate tusd Deployment; a hook callback at `/api/tus/hooks/{secret}` finalises by S3-COPYing to `originals/`, inserting the row, and enqueuing a job — all in one TX. A nightly retention CronJob (also the same JAR, `retention` profile) runs three passes: aged-original purge, abandoned-TUS-upload cleanup, and orphan-key detection.
+
+Storage is per album (D59). `storage_backends` holds one credential-free system-default row — it resolves `storage.s3.*` at runtime, so the cluster secret is never copied into a table — plus any S3-compatible endpoint a user registers for themselves; secret keys are AES-GCM encrypted with `storage.backend-secret-key`, and without that setting the feature stays off instead of failing at upload time. An album's backend is fixed at creation. tusd always writes to the system default; the finish hook server-side COPYs when the album lives there too and streams through the api pod when it does not. Retention and the orphan sweep run one bucket at a time. What a user keeps on the *system* backend is capped by `users.storage_quota_bytes` (D60, 100 MiB by default, raised with an `UPDATE`); their own buckets are neither metered nor capped, and refusals are `507`.
 
 ## License
 

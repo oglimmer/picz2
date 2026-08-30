@@ -10,6 +10,9 @@ A beautiful Vue.js application to display all photos uploaded via the Photo Uplo
 - 🖼️ Lightbox view for full-size images
 - ⚡ Fast and modern Vue 3 + Vite setup
 - 🎨 Gradient background with smooth animations
+- 🪣 Storage manager (`components/StorageBackendManager.vue`) — register your own S3-compatible
+  bucket with provider presets, pick it when creating an album, and watch the quota bar for what
+  still sits on the instance's own storage
 
 ## Quick Start
 

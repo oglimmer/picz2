@@ -63,7 +63,7 @@ flowchart TB
     subgraph data[Shared state]
         repo["Repositories (Spring Data JPA)"]
         db[(MariaDB<br/>+ Flyway)]
-        s3[(MinIO / S3<br/>ObjectStorageService)]
+        s3[(MinIO / S3 — system default<br/>or the album's own backend<br/>ObjectStorageService router)]
     end
 
     ios --> ctrl
@@ -138,6 +138,18 @@ classDiagram
         Long defaultAlbumId
         String verificationToken
         String passwordResetToken
+        Long storageQuotaBytes
+    }
+    class StorageBackend {
+        Long id
+        String name
+        boolean systemDefault
+        String endpoint
+        String region
+        String bucket
+        String accessKey
+        String secretKeyEncrypted
+        boolean pathStyleAccess
     }
     class Album {
         Long id
@@ -147,6 +159,7 @@ classDiagram
         String shareToken
         Double mapCenterLat
         Double mapCenterLng
+        StorageBackend storageBackend
     }
     class FileMetadata {
         Long id
@@ -165,6 +178,7 @@ classDiagram
         Integer rotation
         ProcessingStatus processingStatus
         String publicToken
+        Long derivativeBytes
     }
     class Tag {
         Long id
@@ -190,6 +204,7 @@ classDiagram
         String audioPath
         String publicToken
         Long durationMs
+        Long audioBytes
     }
     class SlideshowRecordingImage {
         Long id
@@ -241,6 +256,8 @@ classDiagram
     }
 
     User "1" --> "*" Album : owns
+    User "1" --> "*" StorageBackend : registers
+    StorageBackend "1" --> "*" Album : stores bytes of
     User "1" --> "*" Tag : owns
     User "1" --> "*" UploadToken : issues
     Album "1" --> "*" FileMetadata : holds
@@ -261,25 +278,35 @@ classDiagram
     ProcessingJob ..> SlideshowRecording : recordingId (no FK)
 ```
 
+`StorageBackend` is the album's bucket. Exactly one row is the system default: it has
+`user_id NULL` and no endpoint, bucket or keys, and resolves `storage.s3.*` at runtime, so
+the cluster's MinIO credentials never land in a table. Every other row belongs to one user,
+holds their own S3-compatible endpoint, and keeps its secret key AES-GCM encrypted under
+`storage.backend-secret-key`. An album picks its backend at creation and cannot change it.
+`User.storageQuotaBytes` caps only what the user keeps on the system default; their own
+buckets are neither metered nor capped. `derivativeBytes` and `audioBytes` exist because
+retention deletes originals after a week — a quota summing `fileSize` alone would read as
+almost empty while the thumbnails stayed on disk.
+
 `ProcessingJob` has no foreign key on purpose. It points at either an asset id or a
 recording id, so the queue table is reused instead of duplicated.
 
 ### Class groups and what they are for
 
-|    Package     |                                             Purpose                                              |
-|----------------|--------------------------------------------------------------------------------------------------|
-| `controller`   | HTTP endpoints. Thin. They validate and call a service.                                          |
-| `service`      | All business logic. Split by profile: api writes and reads, worker processes, retention deletes. |
-| `repository`   | Spring Data JPA interfaces. The only place that talks to MariaDB.                                |
-| `entity`       | JPA tables. Every field needs a Flyway column, or startup fails (`ddl-auto: validate`).          |
-| `model`        | Request and response DTOs sent over HTTP. Never JPA entities.                                    |
-| `mapper`       | MapStruct converters from entity to DTO.                                                         |
-| `config`       | Beans and typed properties, plus `Profiles` (the api / worker / retention names).                |
-| `security`     | Basic auth, share tokens, upload tokens, and `UserContext` (the current user).                   |
-| `storage`      | `StoragePaths`: deterministic S3 keys from the asset id. Paths cannot drift.                     |
-| `exception`    | Typed errors plus `GlobalExceptionHandler`, which maps them to status codes.                     |
-| `health`       | `MinioHealthIndicator` for the actuator health endpoint.                                         |
-| `util` / `web` | Range requests, MIME checks, upload backpressure filter.                                         |
+|    Package     |                                                                              Purpose                                                                              |
+|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `controller`   | HTTP endpoints. Thin. They validate and call a service.                                                                                                           |
+| `service`      | All business logic. Split by profile: api writes and reads, worker processes, retention deletes.                                                                  |
+| `repository`   | Spring Data JPA interfaces. The only place that talks to MariaDB.                                                                                                 |
+| `entity`       | JPA tables. Every field needs a Flyway column, or startup fails (`ddl-auto: validate`).                                                                           |
+| `model`        | Request and response DTOs sent over HTTP. Never JPA entities.                                                                                                     |
+| `mapper`       | MapStruct converters from entity to DTO.                                                                                                                          |
+| `config`       | Beans and typed properties, plus `Profiles` (the api / worker / retention names).                                                                                 |
+| `security`     | Basic auth, share tokens, upload tokens, `UserContext` (the current user), and `SecretCipher` (AES-GCM for stored S3 keys).                                       |
+| `storage`      | `StoragePaths` (deterministic S3 keys from the asset id — paths cannot drift), plus `BackendStorage` / `StorageClientFactory`: one S3 client per storage backend. |
+| `exception`    | Typed errors plus `GlobalExceptionHandler`, which maps them to status codes.                                                                                      |
+| `health`       | `MinioHealthIndicator` for the actuator health endpoint.                                                                                                          |
+| `util` / `web` | Range requests, MIME checks, upload backpressure filter.                                                                                                          |
 
 ## API Endpoints
 
