@@ -153,7 +153,9 @@ struct AlbumDetailView: View {
                 // On the right, where the Select button that opened this mode was — and away
                 // from the back arrow, which it sat next to and read as a second way out.
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") { viewModel.endSelecting() }
+                    // "Done", not "Cancel": leaving selection mode keeps every edit already
+                    // applied, so there is nothing here to take back.
+                    Button("Done") { viewModel.endSelecting() }
                         .disabled(viewModel.isBulkWorking)
                 }
             } else {
