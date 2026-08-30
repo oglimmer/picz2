@@ -23,7 +23,8 @@ Backend runs as `api` and `worker` pods sharing the same JAR (different `SPRING_
 
 ## Test caveats
 
-- The suite is green (208 tests, 0 failures, as of 2026-08-23). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
+- The **server** suite is green (208 tests, 0 failures, as of 2026-08-23). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
+- The **iOS** suite is separate and also green (504 tests, 0 failures, as of 2026-08-30). It is `xcodebuild test`, not Maven — see `ios/Zyncloud/README.md` for the invocation and its two traps (`CODE_SIGNING_ALLOWED=NO` breaks the keychain tests; the `StubServer` suites are process-wide).
 - Some IT classes (`ProcessingJobLeaseTest`, `*ProfileContextTest`) are gated by `-Drun.testcontainers=true` because Docker Desktop returns stub responses to docker-java. They run cleanly on a non-Desktop daemon.
 
 ## Single-test syntax
