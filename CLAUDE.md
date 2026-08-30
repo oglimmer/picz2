@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read first
 
-- **`upload-concept-plan.md`** — architectural source of truth (phase history, decision log D1–D31, what's done / open). Update the `Last reviewed` line at the top after non-trivial changes.
+- **`upload-concept-plan.md`** — architectural source of truth (phase history, decision log D1–D60, what's done / open). Update the `Last reviewed` line at the top after non-trivial changes.
 - **`README.md`** — project overview, local dev, deploy.
 - **`helm/photo-upload/README.md`** — full Helm + ops reference.
 
