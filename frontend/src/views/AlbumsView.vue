@@ -525,6 +525,27 @@ watch(showCreateAlbum, async open => {
 })
 
 async function handleDuplicateAlbum(albumId: number) {
+  const album = albums.value.find(a => a.id === albumId)
+  if (!album) return
+
+  const photoCount = album.fileCount || 0
+  let confirmMessage = `Duplicate "${album.name}"?`
+  if (photoCount > 0) {
+    confirmMessage += `\n\nThe copy gets the same ${photoCount} photo${photoCount !== 1 ? 's' : ''} and the same tags.`
+  } else {
+    confirmMessage += '\n\nThe album is empty, so the copy starts empty too.'
+  }
+  // The copy is always a draft, even when the source is live — say so, or the missing
+  // public link on the new card reads as a bug.
+  confirmMessage += '\n\nThe copy is not published.'
+
+  const confirmed = await confirmDialog(confirmMessage, {
+    type: 'info',
+    confirmText: 'Duplicate Album'
+  })
+
+  if (!confirmed) return
+
   try {
     await duplicateAlbum(albumId)
   } catch (err) {
