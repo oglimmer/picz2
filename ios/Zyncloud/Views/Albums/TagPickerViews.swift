@@ -75,9 +75,13 @@ struct PhotoTagsView: View {
 
 /// Tagging every picked photo at once.
 ///
-/// One tap means one thing for the whole selection: a tag every picked photo already carries is
-/// removed from all of them, anything else is added to all of them. The sheet closes on the tap
-/// because the album screen is where the result is reported.
+/// Nothing is sent while the sheet is open. A tap on a row only stages what that tag should
+/// become across the selection; **Done** sends the lot, **Cancel** throws it away. The old sheet
+/// wrote each tap straight to the server and closed itself, which made Done look like a save
+/// button that did not save.
+///
+/// One staged tap still means one thing for the whole selection: a tag goes on every picked
+/// photo or on none of them, never per photo.
 struct BulkTagView: View {
     @ObservedObject var viewModel: AlbumDetailViewModel
 
@@ -85,8 +89,45 @@ struct BulkTagView: View {
 
     @State private var newTagName: String = ""
 
+    /// What each touched tag should become: `true` on every picked photo, `false` on none.
+    /// Untouched tags are absent, and a tag put back the way it started is taken out again — so
+    /// this is exactly the work Done has to do, and empty means there is none.
+    @State private var draft: [String: Bool] = [:]
+
     private var pickedCount: Int {
         viewModel.selectedPhotoIds.count
+    }
+
+    /// The staged wish if the row was tapped, otherwise how the tag really sits right now.
+    private func icon(for tagName: String) -> TagRowIcon {
+        if let wanted = draft[tagName] {
+            return wanted ? .on : .off
+        }
+        return TagRowIcon(viewModel.selectionState(of: tagName))
+    }
+
+    /// A tap flips the row between "on every picked photo" and "on none of them". A half-filled
+    /// row goes to on first, which is the change people mean when they tap one.
+    private func toggle(_ tagName: String) {
+        let wanted = icon(for: tagName) != .on
+        let original = viewModel.selectionState(of: tagName)
+
+        if wanted, original == .all {
+            draft.removeValue(forKey: tagName)
+        } else if !wanted, original == .none {
+            draft.removeValue(forKey: tagName)
+        } else {
+            draft[tagName] = wanted
+        }
+    }
+
+    private var footerText: String {
+        let rule = "A tag goes on every picked photo or on none of them."
+        switch draft.count {
+        case 0: return "\(rule) Nothing is saved until you tap Done."
+        case 1: return "\(rule) 1 change waiting for Done."
+        case let count: return "\(rule) \(count) changes waiting for Done."
+        }
     }
 
     var body: some View {
@@ -100,33 +141,44 @@ struct BulkTagView: View {
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(viewModel.albumTags) { tag in
-                            let state = viewModel.selectionState(of: tag.name)
                             TagToggleRow(
                                 name: tag.name,
                                 isSystem: tag.isSystem,
-                                icon: TagRowIcon(state),
+                                icon: icon(for: tag.name),
                                 isBusy: viewModel.isApplyingTags,
                             ) {
-                                dismiss()
-                                viewModel.applyTagToSelection(tag.name, add: state != .all)
+                                toggle(tag.name)
                             }
                         }
                     }
                 } header: {
                     Text(pickedCount == 1 ? "1 photo picked" : "\(pickedCount) photos picked")
                 } footer: {
-                    Text("A tag every picked photo already has is taken off all of them. Any other tag is put on all of them.")
+                    Text(footerText)
                 }
 
-                NewTagSection(name: $newTagName, viewModel: viewModel)
+                // A tag made here is meant for the picked photos, so it is staged on straight
+                // away. Without that, "Add" then "Done" would quietly change nothing.
+                NewTagSection(name: $newTagName, viewModel: viewModel) { created in
+                    draft[created] = true
+                }
 
                 AlbumTagsLinkSection(viewModel: viewModel)
             }
             .navigationTitle("Tag Photos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(viewModel.isApplyingTags)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        viewModel.applyTagChangesToSelection(draft)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(viewModel.isApplyingTags)
                 }
             }
         }
@@ -281,6 +333,10 @@ struct NewTagSection: View {
 
     @ObservedObject var viewModel: AlbumDetailViewModel
 
+    /// Told the name that was just made, for a sheet that has to do something with it — the
+    /// bulk sheet stages it on. Left out where creating the tag is the whole job.
+    var onCreated: ((String) -> Void)?
+
     private var trimmed: String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -305,8 +361,10 @@ struct NewTagSection: View {
 
     private func create() {
         guard !trimmed.isEmpty else { return }
-        viewModel.createTag(named: trimmed)
+        let created = trimmed
+        viewModel.createTag(named: created)
         name = ""
+        onCreated?(created)
     }
 }
 
