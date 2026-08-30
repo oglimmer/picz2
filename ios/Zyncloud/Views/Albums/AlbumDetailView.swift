@@ -92,6 +92,10 @@ struct AlbumDetailView: View {
     /// it always asks first — same as the web app.
     @State private var confirmingAlbumDelete = false
 
+    /// Set when Delete was tapped in the selection bar. Held here rather than in the bar
+    /// so the dialog outlives a re-draw of the bar under it.
+    @State private var confirmingSelectionDelete = false
+
     /// The photo whose tag list is open, if any. Held as the photo rather than a flag because
     /// the sheet needs to know which one it is editing.
     @State private var taggingPhoto: Photo?
@@ -140,22 +144,26 @@ struct AlbumDetailView: View {
         }
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
+        // The tab bar and the selection bar would otherwise stack up two rows deep at the
+        // bottom, and the tabs lead away from a selection that would be thrown away on the way
+        // out. So while picking, the bottom of the screen belongs to the selection bar alone.
+        .toolbar(viewModel.isSelecting ? .hidden : .visible, for: .tabBar)
         .toolbar {
             if viewModel.isSelecting {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { viewModel.endSelecting() }
-                }
+                // On the right, where the Select button that opened this mode was — and away
+                // from the back arrow, which it sat next to and read as a second way out.
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(allPhotosPicked ? "Clear" : "Select All") {
-                        if allPhotosPicked {
-                            viewModel.selectedPhotoIds = []
-                        } else {
-                            viewModel.selectAllPhotos()
-                        }
-                    }
-                    .disabled(viewModel.photos.isEmpty)
+                    Button("Cancel") { viewModel.endSelecting() }
+                        .disabled(viewModel.isBulkWorking)
                 }
             } else {
+                // Top-level rather than buried in the album menu, because this is the one
+                // entry point for every multi-photo action and iPhone users look for a
+                // "Select" here first. The long press on a tile reaches the same mode.
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Select") { viewModel.beginSelecting() }
+                        .disabled(!canSelectPhotos)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(
                         action: { viewModel.requestUpload() },
@@ -217,6 +225,18 @@ struct AlbumDetailView: View {
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { _ in
             Text("This removes the photo from your server for good. It cannot be undone.")
+        }
+        .confirmationDialog(
+            viewModel.selectedPhotoIds.count == 1
+                ? "Delete 1 photo"
+                : "Delete \(viewModel.selectedPhotoIds.count) photos",
+            isPresented: $confirmingSelectionDelete,
+            titleVisibility: .visible,
+        ) {
+            Button("Delete", role: .destructive) { viewModel.deleteSelection() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes them from your server for good. It cannot be undone.")
         }
         .sheet(item: $sharingLink) { link in
             ShareSheet(items: [link.url])
@@ -315,28 +335,106 @@ struct AlbumDetailView: View {
         !viewModel.photos.isEmpty && viewModel.selectedPhotoIds.count == viewModel.photos.count
     }
 
-    /// What the picked photos can be done to. Only tagging for now, which is why it is a plain
-    /// bar rather than a menu.
+    /// Picking works by tapping tiles, and the map has no tiles — it draws pins. So Select is
+    /// off there rather than opening a mode with nothing to tap.
+    private var canSelectPhotos: Bool {
+        !viewModel.photos.isEmpty
+            && !viewModel.isArrangingByHand
+            && !(layoutMode == .map && viewModel.hasLocatedPhotos)
+    }
+
+    private var selectionCountLabel: String {
+        if viewModel.isBulkWorking { return "Working…" }
+
+        switch viewModel.selectedPhotoIds.count {
+        case 0: return "Select photos to tag, rotate or delete"
+        case 1: return "1 photo selected"
+        case let count: return "\(count) photos selected"
+        }
+    }
+
+    /// Everything the picked photos can be done to, in one place at the bottom of the screen —
+    /// including Select All, which used to sit in the top bar and made the eye jump between two
+    /// corners for one job.
+    ///
+    /// The three actions mirror the single-photo long-press menu on purpose: a mode for many
+    /// photos that could do less than one photo alone was the reason this screen felt wrong.
     private var selectionBar: some View {
-        HStack {
-            Text(viewModel.selectedPhotoIds.count == 1
-                ? "1 photo picked"
-                : "\(viewModel.selectedPhotoIds.count) photos picked")
+        VStack(spacing: 8) {
+            Text(selectionCountLabel)
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
-            Spacer()
+            HStack(spacing: 0) {
+                selectionAction(
+                    title: allPhotosPicked ? "Clear" : "All",
+                    systemImage: allPhotosPicked ? "xmark.circle" : "checklist",
+                    isEnabled: !viewModel.photos.isEmpty && !viewModel.isBulkWorking,
+                ) {
+                    if allPhotosPicked {
+                        viewModel.selectedPhotoIds = []
+                    } else {
+                        viewModel.selectAllPhotos()
+                    }
+                }
 
-            Button {
-                isBulkTagPresented = true
-            } label: {
-                Label("Tag", systemImage: "tag")
+                selectionAction(
+                    title: "Tag",
+                    systemImage: "tag",
+                    isEnabled: hasSelection && !viewModel.isApplyingTags && !viewModel.isBulkWorking,
+                ) {
+                    isBulkTagPresented = true
+                }
+
+                selectionAction(
+                    title: "Rotate",
+                    systemImage: "rotate.left",
+                    isEnabled: viewModel.selectionHasRotatablePhoto && !viewModel.isBulkWorking,
+                ) {
+                    viewModel.rotateSelection()
+                }
+
+                selectionAction(
+                    title: "Delete",
+                    systemImage: "trash",
+                    isEnabled: hasSelection && !viewModel.isBulkWorking,
+                    isDestructive: true,
+                ) {
+                    confirmingSelectionDelete = true
+                }
             }
-            .disabled(viewModel.selectedPhotoIds.isEmpty || viewModel.isApplyingTags)
         }
         .padding(.horizontal)
-        .padding(.vertical, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
         .background(.thinMaterial)
+    }
+
+    private var hasSelection: Bool {
+        !viewModel.selectedPhotoIds.isEmpty
+    }
+
+    /// One bar button: icon over label, each taking an equal share of the width so the row
+    /// stays even whatever the labels say.
+    private func selectionAction(
+        title: String,
+        systemImage: String,
+        isEnabled: Bool,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void,
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 19))
+                Text(title)
+                    .font(.caption2)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .foregroundColor(isDestructive ? .red : .accentColor)
+        .disabled(!isEnabled)
     }
 
     // MARK: - Album Menu
@@ -364,13 +462,6 @@ struct AlbumDetailView: View {
                 isPresentationPresented = true
             } label: {
                 Label("Present", systemImage: "play.rectangle")
-            }
-            .disabled(viewModel.photos.isEmpty)
-
-            Button {
-                viewModel.beginSelecting()
-            } label: {
-                Label("Select Photos", systemImage: "checkmark.circle")
             }
             .disabled(viewModel.photos.isEmpty)
 
@@ -478,6 +569,7 @@ struct AlbumDetailView: View {
             showsTags: showsTags,
             onDelete: { pendingDelete = photo },
             onTag: { taggingPhoto = photo },
+            onBeginSelecting: { viewModel.beginSelecting(with: photo) },
         )
     }
 
@@ -707,6 +799,10 @@ struct PhotoThumbnailView: View {
     /// Also raised: the tag sheet outlives the cell being re-made under it.
     let onTag: () -> Void
 
+    /// Long-press entry into picking, with this photo already picked. The second way in, next
+    /// to the Select button in the top bar — it is the gesture iPhone users try first.
+    let onBeginSelecting: () -> Void
+
     @State private var showingFullImage = false
 
     var body: some View {
@@ -777,6 +873,12 @@ struct PhotoThumbnailView: View {
                     onDelete: onDelete,
                     onTag: onTag,
                 )
+
+                Divider()
+
+                Button(action: onBeginSelecting) {
+                    Label("Select…", systemImage: "checkmark.circle")
+                }
             }
         }
         .sheet(isPresented: $showingFullImage) {

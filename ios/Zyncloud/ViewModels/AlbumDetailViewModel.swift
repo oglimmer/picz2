@@ -67,6 +67,10 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// reload — a stored `Photo` would go stale, an id does not.
     @Published var selectedPhotoIds: Set<Int> = []
 
+    /// True while a bulk rotate or delete is running, so the selection bar can go quiet and a
+    /// second tap cannot start the same work on top of itself.
+    @Published private(set) var isBulkWorking: Bool = false
+
     /// Drives the system photo picker. Set by ``requestUpload()`` once library access is
     /// settled, never by the view directly — the picker can only name assets while access is
     /// granted, and asking afterwards would throw the user's choice away.
@@ -396,6 +400,111 @@ class AlbumDetailViewModel: ViewModelProtocol {
                 }
             }
         }
+    }
+
+
+    // MARK: - Bulk Actions
+
+    /// Rotates every picked still photo 90° left.
+    ///
+    /// One request per photo — the server has no bulk rotate — and each one is waited out to a
+    /// terminal status before the grid is re-read, for the same reason ``rotate(_:)`` does it:
+    /// a rotate swaps the asset's `publicToken`, so the old thumbnail URL stops being the
+    /// photo's address. Videos in the selection are skipped rather than reported, because the
+    /// bar's Rotate button already says it only applies to photos.
+    func rotateSelection() {
+        guard let apiClient else {
+            reportNotAuthenticatedForBulk()
+            return
+        }
+
+        let ids = selectedPhotos.filter { !$0.isVideo }.map(\.id)
+        guard !ids.isEmpty, !isBulkWorking else { return }
+
+        isBulkWorking = true
+        rotatingPhotoIds.formUnion(ids)
+
+        Task {
+            var failed = 0
+
+            for id in ids {
+                let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                    apiClient.rotateImageLeft(id: id) { continuation.resume(returning: $0) }
+                }
+
+                if case .failure = result {
+                    failed += 1
+                    continue
+                }
+                if case .failed = await awaitProcessing(of: id) {
+                    failed += 1
+                }
+            }
+
+            await refreshPhotos()
+            rotatingPhotoIds.subtract(ids)
+            isBulkWorking = false
+            endSelecting()
+
+            if failed > 0 {
+                alertState = AlertState(
+                    title: "Some Photos Not Rotated",
+                    message: "\(failed) of \(ids.count) could not be rotated. Pull down to refresh.",
+                )
+            }
+        }
+    }
+
+    /// Deletes every picked photo. The caller confirms first — this is irreversible, the server
+    /// drops the stored objects along with the rows.
+    ///
+    /// Each success is taken out of the grid as it lands, so a run that half fails still leaves
+    /// an honest list. The selection is closed at the end either way: the picked ids no longer
+    /// name anything worth acting on.
+    func deleteSelection() {
+        guard let apiClient else {
+            reportNotAuthenticatedForBulk()
+            return
+        }
+
+        let ids = selectedPhotoIds
+        guard !ids.isEmpty, !isBulkWorking else { return }
+
+        isBulkWorking = true
+
+        Task {
+            var failed = 0
+
+            for id in ids {
+                let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                    apiClient.deleteFile(id: id) { continuation.resume(returning: $0) }
+                }
+
+                switch result {
+                case .success:
+                    photos.removeAll { $0.id == id }
+                case .failure:
+                    failed += 1
+                }
+            }
+
+            isBulkWorking = false
+            endSelecting()
+
+            if failed > 0 {
+                alertState = AlertState(
+                    title: "Some Photos Kept",
+                    message: "\(failed) of \(ids.count) could not be deleted.",
+                )
+            }
+        }
+    }
+
+    private func reportNotAuthenticatedForBulk() {
+        alertState = AlertState(
+            title: "Error",
+            message: "Not authenticated. Please log in again.",
+        )
     }
 
     private enum ProcessingOutcome {
