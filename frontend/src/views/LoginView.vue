@@ -3,7 +3,7 @@
     <div class="login-card">
       <header class="topbar">
         <div class="brand">
-          Picz2
+          Picz
         </div>
         <nav class="nav-links">
           <router-link to="/">

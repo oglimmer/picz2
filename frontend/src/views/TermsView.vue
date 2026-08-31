@@ -7,7 +7,7 @@
 
     <div class="legal-content">
       <p>
-        These Terms and Conditions ("Terms") govern your use of Picz2 - Picture
+        These Terms and Conditions ("Terms") govern your use of Picz - Picture
         Sharing ("the Platform"), provided by oglimmer.com / Oliver Zimpasser
         ("we," "our," or "us"). By accessing or using the Platform, you agree to
         abide by these Terms. If you do not agree with any part of these Terms,
@@ -260,7 +260,7 @@
     </div>
 
     <footer class="legal-footer">
-      <p>© {{ new Date().getFullYear() }} Picz2</p>
+      <p>© {{ new Date().getFullYear() }} Picz</p>
       <router-link to="/">Home</router-link> |
       <router-link to="/privacy">Privacy</router-link> |
       <router-link to="/terms">Terms</router-link> |

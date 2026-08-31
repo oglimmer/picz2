@@ -10,7 +10,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Zyncloud</string>
+	<string>Picz</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -30,9 +30,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Zyncloud needs the microphone so you can record spoken commentary over a slideshow of your photos.</string>
+	<string>Picz needs the microphone so you can record spoken commentary over a slideshow of your photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Zyncloud needs access to your photo library to back up your photos and videos to your own server.</string>
+	<string>Picz needs access to your photo library to back up your photos and videos to your own server.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -58,10 +58,10 @@ public class EmailService {
       SimpleMailMessage message = new SimpleMailMessage();
       message.setFrom(fromEmail);
       message.setTo(toEmail);
-      message.setSubject("Verify your Picz2 account");
+      message.setSubject("Verify your Picz account");
       message.setText(
           """
-          Welcome to Picz2!
+          Welcome to Picz!
 
           Please verify your email address by clicking the link below:
 
@@ -72,7 +72,7 @@ public class EmailService {
           If you did not create an account, please ignore this email.
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
           """
               .formatted(verificationLink, baseUrl));
@@ -96,17 +96,17 @@ public class EmailService {
       SimpleMailMessage message = new SimpleMailMessage();
       message.setFrom(fromEmail);
       message.setTo(toEmail);
-      message.setSubject("Welcome to Picz2!");
+      message.setSubject("Welcome to Picz!");
       message.setText(
           """
-          Welcome to Picz2!
+          Welcome to Picz!
 
           Your email has been successfully verified. You can now log in and start sharing your photos.
 
           Get started: %s/login
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
           """
               .formatted(baseUrl, baseUrl));
@@ -133,12 +133,12 @@ public class EmailService {
       SimpleMailMessage message = new SimpleMailMessage();
       message.setFrom(fromEmail);
       message.setTo(toEmail);
-      message.setSubject("Reset your Picz2 password");
+      message.setSubject("Reset your Picz password");
       message.setText(
           """
           Hello,
 
-          We received a request to reset your Picz2 account password.
+          We received a request to reset your Picz account password.
 
           Click the link below to reset your password:
 
@@ -149,7 +149,7 @@ public class EmailService {
           If you did not request a password reset, please ignore this email. Your password will remain unchanged.
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
           """
               .formatted(resetLink, baseUrl));
@@ -199,7 +199,7 @@ public class EmailService {
           If you did not request this subscription, please ignore this email.
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
 
           Unsubscribe: %s
@@ -250,7 +250,7 @@ public class EmailService {
           View the album: %s
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
 
           Unsubscribe: %s
@@ -305,7 +305,7 @@ public class EmailService {
           View the new album: %s
 
           ---
-          Picz2 - Picture Sharing
+          Picz - Picture Sharing
           %s
 
           Unsubscribe: %s

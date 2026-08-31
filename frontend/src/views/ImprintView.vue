@@ -43,7 +43,7 @@
     </div>
 
     <footer class="legal-footer">
-      <p>© {{ new Date().getFullYear() }} Picz2</p>
+      <p>© {{ new Date().getFullYear() }} Picz</p>
       <router-link to="/">Home</router-link> |
       <router-link to="/privacy">Privacy</router-link> |
       <router-link to="/terms">Terms</router-link> |
