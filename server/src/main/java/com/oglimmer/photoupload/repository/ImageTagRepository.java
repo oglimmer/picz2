@@ -19,7 +19,5 @@ public interface ImageTagRepository extends JpaRepository<ImageTag, Long> {
   Optional<ImageTag> findByFileMetadataIdAndTagId(
       @Param("fileMetadataId") Long fileMetadataId, @Param("tagId") Long tagId);
 
-  void deleteByFileMetadataIdAndTagId(Long fileMetadataId, Long tagId);
-
   void deleteByTagId(Long tagId);
 }

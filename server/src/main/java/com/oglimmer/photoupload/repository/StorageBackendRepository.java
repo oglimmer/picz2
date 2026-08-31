@@ -11,8 +11,6 @@ public interface StorageBackendRepository extends JpaRepository<StorageBackend, 
 
   Optional<StorageBackend> findBySystemDefaultTrue();
 
-  List<StorageBackend> findByUserIdOrderByNameAsc(Long userId);
-
   Optional<StorageBackend> findByIdAndUserId(Long id, Long userId);
 
   boolean existsByUserIdAndName(Long userId, String name);

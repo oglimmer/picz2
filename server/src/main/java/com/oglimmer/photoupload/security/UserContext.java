@@ -45,20 +45,4 @@ public class UserContext {
   public Long getCurrentUserId() {
     return getCurrentUser().getId();
   }
-
-  /**
-   * Gets the email of the current authenticated user.
-   *
-   * @return the user email
-   * @throws UsernameNotFoundException if the user is not authenticated
-   */
-  public String getCurrentUserEmail() {
-    Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-    if (authentication == null || !authentication.isAuthenticated()) {
-      throw new UsernameNotFoundException("No authenticated user found");
-    }
-
-    return authentication.getName();
-  }
 }

@@ -1,7 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.repository;
 
-import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import java.time.Instant;
 import java.util.Collection;
@@ -15,12 +14,6 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long> {
-
-  Optional<FileMetadata> findByStoredFilename(String storedFilename);
-
-  boolean existsByStoredFilename(String storedFilename);
-
-  void deleteByStoredFilename(String storedFilename);
 
   List<FileMetadata> findAllByOrderByDisplayOrderAsc();
 
@@ -39,11 +32,6 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
   List<FileMetadata> findByAlbumIdAndUserIdWithTagsOrderByDisplayOrderAsc(
       @Param("albumId") Long albumId, @Param("userId") Long userId);
 
-  List<FileMetadata> findByAlbumIsNullOrderByDisplayOrderAsc();
-
-  @Query("SELECT MAX(f.displayOrder) FROM FileMetadata f")
-  Integer findMaxDisplayOrder();
-
   @Query(
       "SELECT MAX(f.displayOrder) FROM FileMetadata f WHERE f.album.id = :albumId AND f.album.user.id = :userId")
   Integer findMaxDisplayOrderByAlbumIdAndUserId(
@@ -57,8 +45,6 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
 
   @Query("SELECT f.id FROM FileMetadata f WHERE f.id IN :fileIds")
   List<Long> findExistingIds(@Param("fileIds") List<Long> fileIds);
-
-  List<FileMetadata> findByAlbumShareTokenOrderByDisplayOrderAsc(String shareToken);
 
   @Query(
       "SELECT DISTINCT f FROM FileMetadata f "
@@ -122,20 +108,6 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       "SELECT f FROM FileMetadata f WHERE f.contentId = :contentId AND f.album.user.id = :userId")
   List<FileMetadata> findByContentIdAndUserId(
       @Param("contentId") String contentId, @Param("userId") Long userId);
-
-  // Find files in an album uploaded after a specific time (for subscription notifications)
-  List<FileMetadata> findByAlbumAndUploadedAtAfter(Album album, Instant uploadedAt);
-
-  /** Returns every non-null stored path across all five path columns in a single query. */
-  @Query(
-      value =
-          "SELECT file_path FROM file_metadata WHERE file_path IS NOT NULL"
-              + " UNION SELECT thumbnail_path FROM file_metadata WHERE thumbnail_path IS NOT NULL"
-              + " UNION SELECT medium_path FROM file_metadata WHERE medium_path IS NOT NULL"
-              + " UNION SELECT large_path FROM file_metadata WHERE large_path IS NOT NULL"
-              + " UNION SELECT transcoded_video_path FROM file_metadata WHERE transcoded_video_path IS NOT NULL",
-      nativeQuery = true)
-  List<String> findAllStoredPaths();
 
   /**
    * The same set, narrowed to files whose album sits on one storage backend. The orphan sweep runs
@@ -204,20 +176,6 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       nativeQuery = true)
   List<FileMetadata> findRetentionPurgeCandidates(
       @Param("cutoff") Instant cutoff, @Param("maxRows") int maxRows);
-
-  /**
-   * Phase 5 follow-up — projection of every {@code originals/} S3 key currently referenced by a
-   * row. The retention runner's orphan-detection pass set-diffs this against {@code listObjects}
-   * over the {@code originals/} prefix to find keys that have no row pointing at them (post-finish
-   * hook crash, multipart insert failure after PUT, etc.).
-   *
-   * <p>Projection-only; no entity hydration. Returning a {@code List} is fine — even at 100k+ rows
-   * the result is a few MiB of short strings.
-   */
-  @Query(
-      "SELECT f.filePath FROM FileMetadata f "
-          + "WHERE f.filePath IS NOT NULL AND f.filePath LIKE 'originals/%'")
-  List<String> findAllOriginalsKeys();
 
   /** Same, narrowed to one storage backend — the orphan sweep runs a bucket at a time. */
   @Query(

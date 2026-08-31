@@ -107,11 +107,6 @@ public class AlbumTagService {
     return getEnabledTags(albumId);
   }
 
-  @Transactional(readOnly = true)
-  public boolean isTagEnabledForAlbum(Long albumId, Long tagId) {
-    return albumEnabledTagRepository.existsByAlbumIdAndTagId(albumId, tagId);
-  }
-
   private Album requireOwnedAlbum(Long albumId) {
     User currentUser = userContext.getCurrentUser();
     return albumRepository

@@ -12,18 +12,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface SlideshowRecordingRepository extends JpaRepository<SlideshowRecording, Long> {
 
-  /**
-   * Every {@code audio_path} in the table. Recording audio lives in this table, not in {@code
-   * file_metadata}, so any sweep that decides what a bucket key is for must consult both — see the
-   * comment on {@code FileStorageService.purgeOrphanedS3Objects}.
-   */
-  @Query("SELECT r.audioPath FROM SlideshowRecording r WHERE r.audioPath IS NOT NULL")
-  List<String> findAllAudioPaths();
-
-  /** Every {@code audio_filename}, so the derived {@code .m4a} siblings can be named. */
-  @Query("SELECT r.audioFilename FROM SlideshowRecording r WHERE r.audioFilename IS NOT NULL")
-  List<String> findAllAudioFilenames();
-
   /** Backend-scoped variants, for the per-backend orphan sweep. */
   @Query(
       "SELECT r.audioPath FROM SlideshowRecording r"

@@ -16,8 +16,6 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
 
   List<DeviceToken> findByEmailAndIsActiveTrue(String email);
 
-  List<DeviceToken> findByIsActiveTrueAndFailureCountLessThan(int maxFailures);
-
   @Modifying
   @Query("UPDATE DeviceToken dt SET dt.isActive = false WHERE dt.failureCount >= :maxFailures")
   int deactivateFailedTokens(@Param("maxFailures") int maxFailures);
