@@ -44,6 +44,56 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
     /// every other callback the session owes us.
     private let sliceQueue = DispatchQueue(label: "com.oglimmer.photosync.tus.slice", qos: .utility)
 
+    /// What a create POST needs that ``TusTask`` cannot carry across a relaunch.
+    ///
+    /// The `PHAsset`, the export record and the caller's completion are live objects, and
+    /// `taskDescription` is a string. So they are held here for the lifetime of the process and
+    /// looked up when the task finishes. After a relaunch the lookup misses, which
+    /// ``handleCreateFinished`` treats as its degraded path rather than as an error.
+    private struct PendingCreate {
+        let api: APIClient
+        let asset: PHAsset
+        let exp: Uploader.ExportResult
+        let fileSize: Int64
+        let tusURL: URL
+        let maxUploadBytes: Int64?
+        let albumId: Int?
+        let mayRetryWithFreshToken: Bool
+        let completion: (@Sendable (Result<Void, Error>) -> Void)?
+    }
+
+    /// Guards ``pendingCreates`` and ``createBodies``. Both are written from whichever thread
+    /// starts an upload and read from the session's delegate queue.
+    private let createLock = NSLock()
+    private var pendingCreates: [String: PendingCreate] = [:]
+    /// Response bytes of in-flight create POSTs, keyed by task identifier. Only a 507 has a body
+    /// worth reading, but the delegate cannot know the status code while the bytes arrive.
+    private var createBodies: [Int: Data] = [:]
+
+    private func rememberPendingCreate(_ create: PendingCreate, for assetId: String) {
+        createLock.lock()
+        pendingCreates[assetId] = create
+        createLock.unlock()
+    }
+
+    private func takePendingCreate(for assetId: String) -> PendingCreate? {
+        createLock.lock()
+        defer { createLock.unlock() }
+        return pendingCreates.removeValue(forKey: assetId)
+    }
+
+    private func appendCreateBody(_ data: Data, for taskIdentifier: Int) {
+        createLock.lock()
+        createBodies[taskIdentifier, default: Data()].append(data)
+        createLock.unlock()
+    }
+
+    private func takeCreateBody(for taskIdentifier: Int) -> Data? {
+        createLock.lock()
+        defer { createLock.unlock() }
+        return createBodies.removeValue(forKey: taskIdentifier)
+    }
+
     override private init() {
         super.init()
     }
@@ -177,108 +227,186 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         api.addBasicAuth(to: &request)
 
         let assetId = asset.localIdentifier
-        // The body is kept, not discarded: a 507 answers with the server's own sentence naming
-        // how much room is left, which is the only thing that makes the log entry actionable.
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-            if let error {
-                discardExport(exp)
-                SyncLogger.shared.logUploadFailure(assetId: assetId, error: error.localizedDescription)
-                UploadStore.shared.removeFromUploading(assetId)
-                completion?(.failure(error))
+
+        // The create POST goes on the **background** session, for the same reason the resume
+        // HEAD below does: a `URLSession.shared` task is killed the moment iOS suspends the app,
+        // and its error is only delivered at the next wake-up — as "The request timed out."
+        // against a server that never saw the request at all. Three of those and
+        // `SyncCoordinator`'s export-retry policy gave the asset up, which is what filled the
+        // Status tab with red lines for uploads that had never been attempted.
+        //
+        // Background sessions accept only upload and download tasks, so this is an upload task
+        // with a zero-byte body: TUS creation carries its length in `Upload-Length`, never in
+        // the body. That empty file is the task's `chunkPath`, so `didCompleteWithError` deletes
+        // it along with every other slice.
+        //
+        // `session` is an implicitly unwrapped optional assigned by ``configureSession()``, which
+        // both `AppDelegate.didFinishLaunching` and `SyncCoordinator.start` call. It is checked
+        // rather than forced because the old code path could not crash here, and a refused upload
+        // is a better failure than a dead app.
+        guard let session else {
+            discardExport(exp)
+            SyncLogger.shared.logUploadFailure(assetId: assetId, error: "upload session not ready")
+            UploadStore.shared.removeFromUploading(assetId)
+            completion?(.failure(AppError.api(message: "Could not start the upload.",
+                                              statusCode: nil)))
+            return
+        }
+        let bodyURL = fileManager.temporaryDirectory
+            .appendingPathComponent("tus-create-\(UUID().uuidString)")
+        guard fileManager.createFile(atPath: bodyURL.path, contents: Data()) else {
+            discardExport(exp)
+            SyncLogger.shared.logUploadFailure(assetId: assetId,
+                                               error: "could not stage the create request")
+            UploadStore.shared.removeFromUploading(assetId)
+            completion?(.failure(AppError.api(message: "Could not start the upload.",
+                                              statusCode: nil)))
+            return
+        }
+
+        rememberPendingCreate(
+            PendingCreate(api: api, asset: asset, exp: exp, fileSize: fileSize, tusURL: tusURL,
+                          maxUploadBytes: maxUploadBytes, albumId: albumId,
+                          mayRetryWithFreshToken: mayRetryWithFreshToken, completion: completion),
+            for: assetId,
+        )
+
+        let task = session.uploadTask(with: request, fromFile: bodyURL)
+        task.taskDescription = TusTask(
+            assetId: assetId,
+            chunkPath: bodyURL.path,
+            // No resource exists yet, so there is no per-upload URL to record. The collection URL
+            // goes here instead: it is what a relaunched process resolves `Location` against.
+            uploadURL: tusURL,
+            checksum: exp.checksum,
+            originalPath: exp.fileURL.path,
+            fileSize: fileSize,
+            sentOffset: 0,
+            kind: .create,
+        ).description
+        task.resume()
+    }
+
+    /// The create POST came back. Routes the answer exactly as the old completion handler did.
+    ///
+    /// `pending` is nil when iOS relaunched the app only to deliver this: the `PHAsset`, the
+    /// export record and the caller's completion are live objects no `taskDescription` can carry.
+    /// A 201 still continues from the fields ``TusTask`` does carry — path, checksum and size are
+    /// all ``patchChunk`` needs — a 409 still records the dedupe, and every other answer cleans
+    /// the export up rather than leaving the asset stuck in `uploading`.
+    private func handleCreateFinished(
+        create: TusTask,
+        pending: PendingCreate?,
+        error: Error?,
+        response: URLResponse?,
+        body: Data?,
+    ) {
+        let assetId = create.assetId
+        let originalURL = URL(fileURLWithPath: create.originalPath)
+        let completion = pending?.completion
+
+        if let error {
+            failCreate(assetId: assetId, originalURL: originalURL,
+                       message: error.localizedDescription, completion: completion)
+            return
+        }
+        guard let http = response as? HTTPURLResponse else {
+            failCreate(assetId: assetId, originalURL: originalURL,
+                       message: "no response from server", completion: completion)
+            return
+        }
+
+        switch http.statusCode {
+        case 200, 201:
+            guard let location = http.value(forHTTPHeaderField: "Location"),
+                  let uploadURL = resolveLocation(location, against: create.uploadURL)
+            else {
+                failCreate(assetId: assetId, originalURL: originalURL,
+                           message: "missing Location header", completion: completion)
                 return
             }
-            guard let http = response as? HTTPURLResponse else {
-                discardExport(exp)
-                SyncLogger.shared.logUploadFailure(assetId: assetId, error: "no response from server")
-                UploadStore.shared.removeFromUploading(assetId)
-                completion?(.failure(AppError.api(message: "Invalid response", statusCode: nil)))
+            // A freshly created TUS resource is empty by definition, so the offset is 0
+            // and a HEAD here would only cost a round-trip. HEAD is the *resume* path.
+            patchChunk(
+                assetId: assetId,
+                originalURL: originalURL,
+                uploadURL: uploadURL,
+                checksum: create.checksum,
+                fileSize: create.fileSize,
+                offset: 0,
+                api: pending?.api ?? apiFromKeychain(),
+                completion: completion,
+            )
+        case 409:
+            // Pre-create dedupe — the server already holds this asset somewhere in the
+            // account, matched on either the contentId or the checksum, and refuses the bytes.
+            // The checksum arm is the one that fires for a second device: the same iCloud
+            // photo synced from an iPad has its own contentId but identical bytes.
+            //
+            // Reported as its own outcome rather than as a success: nothing was stored, so an
+            // upload aimed at a particular album produces no new photo there, and the caller
+            // has to be able to say so.
+            try? fileManager.removeItem(at: originalURL)
+            SyncLogger.shared.logUploadDeduped(assetId: assetId)
+            UploadStore.shared.markUploaded(assetId, checksum: create.checksum)
+            onTaskFinished?(assetId, .deduped)
+            completion?(.success(()))
+        case 401 where pending?.mayRetryWithFreshToken == true:
+            // The token was refused — expired early, or revoked by a password change. Mint a
+            // new one and run the same create again, once. Without this the asset would be
+            // reported as a permanent client error and skipped until the next scan, for what
+            // is really a routine credential rotation.
+            guard let pending else { return }
+            UploadTokenStore.shared.invalidate()
+            UploadTokenStore.shared.token(api: pending.api) { [weak self] fresh in
+                guard let self else { return }
+                AppLog.upload.notice("Upload token refused — retrying with a fresh one")
+                performCreate(api: pending.api, asset: pending.asset, exp: pending.exp,
+                              fileSize: pending.fileSize, tusURL: pending.tusURL,
+                              authValue: fresh, maxUploadBytes: pending.maxUploadBytes,
+                              albumId: pending.albumId, mayRetryWithFreshToken: false,
+                              completion: pending.completion)
+            }
+        case 413:
+            // The local check in `createUpload` did not catch it — capabilities were never
+            // fetched, or the cap was lowered since. Same outcome, same message, limit left
+            // unstated when we genuinely do not know it.
+            guard let pending else {
+                failCreate(assetId: assetId, originalURL: originalURL,
+                           message: "HTTP 413", completion: completion)
                 return
             }
-            switch http.statusCode {
-            case 200, 201:
-                guard let location = http.value(forHTTPHeaderField: "Location"),
-                      let uploadURL = resolveLocation(location, against: tusURL)
-                else {
-                    discardExport(exp)
-                    SyncLogger.shared.logUploadFailure(assetId: assetId, error: "missing Location header")
-                    UploadStore.shared.removeFromUploading(assetId)
-                    completion?(.failure(AppError.api(
-                        message: "The server did not say where to send the file.", statusCode: nil,
-                    )))
-                    return
-                }
-                // A freshly created TUS resource is empty by definition, so the offset is 0
-                // and a HEAD here would only cost a round-trip. HEAD is the *resume* path.
-                patchChunk(
-                    assetId: assetId,
-                    originalURL: exp.fileURL,
-                    uploadURL: uploadURL,
-                    checksum: exp.checksum,
-                    fileSize: fileSize,
-                    offset: 0,
-                    api: api,
-                    completion: completion,
-                )
-            case 409:
-                // Pre-create dedupe — the server already holds this asset somewhere in the
-                // account, matched on either the contentId or the checksum, and refuses the bytes.
-                // The checksum arm is the one that fires for a second device: the same iCloud
-                // photo synced from an iPad has its own contentId but identical bytes.
-                //
-                // Reported as its own outcome rather than as a success: nothing was stored, so an
-                // upload aimed at a particular album produces no new photo there, and the caller
-                // has to be able to say so.
-                discardExport(exp)
-                SyncLogger.shared.logUploadDeduped(assetId: assetId)
-                UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
-                onTaskFinished?(assetId, .deduped)
-                completion?(.success(()))
-            case 401 where mayRetryWithFreshToken:
-                // The token was refused — expired early, or revoked by a password change. Mint a
-                // new one and run the same create again, once. Without this the asset would be
-                // reported as a permanent client error and skipped until the next scan, for what
-                // is really a routine credential rotation.
-                UploadTokenStore.shared.invalidate()
-                UploadTokenStore.shared.token(api: api) { [weak self] fresh in
-                    guard let self else { return }
-                    AppLog.upload.notice("Upload token refused — retrying with a fresh one")
-                    performCreate(api: api, asset: asset, exp: exp, fileSize: fileSize,
-                                  tusURL: tusURL, authValue: fresh,
-                                  maxUploadBytes: maxUploadBytes, albumId: albumId,
-                                  mayRetryWithFreshToken: false, completion: completion)
-                }
-            case 413:
-                // The local check above did not catch it — capabilities were never fetched, or
-                // the cap was lowered since. Same outcome, same message, limit left unstated
-                // when we genuinely do not know it.
-                refuseForSize(asset: asset, exp: exp, size: fileSize,
-                              limit: maxUploadBytes, completion: completion)
-            case 507:
-                // The account's storage on the server is full. Not retryable on any timer — it
-                // clears when the user frees space or registers their own storage — so it is
-                // reported like the too-large refusal rather than deferred: the asset stays
-                // un-uploaded and is picked up again by a later scan once there is room.
-                refuseForStorageFull(asset: asset, exp: exp, response: data)
-                completion?(.success(()))
-            case 429, 503:
-                let retry = parseRetryAfter(from: http) ?? 30
-                // Safe to delete: a deferred asset is re-queued and re-exported from the photo
-                // library when its turn comes round again, not resumed from this file.
-                discardExport(exp)
-                SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
-                UploadStore.shared.removeFromUploading(assetId)
-                onTaskFinished?(assetId, .backpressure(retry))
-                completion?(.success(()))
-            default:
-                discardExport(exp)
-                SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
-                UploadStore.shared.removeFromUploading(assetId)
-                onTaskFinished?(assetId, .clientError)
-                completion?(.failure(AppError.api(message: APIClient.plainMeaning(of: http.statusCode),
-                                                  statusCode: http.statusCode)))
+            refuseForSize(asset: pending.asset, exp: pending.exp, size: create.fileSize,
+                          limit: pending.maxUploadBytes, completion: completion)
+        case 507:
+            // The account's storage on the server is full. Not retryable on any timer — it
+            // clears when the user frees space or registers their own storage — so it is
+            // reported like the too-large refusal rather than deferred: the asset stays
+            // un-uploaded and is picked up again by a later scan once there is room.
+            guard let pending else {
+                failCreate(assetId: assetId, originalURL: originalURL,
+                           message: "HTTP 507", completion: completion)
+                return
             }
-        }.resume()
+            refuseForStorageFull(asset: pending.asset, exp: pending.exp, response: body)
+            completion?(.success(()))
+        case 429, 503:
+            let retry = parseRetryAfter(from: http) ?? 30
+            // Safe to delete: a deferred asset is re-queued and re-exported from the photo
+            // library when its turn comes round again, not resumed from this file.
+            try? fileManager.removeItem(at: originalURL)
+            SyncLogger.shared.logUploadDeferred(assetId: assetId, retryAfter: retry)
+            UploadStore.shared.removeFromUploading(assetId)
+            onTaskFinished?(assetId, .backpressure(retry))
+            completion?(.success(()))
+        default:
+            try? fileManager.removeItem(at: originalURL)
+            SyncLogger.shared.logUploadFailure(assetId: assetId, error: "HTTP \(http.statusCode)")
+            UploadStore.shared.removeFromUploading(assetId)
+            onTaskFinished?(assetId, .clientError)
+            completion?(.failure(AppError.api(message: APIClient.plainMeaning(of: http.statusCode),
+                                              statusCode: http.statusCode)))
+        }
     }
 
     /// HEADs the TUS resource on the **background** session, so a resume that starts while the
@@ -600,6 +728,17 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             return
         }
 
+        if patch.kind == .create {
+            handleCreateFinished(
+                create: patch,
+                pending: takePendingCreate(for: assetId),
+                error: error,
+                response: task.response,
+                body: takeCreateBody(for: task.taskIdentifier),
+            )
+            return
+        }
+
         if let error {
             resumeOrFail(
                 assetId: assetId,
@@ -713,6 +852,17 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         APIClientProvider.shared.clientOrAnonymous
     }
 
+    /// Collects an upload task's response body. Only the create POST has one worth keeping: a
+    /// 507 answers with the server's own sentence naming how much room is left, which is the
+    /// only thing that makes the log entry actionable. A background session has no per-request
+    /// completion handler to hand it to, so it is accumulated here and read once in
+    /// ``handleCreateFinished(create:pending:error:response:body:)``.
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let desc = dataTask.taskDescription,
+              TusTask.parse(desc)?.kind == .create else { return }
+        appendCreateBody(data, for: dataTask.taskIdentifier)
+    }
+
     /// The resume HEAD is a download task, so the system insists on handing us a file for its
     /// (empty) body. Everything that matters is read from `task.response` in
     /// ``urlSession(_:task:didCompleteWithError:)``.
@@ -730,6 +880,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
 private enum TusTaskKind: String {
     case patch = "PATCH"
     case head = "HEAD"
+    case create = "POST"
 }
 
 /// What a background task needs to carry on after a relaunch.
