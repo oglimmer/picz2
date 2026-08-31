@@ -50,7 +50,6 @@ traefik-local.yml
 bin/
 helm/
 ios/
-UploadExtension/
 
 # Tooling caches
 .claude/
