@@ -353,11 +353,6 @@ struct AlbumBody: Encodable {
     var storageBackendId: Int?
 }
 
-struct SuccessResponse: Codable {
-    let success: Bool
-    let message: String?
-}
-
 struct ErrorResponse: Codable {
     let success: Bool
     let message: String

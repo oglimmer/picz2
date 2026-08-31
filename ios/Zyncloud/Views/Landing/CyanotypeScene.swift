@@ -90,10 +90,6 @@ private struct Plate {
         ctx.fill(Path(ellipseIn: rect(cx - r, cy - r, r * 2, r * 2)), with: .color(color.opacity(opacity)))
     }
 
-    func fillEllipse(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color) {
-        ctx.fill(Path(ellipseIn: rect(x, y, w, h)), with: .color(color))
-    }
-
     /// The warm halo the SVG paints behind anything that gives off light.
     func glow(_ cx: CGFloat, _ cy: CGFloat, _ r: CGFloat, opacity: Double = 1) {
         let shading = GraphicsContext.Shading.radialGradient(
