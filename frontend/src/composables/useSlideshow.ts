@@ -8,7 +8,6 @@ export interface SlideshowComposable {
   isInRecordingMode: Ref<boolean>;
   uploading: Ref<boolean>;
   uploadError: Ref<string | null>;
-  recorderError: Ref<string | null>;
   audioBlob: Ref<Blob | null>;
   imageTimings: Ref<ImageTimingEntry[]>;
   totalDuration: ComputedRef<number>;
@@ -33,7 +32,6 @@ export function useSlideshow(): SlideshowComposable {
   const {
     isRecording,
     audioBlob,
-    error: recorderError,
     startRecording: startAudioRecording,
     stopRecording: stopAudioRecording,
     reset: resetRecorder,
@@ -248,7 +246,6 @@ export function useSlideshow(): SlideshowComposable {
     isInRecordingMode,
     uploading,
     uploadError,
-    recorderError,
     audioBlob,
     imageTimings,
     totalDuration,

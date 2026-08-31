@@ -10,16 +10,12 @@ export interface SlideshowPlaybackComposable {
   playbackError: Ref<string | null>;
   recordings: Ref<RecordingInfo[]>;
   loadingRecordings: Ref<boolean>;
-  playbackProgress: ComputedRef<number>;
-  currentTime: ComputedRef<string>;
-  totalTime: ComputedRef<string>;
   audioUrl: Ref<string | null>;
   loadRecordings: (
     albumId: number,
     filterTag?: string | null,
   ) => Promise<RecordingInfo[]>;
   hasRecordings: (filterTag: string) => boolean;
-  getRecordingsCount: (filterTag: string) => number;
   startPlayback: (
     recording: RecordingInfo,
     files: AlbumFile[],
@@ -29,7 +25,6 @@ export interface SlideshowPlaybackComposable {
   pausePlayback: () => void;
   resumePlayback: () => void;
   deleteRecording: (recordingId: number) => Promise<boolean>;
-  formatTime: (ms: number) => string;
 }
 
 /**
@@ -92,15 +87,6 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     // Normalize empty string to null for comparison
     const normalizedTag = filterTag || null;
     return recordings.value.some((r) => r.filterTag === normalizedTag);
-  }
-
-  /**
-   * Get recordings count for a filter tag
-   */
-  function getRecordingsCount(filterTag: string): number {
-    // Normalize empty string to null for comparison
-    const normalizedTag = filterTag || null;
-    return recordings.value.filter((r) => r.filterTag === normalizedTag).length;
   }
 
   /**
@@ -234,18 +220,6 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
   });
 
   /**
-   * Get playback progress (0-100)
-   */
-  const playbackProgress = computed<number>(() => {
-    if (!audioElement.value || !currentRecording.value) return 0;
-
-    const currentTime = audioElement.value.currentTime * 1000;
-    const totalDuration = currentRecording.value.durationMs;
-
-    return (currentTime / totalDuration) * 100;
-  });
-
-  /**
    * Delete a recording
    */
   async function deleteRecording(recordingId: number): Promise<boolean> {
@@ -271,26 +245,6 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     }
   }
 
-  /**
-   * Format milliseconds to MM:SS
-   */
-  function formatTime(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-  }
-
-  const currentTime = computed<string>(() => {
-    if (!audioElement.value) return "0:00";
-    return formatTime(audioElement.value.currentTime * 1000);
-  });
-
-  const totalTime = computed<string>(() => {
-    if (!currentRecording.value) return "0:00";
-    return formatTime(currentRecording.value.durationMs);
-  });
-
   return {
     // State
     isPlaying,
@@ -300,20 +254,15 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     playbackError,
     recordings,
     loadingRecordings,
-    playbackProgress,
-    currentTime,
-    totalTime,
     audioUrl,
 
     // Methods
     loadRecordings,
     hasRecordings,
-    getRecordingsCount,
     startPlayback,
     stopPlayback,
     pausePlayback,
     resumePlayback,
     deleteRecording,
-    formatTime,
   };
 }
