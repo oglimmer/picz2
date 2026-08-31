@@ -77,9 +77,12 @@ xcodebuild test -project Zyncloud.xcodeproj -scheme Zyncloud \
 
 iPad support is three things that must stay together, and `Scripts/check-infoplist.sh` fails
 if any one of them goes missing: the device family, the 152x152 and 167x167 iPad app icons,
-and `UISupportedInterfaceOrientations~ipad` with all four orientations. iPhone stays
-portrait-only. Column counts come from the horizontal size class through `AdaptiveGrid`, not
-from the device — an iPad in Slide Over is `.compact` and gets the phone layout.
+and `UISupportedInterfaceOrientations~ipad` with all four orientations. iPhone rotates too,
+but through the plain `UISupportedInterfaceOrientations` key and only three ways: portrait plus
+both landscapes, no `PortraitUpsideDown` — Face ID iPhones do not rotate to it, so listing it
+would advertise an orientation the device never enters. Column counts come from the horizontal
+size class through `AdaptiveGrid`, not from the device — an iPad in Slide Over is `.compact` and
+gets the phone layout, and so does an iPhone in landscape on every model but the Max.
 
 **Do not pass `CODE_SIGNING_ALLOWED=NO`.** It fails every `KeychainHelperTests` case with
 `errSecMissingEntitlement` — keychain access needs the signed host app, and the failures look
