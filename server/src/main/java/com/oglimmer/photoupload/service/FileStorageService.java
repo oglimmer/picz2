@@ -421,10 +421,18 @@ public class FileStorageService {
    * pulling it from {@link com.oglimmer.photoupload.security.UserContext} (no Spring Security
    * context exists for tusd→api hook calls).
    *
-   * <p>Idempotency: a duplicate {@code contentId} for the same user causes pre-create to reject 409
-   * before tusd ever begins the upload, so this method ordinarily runs at most once per upload. If
-   * post-finish fires twice (network retry), the caller short-circuits on the existing row before
-   * invoking us — see {@code TusHookService.handlePostFinish}.
+   * <p>Idempotency: a duplicate {@code contentId} <i>or</i> {@code checksum} for the same user
+   * causes pre-create to reject 409 before tusd ever begins the upload, so this method ordinarily
+   * runs at most once per upload. If post-finish fires twice (network retry), the caller
+   * short-circuits on the existing row before invoking us — see {@code
+   * TusHookService.handlePostFinish}.
+   *
+   * <p>{@code checksum} is the client's SHA-256 of the bytes it sent, and it is persisted here for
+   * the same reason {@link #storeFile} persists its own: it is the only key that identifies one
+   * photo across two devices. Nothing recomputes it server-side — the bytes never pass through this
+   * pod on the same-backend path (S3 COPY), so hashing here would mean pulling the whole object
+   * back just to confirm what the client already told us. A client that sends none leaves the
+   * column null and keeps exactly the pre-fix behaviour.
    *
    * <p>The COPY is server-side in MinIO (no JVM bytes); the cleanup of {@code tusS3Key} and its
    * companion {@code .info} object is best-effort — a stale tus-uploads/{uuid} object is mopped up
@@ -437,7 +445,8 @@ public class FileStorageService {
       String originalName,
       long fileSize,
       String contentType,
-      String contentId) {
+      String contentId,
+      String checksum) {
     if (objectStorage.isEmpty()) {
       throw new StorageException("registerTusUpload requires storage.s3.enabled=true");
     }
@@ -499,6 +508,7 @@ public class FileStorageService {
               metadata.setFilePath(finalOriginalKey);
               metadata.setUploadedAt(Instant.now());
               metadata.setContentId(contentId);
+              metadata.setChecksum(checksum);
               metadata.setProcessingStatus(ProcessingStatus.QUEUED);
 
               Album album =

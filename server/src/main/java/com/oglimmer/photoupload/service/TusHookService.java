@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -36,6 +37,13 @@ import org.springframework.stereotype.Service;
  *       bytes for a doomed upload.
  *   <li><b>D30</b> — pre-create rejects 409 when the supplied {@code contentId} already maps to a
  *       row for the same user.
+ *   <li><b>D61</b> — pre-create also rejects 409 when the supplied {@code checksum} already maps to
+ *       a row for the same user. D30 alone cannot see the same photo arriving from a second device:
+ *       on iOS a {@code contentId} is a {@code PHAsset.localIdentifier}, which the phone and the
+ *       iPad each mint independently for their own copy of one iCloud photo. The bytes are
+ *       identical — the client uploads the untouched original resource — so the SHA-256 is the key
+ *       that matches. Before this, TUS rows carried no checksum at all, so an account synced from
+ *       two devices duplicated every asset.
  * </ul>
  *
  * <p>Every method returns a {@link TusHookResponse}. The controller wraps this in HTTP 200 + JSON
@@ -60,8 +68,17 @@ public class TusHookService {
   /** Metadata key carrying the iOS / web bearer credentials. */
   private static final String META_AUTH = "auth";
 
-  /** Metadata key carrying the source-asset stable id (sha256 from client). */
+  /**
+   * Metadata key carrying the source-asset stable id — on iOS, {@code PHAsset.localIdentifier}.
+   * Per-device, so it identifies one asset within one install, never across two.
+   */
   private static final String META_CONTENT_ID = "contentId";
+
+  /**
+   * Metadata key carrying the client's SHA-256 over the bytes it is about to send. Device
+   * independent, which is precisely what {@link #META_CONTENT_ID} is not.
+   */
+  private static final String META_CHECKSUM = "checksum";
 
   /** Metadata key carrying the destination album id. */
   private static final String META_ALBUM_ID = "albumId";
@@ -80,6 +97,7 @@ public class TusHookService {
   private final JobsProperties jobsProperties;
   private final JobQueueDepthService queueDepthService;
   private final StorageQuotaService storageQuotaService;
+  private final FileStorageProperties fileStorageProperties;
 
   public TusHookResponse handlePreCreate(TusHookRequest request) {
     Map<String, String> meta = metadataOf(request);
@@ -115,6 +133,20 @@ public class TusHookService {
             existing.get(0).getId());
         return TusHookResponse.reject(409, "duplicate-content-id");
       }
+    }
+
+    // D61 — the cross-device gate. Cheap here and expensive anywhere else: rejecting now means
+    // tusd never allocates the multipart upload, so a second phone re-syncing a year of photos
+    // costs a round-trip each rather than the bytes.
+    String checksum = meta.get(META_CHECKSUM);
+    FileMetadata duplicateByChecksum = findDuplicateByChecksum(checksum, user);
+    if (duplicateByChecksum != null) {
+      log.info(
+          "TUS pre-create rejected: duplicate checksum {} for user {} (existing asset {})",
+          checksum,
+          user.getId(),
+          duplicateByChecksum.getId());
+      return TusHookResponse.reject(409, "duplicate-checksum");
     }
 
     // Storage quota, checked here rather than only at post-finish so a phone on a train does not
@@ -164,6 +196,21 @@ public class TusHookService {
       }
     }
 
+    // Re-checked after the bytes landed, not only at pre-create: two devices can clear pre-create
+    // in the same instant and both upload, and the row that loses that race must not be created.
+    // Registering nothing leaves the tus-uploads/ object behind for the nightly retention sweep,
+    // which is the same outcome the contentId branch above already accepts.
+    String checksum = meta.get(META_CHECKSUM);
+    FileMetadata duplicateByChecksum = findDuplicateByChecksum(checksum, user);
+    if (duplicateByChecksum != null) {
+      log.info(
+          "TUS post-finish: dropping upload {} — checksum {} already held as asset {}",
+          upload.id(),
+          checksum,
+          duplicateByChecksum.getId());
+      return TusHookResponse.allow();
+    }
+
     Long albumId = parseLong(meta.get(META_ALBUM_ID));
     String filename = orDefault(meta.get(META_FILENAME), upload.id());
     String contentType = orDefault(meta.get(META_FILETYPE), "application/octet-stream");
@@ -171,7 +218,7 @@ public class TusHookService {
     try {
       FileInfo info =
           fileStorageService.registerTusUpload(
-              user, albumId, tusKey, filename, upload.size(), contentType, contentId);
+              user, albumId, tusKey, filename, upload.size(), contentType, contentId, checksum);
       log.info(
           "TUS post-finish: registered asset {} for user {} from {}",
           info.getId(),
@@ -185,6 +232,28 @@ public class TusHookService {
           e);
     }
     return TusHookResponse.allow();
+  }
+
+  /**
+   * The row already holding these bytes for this user, or {@code null}.
+   *
+   * <p>Returns {@code null} for a blank checksum rather than treating it as a match — an older
+   * client sends none, and it must keep uploading rather than have every asset rejected.
+   *
+   * <p>Scoped to {@code user}. The multipart path's cross-album sweep uses the account-blind {@link
+   * FileMetadataRepository#findByChecksum(String)}; reusing it here would let one account's upload
+   * be refused because a stranger holds the same bytes.
+   */
+  private FileMetadata findDuplicateByChecksum(String checksum, User user) {
+    if (checksum == null || checksum.isBlank()) {
+      return null;
+    }
+    if (!fileStorageProperties.isDuplicateDetectionEnabled()) {
+      return null;
+    }
+    List<FileMetadata> existing =
+        metadataRepository.findByChecksumAndUserId(checksum, user.getId());
+    return existing.isEmpty() ? null : existing.get(0);
   }
 
   public TusHookResponse handlePostTerminate(TusHookRequest request) {

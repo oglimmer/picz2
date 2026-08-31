@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.User;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -53,6 +55,13 @@ class TusHookServiceTest {
    * backpressure and duplicate detection, and the quota has its own coverage.
    */
   @Mock StorageQuotaService storageQuotaService;
+
+  /**
+   * The real properties object, not a mock: {@code duplicateDetectionEnabled} defaults to true and
+   * that default is what production runs, so every test here exercises the dedupe path unless it
+   * says otherwise.
+   */
+  @Spy FileStorageProperties fileStorageProperties = new FileStorageProperties();
 
   @InjectMocks TusHookService service;
 
@@ -128,6 +137,87 @@ class TusHookServiceTest {
     assertNotNull(resp.httpResponse().body());
   }
 
+  /**
+   * The iPhone-and-iPad case (D61). Each device gives the same iCloud photo its own {@code
+   * PHAsset.localIdentifier}, so the contentId lookup finds nothing — the SHA-256 over the
+   * untouched original resource is the only thing that matches, and it must be enough.
+   */
+  @Test
+  void preCreateRejectsDuplicateChecksumFromAnotherDevice() {
+    when(authenticationManager.authenticate(any()))
+        .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
+    when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
+    when(jobsProperties.getBackpressure()).thenReturn(backpressure);
+    when(backpressure.getQueueDepthThreshold()).thenReturn(200);
+    when(queueDepthService.getDepth()).thenReturn(0L);
+
+    // The iPad's own local identifier: unknown to the server, and that is the point.
+    when(metadataRepository.findByContentIdAndUserId("ipad-local-id", 42L)).thenReturn(List.of());
+
+    FileMetadata existing = new FileMetadata();
+    existing.setId(99L);
+    when(metadataRepository.findByChecksumAndUserId("sha-deadbeef", 42L))
+        .thenReturn(List.of(existing));
+
+    TusHookResponse resp =
+        service.handlePreCreate(
+            preCreate(
+                meta(
+                    Map.of(
+                        "auth", "alice@example.com:pw",
+                        "contentId", "ipad-local-id",
+                        "checksum", "sha-deadbeef"))));
+
+    assertTrue(resp.rejectUpload());
+    assertEquals(409, resp.httpResponse().statusCode());
+  }
+
+  /** A checksum the account has never seen must not be mistaken for a duplicate. */
+  @Test
+  void preCreateAllowsUnknownChecksum() {
+    when(authenticationManager.authenticate(any()))
+        .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
+    when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
+    when(jobsProperties.getBackpressure()).thenReturn(backpressure);
+    when(backpressure.getQueueDepthThreshold()).thenReturn(200);
+    when(queueDepthService.getDepth()).thenReturn(0L);
+    when(metadataRepository.findByContentIdAndUserId("fresh", 42L)).thenReturn(List.of());
+    when(metadataRepository.findByChecksumAndUserId("sha-new", 42L)).thenReturn(List.of());
+
+    TusHookResponse resp =
+        service.handlePreCreate(
+            preCreate(
+                meta(
+                    Map.of(
+                        "auth", "alice@example.com:pw",
+                        "contentId", "fresh",
+                        "checksum", "sha-new"))));
+
+    assertFalse(resp.rejectUpload());
+  }
+
+  /**
+   * An older build sends no checksum at all. It has to keep uploading — a blank value is "unknown",
+   * never "matches everything" — and the repository must not be asked.
+   */
+  @Test
+  void preCreateSkipsChecksumGateWhenClientSendsNone() {
+    when(authenticationManager.authenticate(any()))
+        .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
+    when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
+    when(jobsProperties.getBackpressure()).thenReturn(backpressure);
+    when(backpressure.getQueueDepthThreshold()).thenReturn(200);
+    when(queueDepthService.getDepth()).thenReturn(0L);
+    when(metadataRepository.findByContentIdAndUserId("fresh", 42L)).thenReturn(List.of());
+
+    TusHookResponse resp =
+        service.handlePreCreate(
+            preCreate(meta(Map.of("auth", "alice@example.com:pw", "contentId", "fresh"))));
+
+    assertFalse(resp.rejectUpload());
+    verify(metadataRepository, never()).findByChecksumAndUserId(anyString(), anyLong());
+  }
+
   @Test
   void preCreateAllowsHappyPath() {
     when(authenticationManager.authenticate(any()))
@@ -155,6 +245,7 @@ class TusHookServiceTest {
         .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
     when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
     when(metadataRepository.findByContentIdAndUserId("fresh", 42L)).thenReturn(List.of());
+    when(metadataRepository.findByChecksumAndUserId("sha-abc", 42L)).thenReturn(List.of());
 
     FileInfo result = new FileInfo();
     result.setId(1234L);
@@ -165,7 +256,8 @@ class TusHookServiceTest {
             eq("photo.jpg"),
             eq(2048L),
             eq("image/jpeg"),
-            eq("fresh")))
+            eq("fresh"),
+            eq("sha-abc")))
         .thenReturn(result);
 
     TusHookResponse resp =
@@ -176,6 +268,7 @@ class TusHookServiceTest {
                 Map.of(
                     "auth", "alice@example.com:pw",
                     "contentId", "fresh",
+                    "checksum", "sha-abc",
                     "albumId", "7",
                     "filename", "photo.jpg",
                     "filetype", "image/jpeg")));
@@ -183,7 +276,14 @@ class TusHookServiceTest {
     assertFalse(resp.rejectUpload());
     verify(fileStorageService, times(1))
         .registerTusUpload(
-            any(), anyLong(), anyString(), anyString(), anyLong(), anyString(), anyString());
+            any(),
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyString());
   }
 
   @Test
@@ -204,6 +304,41 @@ class TusHookServiceTest {
                 Map.of(
                     "auth", "alice@example.com:pw",
                     "contentId", "fresh",
+                    "checksum", "sha-abc",
+                    "albumId", "7",
+                    "filename", "photo.jpg",
+                    "filetype", "image/jpeg")));
+
+    assertFalse(resp.rejectUpload());
+    verifyNoInteractions(fileStorageService);
+  }
+
+  /**
+   * Two devices can clear pre-create in the same instant and both upload. The loser of that race
+   * must not get a row — post-finish re-checks after the bytes have landed. The stranded
+   * tus-uploads/ object is left to the nightly retention sweep, exactly as the duplicate-contentId
+   * branch already does.
+   */
+  @Test
+  void postFinishDropsDuplicateChecksum() {
+    when(authenticationManager.authenticate(any()))
+        .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
+    when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
+    when(metadataRepository.findByContentIdAndUserId("ipad-local-id", 42L)).thenReturn(List.of());
+
+    FileMetadata existing = new FileMetadata();
+    existing.setId(77L);
+    when(metadataRepository.findByChecksumAndUserId("sha-abc", 42L)).thenReturn(List.of(existing));
+
+    TusHookResponse resp =
+        service.handlePostFinish(
+            postFinish(
+                "abc123",
+                2048L,
+                Map.of(
+                    "auth", "alice@example.com:pw",
+                    "contentId", "ipad-local-id",
+                    "checksum", "sha-abc",
                     "albumId", "7",
                     "filename", "photo.jpg",
                     "filetype", "image/jpeg")));
@@ -232,8 +367,16 @@ class TusHookServiceTest {
         .thenReturn(new UsernamePasswordAuthenticationToken("alice@example.com", "pw"));
     when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(testUser));
     when(metadataRepository.findByContentIdAndUserId("fresh", 42L)).thenReturn(List.of());
+    when(metadataRepository.findByChecksumAndUserId("sha-abc", 42L)).thenReturn(List.of());
     when(fileStorageService.registerTusUpload(
-            any(), anyLong(), anyString(), anyString(), anyLong(), anyString(), anyString()))
+            any(),
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyString()))
         .thenThrow(new IllegalStateException("S3 dead"));
 
     TusHookResponse resp =
@@ -244,6 +387,7 @@ class TusHookServiceTest {
                 Map.of(
                     "auth", "alice@example.com:pw",
                     "contentId", "fresh",
+                    "checksum", "sha-abc",
                     "albumId", "7",
                     "filename", "photo.jpg",
                     "filetype", "image/jpeg")));
