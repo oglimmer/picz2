@@ -36,14 +36,6 @@ struct LanguageSettingsResponse: Codable {
     let language2: String?
 }
 
-extension Tag {
-    /// True for the names the gallery owns. The server puts `no_tag` on and takes it off by
-    /// itself, so neither name is ever offered as something to pick.
-    static func isSystemName(_ name: String) -> Bool {
-        systemNames.contains(name)
-    }
-}
-
 /// Answer to the per-file tag endpoints (`POST`/`DELETE /api/files/{id}/tags`).
 ///
 /// `tags` is the file's whole tag list after the change, so it replaces the local list rather

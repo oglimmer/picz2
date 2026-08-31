@@ -283,10 +283,6 @@ struct APIClient {
         send(.put, "api/settings/target-album",
              body: TargetAlbumBody(albumId: albumId), completion: completion)
     }
-
-    func clearTargetAlbum(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        send(.delete, "api/settings/target-album", completion: completion)
-    }
 }
 
 struct TargetAlbumResponse: Codable {
