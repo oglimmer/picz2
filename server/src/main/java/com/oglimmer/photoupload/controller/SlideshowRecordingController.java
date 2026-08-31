@@ -119,44 +119,6 @@ public class SlideshowRecordingController {
     return ResponseEntity.ok(response);
   }
 
-  @GetMapping("/recordings/{id}")
-  public ResponseEntity<RecordingResponse> getRecording(@PathVariable Long id) {
-    RecordingInfo recording = slideshowRecordingService.getRecording(id);
-
-    RecordingResponse response =
-        RecordingResponse.builder().success(true).recording(recording).build();
-
-    return ResponseEntity.ok(response);
-  }
-
-  /**
-   * @param format {@code m4a} asks for the AAC rendition instead of the Opus/WebM master. Apple's
-   *     media stack has no WebM demuxer, so every iOS client passes it; browsers pass nothing.
-   */
-  @GetMapping("/recordings/{id}/audio")
-  public ResponseEntity<StreamingResponseBody> getRecordingAudio(
-      @PathVariable Long id,
-      @RequestParam(required = false) String format,
-      @RequestHeader(value = "Range", required = false) String rangeHeader) {
-    try {
-      RecordingAudioInfo audioInfo = slideshowRecordingService.getRecordingAudioInfo(id, format);
-      if (audioInfo.getStorageKey() != null) {
-        return serveAudioFromS3(audioInfo, rangeHeader);
-      }
-      return RangeRequestHandler.serveFileWithRangeSupport(
-          audioInfo.getAudioPath(),
-          rangeHeader,
-          contentTypeFor(audioInfo),
-          audioInfo.getAudioFilename());
-    } catch (AudioNotReadyException e) {
-      // Not an error: the rendition is being made. Let the handler answer 503 + Retry-After.
-      throw e;
-    } catch (Exception e) {
-      log.error("Error serving recording audio", e);
-      throw new RuntimeException("Error serving recording audio: " + e.getMessage(), e);
-    }
-  }
-
   @DeleteMapping("/recordings/{id}")
   public ResponseEntity<MessageResponse> deleteRecording(@PathVariable Long id) {
     try {
@@ -168,18 +130,6 @@ public class SlideshowRecordingController {
 
     MessageResponse response =
         MessageResponse.builder().success(true).message("Recording deleted successfully").build();
-
-    return ResponseEntity.ok(response);
-  }
-
-  // Public access endpoints using public_token
-  @GetMapping("/r/{publicToken}")
-  public ResponseEntity<RecordingResponse> getRecordingByPublicToken(
-      @PathVariable String publicToken) {
-    RecordingInfo recording = slideshowRecordingService.getRecordingByPublicToken(publicToken);
-
-    RecordingResponse response =
-        RecordingResponse.builder().success(true).recording(recording).build();
 
     return ResponseEntity.ok(response);
   }

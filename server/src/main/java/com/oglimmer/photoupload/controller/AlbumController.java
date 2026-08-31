@@ -15,7 +15,6 @@ import com.oglimmer.photoupload.model.FilesResponse;
 import com.oglimmer.photoupload.model.MapView;
 import com.oglimmer.photoupload.model.MapViewRequest;
 import com.oglimmer.photoupload.model.MessageResponse;
-import com.oglimmer.photoupload.model.ReorderRequest;
 import com.oglimmer.photoupload.model.ReorderResponse;
 import com.oglimmer.photoupload.model.TagIdsRequest;
 import com.oglimmer.photoupload.model.TagInfo;
@@ -253,20 +252,6 @@ public class AlbumController {
 
     MessageResponse response =
         MessageResponse.builder().success(true).message("Album deleted successfully").build();
-
-    return ResponseEntity.ok(response);
-  }
-
-  @PutMapping("/reorder")
-  public ResponseEntity<MessageResponse> reorderAlbums(@RequestBody ReorderRequest reorderRequest) {
-    if (reorderRequest.getFileIds() == null || reorderRequest.getFileIds().isEmpty()) {
-      throw new ValidationException("Album IDs are required");
-    }
-
-    albumService.reorderAlbums(reorderRequest.getFileIds());
-
-    MessageResponse response =
-        MessageResponse.builder().success(true).message("Albums reordered successfully").build();
 
     return ResponseEntity.ok(response);
   }

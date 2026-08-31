@@ -284,27 +284,6 @@ public class AlbumService {
         currentUser.getEmail());
   }
 
-  @Transactional
-  public void reorderAlbums(List<Long> albumIds) {
-    User currentUser = userContext.getCurrentUser();
-
-    // Validate all album IDs exist and belong to current user
-    for (Long albumId : albumIds) {
-      if (albumRepository.findByUserAndId(currentUser, albumId).isEmpty()) {
-        throw new ResourceNotFoundException("Album", "id", albumId);
-      }
-    }
-
-    // Update display order for each album
-    for (int i = 0; i < albumIds.size(); i++) {
-      Long albumId = albumIds.get(i);
-      Album album = albumRepository.findByUserAndId(currentUser, albumId).orElseThrow();
-      album.setDisplayOrder(i);
-    }
-
-    log.info("Reordered {} albums for user: {}", albumIds.size(), currentUser.getEmail());
-  }
-
   // Removed: Images cannot move between albums
 
   @Transactional

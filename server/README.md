@@ -341,50 +341,7 @@ curl -X POST http://localhost:3000/upload \
 }
 ```
 
-### 2. Upload Multiple Files
-
-**POST** `/upload/multiple`
-
-**Form Data:**
-
-- `files`: Array of files to upload
-
-**Example (curl):**
-
-```bash
-curl -X POST http://localhost:3000/upload/multiple \
-  -F "files=@/path/to/photo1.jpg" \
-  -F "files=@/path/to/photo2.jpg"
-```
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "count": 2,
-  "files": [
-    {
-      "originalName": "photo1.jpg",
-      "filename": "photo1-1234567890-abc123.jpg",
-      "size": 1024000,
-      "mimetype": "image/jpeg",
-      "path": "/path/to/uploads/photo1-1234567890-abc123.jpg",
-      "uploadedAt": "2025-10-06T21:00:00Z"
-    },
-    {
-      "originalName": "photo2.jpg",
-      "filename": "photo2-1234567891-def456.jpg",
-      "size": 2048000,
-      "mimetype": "image/jpeg",
-      "path": "/path/to/uploads/photo2-1234567891-def456.jpg",
-      "uploadedAt": "2025-10-06T21:00:00Z"
-    }
-  ]
-}
-```
-
-### 3. List Files
+### 2. List Files
 
 **GET** `/files`
 
@@ -408,17 +365,7 @@ curl -X POST http://localhost:3000/upload/multiple \
 }
 ```
 
-### 4. Download File
-
-**GET** `/files/{filename}`
-
-**Example:**
-
-```
-http://localhost:3000/files/photo-1234567890-abc123.jpg
-```
-
-### 5. Health Check
+### 3. Health Check
 
 **GET** `/health`
 
@@ -432,7 +379,7 @@ http://localhost:3000/files/photo-1234567890-abc123.jpg
 }
 ```
 
-### 6. Root
+### 4. Root
 
 **GET** `/`
 
@@ -549,14 +496,6 @@ When you run the server, the Share Extension will automatically upload files to 
 ```bash
 curl -X POST http://localhost:3000/upload \
   -F "file=@test-image.jpg"
-```
-
-**Multiple upload:**
-
-```bash
-curl -X POST http://localhost:3000/upload/multiple \
-  -F "files=@test1.jpg" \
-  -F "files=@test2.jpg"
 ```
 
 **List files:**

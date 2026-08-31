@@ -43,11 +43,6 @@ public class StorageBackendController {
     return ResponseEntity.ok(storageBackendService.listSelectable());
   }
 
-  @GetMapping("/{id}")
-  public ResponseEntity<StorageBackendResponse> get(@PathVariable Long id) {
-    return ResponseEntity.ok(storageBackendService.get(id));
-  }
-
   @PostMapping
   public ResponseEntity<StorageBackendResponse> create(@RequestBody StorageBackendRequest request) {
     return ResponseEntity.status(HttpStatus.CREATED).body(storageBackendService.create(request));

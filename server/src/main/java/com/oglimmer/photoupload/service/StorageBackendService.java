@@ -62,11 +62,6 @@ public class StorageBackendService {
     return repository.findSelectableForUser(user.getId()).stream().map(this::toResponse).toList();
   }
 
-  @Transactional(readOnly = true)
-  public StorageBackendResponse get(Long id) {
-    return toResponse(requireOwned(id));
-  }
-
   @Transactional
   public StorageBackendResponse create(StorageBackendRequest request) {
     User user = userContext.getCurrentUser();
