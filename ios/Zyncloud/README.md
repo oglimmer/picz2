@@ -106,6 +106,21 @@ Scripts/check-entitlements.sh <exported .app>       # plus the *signed* aps-envi
 Scripts/check-infoplist.sh                          # usage string, arm64, device family, encryption
 ```
 
+### Version numbers
+
+Do not hand-edit them. `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` are written by
+`../../oglimmer.sh release`, which reads the repo-root `VERSION` file — the same file that
+drives `frontend/package.json` and `server/pom.xml`, so all three ship one number.
+
+Both keys live in the two *project-level* build configurations, so the app, the share extension
+and the test bundle inherit them and stay in step; the App Store rejects a build whose extension
+disagrees with its app. `CURRENT_PROJECT_VERSION` (the build number) is `git rev-list --count
+HEAD`, because App Store Connect refuses an upload that does not raise it.
+
+Only the release path writes them. A plain `oglimmer.sh build` leaves the project file alone —
+there is no iOS image for it to tag — so a build between releases carries the last released
+version, which is what you want.
+
 ## Pointing at a different server
 
 Release builds always use production. Debug builds honour the `ZYNCLOUD_BASE_URL` environment
