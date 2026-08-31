@@ -27,6 +27,7 @@ WORKER_DEPLOYMENT="$DEFAULT_WORKER_DEPLOYMENT"
 # Directories
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 SERVER_DIR="$SCRIPT_DIR/server"
+IOS_DIR="$SCRIPT_DIR/ios/Zyncloud"
 VERSION_FILE="$SCRIPT_DIR/VERSION"
 
 # Default options (can be overridden by environment variables)
@@ -120,6 +121,8 @@ VERSION MANAGEMENT:
       - Backend image tag  (e.g., registry.oglimmer.com/${DEFAULT_BACKEND_IMAGE}:X.Y.Z)
       - frontend/package.json "version" field
       - server/pom.xml artifact version (keeps -SNAPSHOT on main unless --release)
+      - iOS MARKETING_VERSION, plus CURRENT_PROJECT_VERSION from the commit count
+        (release only - there is no iOS image for a plain build to tag)
 
     Use "${SCRIPT_NAME} release" to bump the version, tag, and build a release.
 
@@ -313,6 +316,43 @@ update_backend_version() {
     sed_inplace "/<artifactId>photo-upload-server<\/artifactId>/{n;s|<version>.*</version>|<version>$pom_version</version>|;}" "$SERVER_DIR/pom.xml"
 }
 
+# Write the iOS app's version into project.pbxproj.
+#
+# Both keys live in the two *project-level* build configurations, so the app target, the share
+# extension and the test bundle all inherit them - which is what keeps the extension's version
+# equal to the app's, as the App Store requires.
+#
+# MARKETING_VERSION is CFBundleShortVersionString, the version a user sees. It never carries
+# -SNAPSHOT: CFBundleShortVersionString must be a dotted number, so unlike package.json and
+# pom.xml there is nothing to re-arm afterwards.
+#
+# CURRENT_PROJECT_VERSION is CFBundleVersion, the build number. App Store Connect refuses an
+# upload whose build number is not higher than the last one for that version, so it is derived
+# from the commit count rather than left to a human. Counting before the release commit is
+# deliberate and safe: every release adds at least two commits, so the number always climbs.
+#
+# Called from the release path only. There is no iOS image to build, so a plain `build` has no
+# reason to touch the project file.
+update_ios_version() {
+    local v="$1"
+    local pbxproj="$IOS_DIR/Zyncloud.xcodeproj/project.pbxproj"
+    if [[ ! -f "$pbxproj" ]]; then
+        log_warning "ios/Zyncloud/Zyncloud.xcodeproj/project.pbxproj not found, skipping"
+        return
+    fi
+
+    local build_number
+    build_number=$(git rev-list --count HEAD 2>/dev/null || echo "1")
+
+    log_info "Updating iOS app to version $v (build $build_number)"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${RESET} sed MARKETING_VERSION=$v CURRENT_PROJECT_VERSION=$build_number project.pbxproj"
+        return
+    fi
+    sed_inplace "s/MARKETING_VERSION = .*;/MARKETING_VERSION = $v;/" "$pbxproj"
+    sed_inplace "s/CURRENT_PROJECT_VERSION = .*;/CURRENT_PROJECT_VERSION = $build_number;/" "$pbxproj"
+}
+
 get_platform_args() {
     case "$PLATFORM" in
         amd64) echo "--platform linux/amd64" ;;
@@ -477,9 +517,11 @@ execute_release() {
     echo "$new_version" > "$VERSION_FILE"
     update_frontend_version "$new_version"
     update_backend_version "$new_version" true
+    update_ios_version "$new_version"
 
     # Commit + tag the release
-    git add "$VERSION_FILE" "$FRONTEND_DIR/package.json" "$SERVER_DIR/pom.xml"
+    git add "$VERSION_FILE" "$FRONTEND_DIR/package.json" "$SERVER_DIR/pom.xml" \
+        "$IOS_DIR/Zyncloud.xcodeproj/project.pbxproj"
     git commit -m "Release version $new_version"
     git tag "v$new_version"
     log_success "Created git commit and tag v$new_version"
