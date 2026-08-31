@@ -20,7 +20,7 @@ final class NarrationAudioRecorder {
         var errorDescription: String? {
             switch self {
             case .permissionDenied:
-                "Zyncloud cannot use the microphone. Allow microphone access for Zyncloud in the iOS Settings app, then try again."
+                "Picz cannot use the microphone. Allow microphone access for Picz in the iOS Settings app, then try again."
             case .couldNotStart:
                 "The microphone could not be started."
             }

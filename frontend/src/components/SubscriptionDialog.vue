@@ -123,8 +123,8 @@
                 <strong>Want these on your phone too?</strong>
                 <!-- The space is explicit because Vue's default `whitespace: 'condense'` drops a
                      whitespace-only text node between two elements when it contains a newline —
-                     which glued "Zyncloud" to "on the App Store". Do not "tidy" this away. -->
-                Get <em>Zyncloud</em>{{ ' ' }}
+                     which glued "Picz" to "on the App Store". Do not "tidy" this away. -->
+                Get <em>Picz</em>{{ ' ' }}
                 <a
                   v-if="appStoreUrl"
                   class="subdlg-push-link"
@@ -245,7 +245,7 @@ import { useApi } from '../composables/useApi'
 /**
  * Where the iOS app lives.
  *
- * Currently the App Store's iPhone apps page, not a listing for Zyncloud — a stand-in until the
+ * Currently the App Store's iPhone apps page, not a listing for Picz — a stand-in until the
  * app is published, so the note reads as a link and lands somewhere real rather than nowhere.
  * Swap in `https://apps.apple.com/app/id…` the day the listing exists; this constant is the only
  * thing that has to change. Setting it back to '' renders the note as plain text instead.

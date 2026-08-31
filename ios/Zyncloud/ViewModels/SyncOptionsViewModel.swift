@@ -1,7 +1,7 @@
 import Combine
 import Foundation
-import Photos
 import os
+import Photos
 
 @MainActor
 class SyncOptionsViewModel: ViewModelProtocol {
@@ -284,9 +284,9 @@ class SyncOptionsViewModel: ViewModelProtocol {
         switch authStatus {
         case .authorized: nil
         case .limited: "Only the photos you picked can sync. Everything else is skipped."
-        case .denied: "Zyncloud cannot see your photos, so nothing will sync."
+        case .denied: "Picz cannot see your photos, so nothing will sync."
         case .restricted: "Photo access is blocked on this device, so nothing will sync."
-        case .notDetermined: "Zyncloud needs access to your photos before it can sync."
+        case .notDetermined: "Picz needs access to your photos before it can sync."
         @unknown default: nil
         }
     }

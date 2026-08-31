@@ -602,7 +602,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
     private func showPhotoAccessAlert() {
         alertState = AlertState(
             title: "Photo Access Needed",
-            message: "Zyncloud cannot open your photo library. Allow access for Zyncloud in the iOS Settings app, then try again.",
+            message: "Picz cannot open your photo library. Allow access for Picz in the iOS Settings app, then try again.",
         )
     }
 

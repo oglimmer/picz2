@@ -8,7 +8,7 @@
     <div class="legal-content">
       <p>
         This Privacy Policy explains how oglimmer.com / Oliver Zimpasser ("we",
-        "our", "us") processes personal data when you use Picz2 – Picture Sharing
+        "our", "us") processes personal data when you use Picz – Picture Sharing
         (the "Platform"). It applies to all visitors and registered users.
       </p>
 
@@ -200,7 +200,7 @@
     </div>
 
     <footer class="legal-footer">
-      <p>© {{ new Date().getFullYear() }} Picz2</p>
+      <p>© {{ new Date().getFullYear() }} Picz</p>
       <router-link to="/">Home</router-link> |
       <router-link to="/privacy">Privacy</router-link> |
       <router-link to="/terms">Terms</router-link> |
