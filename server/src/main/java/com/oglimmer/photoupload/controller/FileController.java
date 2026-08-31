@@ -2,7 +2,6 @@
 package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
-import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
@@ -12,17 +11,12 @@ import com.oglimmer.photoupload.model.TagOperationResponse;
 import com.oglimmer.photoupload.model.TagRequest;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.service.FileStorageService;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -69,31 +63,6 @@ public class FileController {
             .build();
 
     return ResponseEntity.ok(response);
-  }
-
-  @GetMapping("/{filename:.+}")
-  public ResponseEntity<?> downloadFile(@PathVariable String filename) {
-    try {
-      Path filePath = fileStorageService.getFile(filename);
-      Resource resource = new UrlResource(filePath.toUri());
-
-      if (!resource.exists()) {
-        throw new ResourceNotFoundException("File not found");
-      }
-
-      return ResponseEntity.ok()
-          .contentType(MediaType.APPLICATION_OCTET_STREAM)
-          .header(
-              HttpHeaders.CONTENT_DISPOSITION,
-              "attachment; filename=\"" + resource.getFilename() + "\"")
-          .body(resource);
-
-    } catch (ResourceNotFoundException e) {
-      throw e;
-    } catch (Exception e) {
-      log.error("Error downloading file", e);
-      throw new RuntimeException("Error downloading file: " + e.getMessage(), e);
-    }
   }
 
   @DeleteMapping("/{id}")

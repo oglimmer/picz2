@@ -625,10 +625,6 @@ public class FileStorageService {
     return convertToFileInfoOptimized(metadata);
   }
 
-  public Path getFile(String filename) {
-    return this.fileStorageLocation.resolve(filename).normalize();
-  }
-
   private void validateFile(MultipartFile file) {
     if (file.isEmpty()) {
       throw new ValidationException("Cannot upload empty file");

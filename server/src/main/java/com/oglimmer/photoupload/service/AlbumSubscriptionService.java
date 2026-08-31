@@ -153,40 +153,6 @@ public class AlbumSubscriptionService {
     return new AlbumSubscriptionResponse("Unsubscribed successfully.");
   }
 
-  /**
-   * Unsubscribe using email and album share token (legacy method)
-   *
-   * @param email Subscriber email
-   * @param shareToken Album share token
-   * @return Response message
-   */
-  @Transactional
-  public AlbumSubscriptionResponse unsubscribe(String email, String shareToken) {
-    // Not gated on published, unlike subscribing: someone holding an unsubscribe link must always
-    // be able to get out, including while the album is unpublished.
-    Album album =
-        albumRepository
-            .findByShareToken(shareToken)
-            .orElseThrow(() -> new ResourceNotFoundException("Album", "shareToken", shareToken));
-
-    AlbumSubscription subscription =
-        subscriptionRepository
-            .findByEmailAndAlbum(email, album)
-            .orElseThrow(
-                () ->
-                    new ResourceNotFoundException(
-                        "Subscription not found for email: "
-                            + email
-                            + " and album: "
-                            + album.getName()));
-
-    subscription.setActive(false);
-
-    log.info("Subscription deactivated for email: {} on album: {}", email, album.getName());
-
-    return new AlbumSubscriptionResponse("Unsubscribed successfully.");
-  }
-
   /** Map entity to response DTO */
   private AlbumSubscriptionResponse mapToResponse(AlbumSubscription subscription, String message) {
     AlbumSubscriptionResponse response = new AlbumSubscriptionResponse();

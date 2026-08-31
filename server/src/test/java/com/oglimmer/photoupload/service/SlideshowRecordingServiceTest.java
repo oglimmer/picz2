@@ -73,7 +73,7 @@ class SlideshowRecordingServiceTest {
   }
 
   @Test
-  void getRecordingAudioInfoResolvesUnderUploadDir() {
+  void getRecordingAudioInfoByPublicTokenResolvesUnderUploadDir() {
     when(props.getUploadDir()).thenReturn("/base");
     SlideshowRecording r = new SlideshowRecording();
     r.setId(1L);
@@ -84,9 +84,10 @@ class SlideshowRecordingServiceTest {
     r.setAlbum(album);
     r.setAudioPath("recordings/a.webm");
     r.setAudioFilename("a.webm");
-    when(recRepo.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(r));
+    r.setPublicToken("tok");
+    when(recRepo.findByPublicToken("tok")).thenReturn(Optional.of(r));
 
-    var audioInfo = service.getRecordingAudioInfo(1L);
+    var audioInfo = service.getRecordingAudioInfoByPublicToken("tok", null);
     assertNotNull(audioInfo);
     assertEquals("a.webm", audioInfo.getAudioFilename());
     assertTrue(audioInfo.getAudioPath().toString().endsWith("/base/recordings/a.webm"));

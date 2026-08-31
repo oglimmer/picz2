@@ -81,22 +81,4 @@ public class AlbumSubscriptionController {
 
     return ResponseEntity.ok(response);
   }
-
-  /**
-   * Unsubscribe from album updates (legacy method using email and shareToken)
-   *
-   * @param email Subscriber email
-   * @param shareToken Album share token
-   * @return Unsubscribe response
-   */
-  @PostMapping("/unsubscribe")
-  public ResponseEntity<AlbumSubscriptionResponse> unsubscribe(
-      @RequestParam String email, @RequestParam String shareToken) {
-
-    log.info("Unsubscribe request received for email: {} on album: {}", email, shareToken);
-
-    AlbumSubscriptionResponse response = subscriptionService.unsubscribe(email, shareToken);
-
-    return ResponseEntity.ok(response);
-  }
 }
