@@ -1,8 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.storage;
 
-import com.oglimmer.photoupload.entity.FileMetadata;
-
 /**
  * Single source of truth for the S3 key convention. Keeps the prefix check co-located with the key
  * generators so they cannot drift.
@@ -61,14 +59,6 @@ public final class StoragePaths {
 
   public static String audioAacKey(String audioFilename) {
     return AUDIO_PREFIX + aacFilename(audioFilename);
-  }
-
-  /**
-   * Key for the original file. Uses {@code stored_filename} which already carries a UUID +
-   * timestamp suffix, so collisions are not a concern.
-   */
-  public static String originalKey(FileMetadata metadata) {
-    return ORIGINALS_PREFIX + metadata.getStoredFilename();
   }
 
   public static String derivativeThumbnailKey(Long assetId) {

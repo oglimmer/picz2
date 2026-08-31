@@ -54,9 +54,6 @@ public interface ProcessingJobRepository extends JpaRepository<ProcessingJob, Lo
 
   long countByStatus(JobStatus status);
 
-  @Query("SELECT COUNT(j) FROM ProcessingJob j WHERE j.status IN :statuses")
-  long countByStatusIn(@Param("statuses") List<JobStatus> statuses);
-
   /**
    * Single round-trip COUNT grouped by status. The metrics gauge and the backpressure filter both
    * read these values, so doing one query and caching the map is materially cheaper than six

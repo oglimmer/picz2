@@ -577,20 +577,6 @@ public class FileStorageService {
   }
 
   @Transactional(readOnly = true)
-  public List<FileInfo> listFilesByTag(String tagName) {
-    User currentUser = userContext.getCurrentUser();
-    Tag tag =
-        tagRepository
-            .findByUserAndName(currentUser, tagName)
-            .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
-
-    return imageTagRepository.findAll().stream()
-        .filter(imageTag -> imageTag.getTag().getId().equals(tag.getId()))
-        .map(imageTag -> convertToFileInfo(imageTag.getFileMetadata()))
-        .collect(Collectors.toList());
-  }
-
-  @Transactional(readOnly = true)
   public List<FileInfo> listFilesByAlbum(Long albumId) {
     User currentUser = userContext.getCurrentUser();
     // Return files in specified album (albumId required)

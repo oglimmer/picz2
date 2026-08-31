@@ -47,9 +47,6 @@ public interface AlbumRepository extends JpaRepository<Album, Long> {
    */
   Optional<Album> findByShareTokenAndPublishedTrue(String shareToken);
 
-  // Find albums created by user after a specific time (for subscription notifications)
-  List<Album> findByUserAndCreatedAtAfter(User user, Instant createdAt);
-
   /**
    * Albums of this owner that went public after a point in time — the feed behind the "new albums"
    * subscription. Keyed on publishedAt, not createdAt: a subscriber should hear about an album when

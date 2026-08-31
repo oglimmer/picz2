@@ -12,8 +12,4 @@ public interface AlbumEnabledTagRepository extends JpaRepository<AlbumEnabledTag
   List<AlbumEnabledTag> findByAlbumId(Long albumId);
 
   boolean existsByAlbumIdAndTagId(Long albumId, Long tagId);
-
-  void deleteByAlbumIdAndTagId(Long albumId, Long tagId);
-
-  void deleteByAlbumId(Long albumId);
 }
