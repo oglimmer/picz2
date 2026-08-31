@@ -36,7 +36,6 @@ export interface PresentationGroupsComposable {
     fileId: number,
     tag: string,
   ) => PresentationGroup | undefined;
-  hasGroups: (tag: string) => boolean;
   buildSections: (files: AlbumFile[], tag: string) => PresentationSection[];
   groupContextFor: (
     sections: PresentationSection[],
@@ -178,11 +177,6 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     return groups.value.find((g) => g.tag === tag && g.startFileId === fileId);
   }
 
-  function hasGroups(tag: string): boolean {
-    if (!tag) return false;
-    return groups.value.some((g) => g.tag === tag);
-  }
-
   function buildSections(
     files: AlbumFile[],
     tag: string,
@@ -256,7 +250,6 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     updateGroup,
     deleteGroup,
     groupStartingAt,
-    hasGroups,
     buildSections,
     groupContextFor,
   };

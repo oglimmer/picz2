@@ -1,4 +1,4 @@
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useApi } from "./useApi";
 
 declare const __APP_VERSION__: string;
@@ -45,11 +45,6 @@ export function useVersion() {
     }
   }
 
-  const hasBackendInfo = computed(
-    () =>
-      backendVersion.value !== "unknown" || backendCommit.value !== "unknown",
-  );
-
   onMounted(() => {
     // Fire and forget; UI remains usable if this fails
     loadBackendInfo();
@@ -60,7 +55,6 @@ export function useVersion() {
     frontendCommit,
     backendVersion,
     backendCommit,
-    hasBackendInfo,
     loading,
     error,
     loadBackendInfo,
