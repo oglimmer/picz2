@@ -35,6 +35,7 @@ BUILD_FRONTEND="${BUILD_FRONTEND:-false}"
 BUILD_BACKEND="${BUILD_BACKEND:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+VERSION_OVERRIDE=""
 RESTART="${RESTART:-true}"
 PUSH="${PUSH:-true}"
 NO_CACHE="${NO_CACHE:-false}"
@@ -436,8 +437,10 @@ restart_deployment() {
 }
 
 execute_build() {
+    # execute_release sets VERSION_OVERRIDE so a --dry-run preview shows the version being
+    # released rather than the one still on disk - a dry run never writes the VERSION file.
     local version
-    version=$(get_version)
+    version="${VERSION_OVERRIDE:-$(get_version)}"
 
     echo -e "${BOLD}=== Build Configuration ===${RESET}"
     echo "Version:           $version"
@@ -481,6 +484,11 @@ execute_build() {
 rearm_snapshot() {
     local v="$1"
     log_info "Re-arming -SNAPSHOT for next development iteration"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v-SNAPSHOT frontend/package.json server/pom.xml"
+        echo -e "${YELLOW}[DRY-RUN]${RESET} git commit -m \"Prepare for next development iteration\""
+        return
+    fi
     if [[ -f "$FRONTEND_DIR/package.json" ]]; then
         sed_inplace "s/\"version\": \".*\"/\"version\": \"$v-SNAPSHOT\"/" "$FRONTEND_DIR/package.json"
     fi
@@ -514,19 +522,28 @@ execute_release() {
     log_info "Releasing version $new_version"
 
     # Write release versions
-    echo "$new_version" > "$VERSION_FILE"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${RESET} echo $new_version > VERSION"
+    else
+        echo "$new_version" > "$VERSION_FILE"
+    fi
     update_frontend_version "$new_version"
     update_backend_version "$new_version" true
     update_ios_version "$new_version"
 
     # Commit + tag the release
-    git add "$VERSION_FILE" "$FRONTEND_DIR/package.json" "$SERVER_DIR/pom.xml" \
-        "$IOS_DIR/Zyncloud.xcodeproj/project.pbxproj"
-    git commit -m "Release version $new_version"
-    git tag "v$new_version"
-    log_success "Created git commit and tag v$new_version"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${RESET} git commit -m \"Release version $new_version\" && git tag v$new_version"
+    else
+        git add "$VERSION_FILE" "$FRONTEND_DIR/package.json" "$SERVER_DIR/pom.xml" \
+            "$IOS_DIR/Zyncloud.xcodeproj/project.pbxproj"
+        git commit -m "Release version $new_version"
+        git tag "v$new_version"
+        log_success "Created git commit and tag v$new_version"
+    fi
 
     # Build the release (both components, release mode)
+    VERSION_OVERRIDE="$new_version"
     BUILD_FRONTEND=true
     BUILD_BACKEND=true
     RELEASE_FLAG=true
