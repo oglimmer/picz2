@@ -171,7 +171,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
         request.setValue(
             api.tusUploadMetadata(filename: exp.filename, mimeType: exp.mimeType,
                                   contentId: asset.localIdentifier, albumId: albumId,
-                                  auth: authValue),
+                                  auth: authValue, checksum: exp.checksum),
             forHTTPHeaderField: "Upload-Metadata",
         )
         api.addBasicAuth(to: &request)
@@ -221,10 +221,14 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
                     completion: completion,
                 )
             case 409:
-                // Pre-create dedupe — the server already has a row for this contentId, anywhere
-                // in the account, and refuses the bytes. Reported as its own outcome rather than
-                // as a success: nothing was stored, so an upload aimed at a particular album
-                // produces no new photo there, and the caller has to be able to say so.
+                // Pre-create dedupe — the server already holds this asset somewhere in the
+                // account, matched on either the contentId or the checksum, and refuses the bytes.
+                // The checksum arm is the one that fires for a second device: the same iCloud
+                // photo synced from an iPad has its own contentId but identical bytes.
+                //
+                // Reported as its own outcome rather than as a success: nothing was stored, so an
+                // upload aimed at a particular album produces no new photo there, and the caller
+                // has to be able to say so.
                 discardExport(exp)
                 SyncLogger.shared.logUploadDeduped(assetId: assetId)
                 UploadStore.shared.markUploaded(assetId, checksum: exp.checksum)
@@ -794,14 +798,24 @@ extension APIClient {
     ///
     /// - Parameter auth: the credential the server's pre-create hook authenticates with — a
     ///   scoped upload token normally, ``legacyAuthMetadataValue`` against an older server.
+    /// - Parameter checksum: SHA-256 over the exact bytes about to be sent. Sent so the server can
+    ///   recognise a photo it already holds from *another* device. `contentId` cannot do that job:
+    ///   it is a `PHAsset.localIdentifier`, which an iPhone and an iPad each mint separately for
+    ///   their own copy of one iCloud photo. The bytes are the same — ``exportAssetToTempFile``
+    ///   writes the untouched original resource — so the hash is what matches. Optional only so an
+    ///   older server, which ignores the key, is unaffected.
     func tusUploadMetadata(filename: String, mimeType: String, contentId: String,
-                           albumId: Int? = nil, auth: String? = nil) -> String
+                           albumId: Int? = nil, auth: String? = nil,
+                           checksum: String? = nil) -> String
     {
         var parts: [(String, String)] = [
             ("filename", filename),
             ("filetype", mimeType),
             ("contentId", contentId),
         ]
+        if let checksum, !checksum.isEmpty {
+            parts.append(("checksum", checksum))
+        }
         if let albumId {
             parts.append(("albumId", String(albumId)))
         }

@@ -32,6 +32,32 @@ struct TusUploadMetadataTests {
         #expect(decoded["contentId"] == "ABC-123/L0/001")
     }
 
+    /// The cross-device dedupe key. Without it the server falls back to `contentId`, which an
+    /// iPhone and an iPad never share for the same iCloud photo — that is what duplicated every
+    /// asset on an account synced from two devices.
+    @Test func encodesTheChecksumWhenGiven() {
+        let api = APIClient()
+        let header = api.tusUploadMetadata(
+            filename: "IMG_0001.HEIC",
+            mimeType: "image/heic",
+            contentId: "ABC-123/L0/001",
+            checksum: "e3b0c44298fc1c149afbf4c8996fb924",
+        )
+
+        #expect(pairs(header)["checksum"] == "e3b0c44298fc1c149afbf4c8996fb924")
+    }
+
+    /// A missing checksum must leave the key out entirely rather than send an empty value: the
+    /// server treats blank as "unknown" either way, but an absent key keeps the header honest.
+    @Test func omitsTheChecksumKeyWhenThereIsNone() {
+        let api = APIClient()
+        #expect(pairs(api.tusUploadMetadata(
+            filename: "a.jpg", mimeType: "image/jpeg", contentId: "id"))["checksum"] == nil)
+        #expect(pairs(api.tusUploadMetadata(
+            filename: "a.jpg", mimeType: "image/jpeg", contentId: "id",
+            checksum: ""))["checksum"] == nil)
+    }
+
     @Test func everyValueIsBase64Encoded() {
         let api = APIClient()
         let header = api.tusUploadMetadata(filename: "a.jpg", mimeType: "image/jpeg", contentId: "id")

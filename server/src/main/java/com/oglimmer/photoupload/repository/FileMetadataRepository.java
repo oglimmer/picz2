@@ -81,6 +81,23 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
       @Param("albumId") Long albumId,
       @Param("userId") Long userId);
 
+  /**
+   * Rows of {@code userId} whose original bytes hash to {@code checksum}, in any of their albums.
+   *
+   * <p>Exists for the TUS path, which has no equivalent of the multipart flow's {@link
+   * #findByChecksum(String)} sweep. Scoped to the user on purpose: {@code findByChecksum} is
+   * account-blind, and a hook that rejected an upload because a *different* account holds the same
+   * bytes would both leak that fact and lose the user's photo.
+   *
+   * <p>The case this closes: the same iCloud photo synced from an iPhone and an iPad. Each device
+   * mints its own {@code PHAsset.localIdentifier}, so the {@code contentId} check cannot see the
+   * pair — but {@code PHAssetResourceManager} writes the untouched original resource on both, so
+   * the SHA-256 matches.
+   */
+  @Query("SELECT f FROM FileMetadata f WHERE f.checksum = :checksum AND f.album.user.id = :userId")
+  List<FileMetadata> findByChecksumAndUserId(
+      @Param("checksum") String checksum, @Param("userId") Long userId);
+
   @Query(
       "SELECT f.checksum FROM FileMetadata f WHERE f.album.user.id = :userId AND f.uploadedAt >= :uploadedAt AND f.checksum IS NOT NULL")
   List<String> findChecksumsByUserAndUploadedAtAfter(
