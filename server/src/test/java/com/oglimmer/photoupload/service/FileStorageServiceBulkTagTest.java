@@ -53,7 +53,6 @@ class FileStorageServiceBulkTagTest {
   private User user;
   private Album album;
   private Tag allTag;
-  private Tag noTag;
 
   @BeforeEach
   void setUp(@TempDir Path tempDir) {
@@ -98,24 +97,19 @@ class FileStorageServiceBulkTagTest {
     album.setName("Holiday");
 
     allTag = tag(10L, FileStorageService.ALL_TAG);
-    noTag = tag(11L, FileStorageService.NO_TAG);
 
     when(userContext.getCurrentUser()).thenReturn(user);
     when(albumRepo.findByUserAndId(user, ALBUM_ID)).thenReturn(Optional.of(album));
     when(tagRepo.findByUserAndName(user, FileStorageService.ALL_TAG))
         .thenReturn(Optional.of(allTag));
-    when(tagRepo.findByUserAndName(user, FileStorageService.NO_TAG)).thenReturn(Optional.of(noTag));
-    // no_tag is now provisioned in its own transaction and resolved by id, not re-queried.
-    when(systemTagProvisioner.ensureTag(user, FileStorageService.NO_TAG)).thenReturn(noTag.getId());
-    when(tagRepo.getReferenceById(noTag.getId())).thenReturn(noTag);
   }
 
   @Test
-  void addSkipsFilesThatAlreadyHaveTheTagAndDropsNoTag() {
-    FileMetadata untagged = file(100L, noTag);
+  void addSkipsFilesThatAlreadyHaveTheTag() {
+    FileMetadata untagged = file(100L);
     FileMetadata tagged = file(101L, allTag);
-    FileMetadata staleNoTag = file(102L, noTag, tag(12L, "beach"));
-    givenAlbumFiles(untagged, tagged, staleNoTag);
+    FileMetadata beachOnly = file(102L, tag(12L, "beach"));
+    givenAlbumFiles(untagged, tagged, beachOnly);
 
     int changed = svc.addTagToAllFilesInAlbum(ALBUM_ID, FileStorageService.ALL_TAG);
 
@@ -129,8 +123,8 @@ class FileStorageServiceBulkTagTest {
     // orphanRemoval, so the collection is what decides which rows survive the flush.
     assertEquals(List.of(FileStorageService.ALL_TAG), tagNames(untagged));
     assertEquals(List.of(FileStorageService.ALL_TAG), tagNames(tagged));
-    // Stale no_tag next to a real tag is healed, not preserved.
-    assertEquals(List.of("beach", FileStorageService.ALL_TAG), tagNames(staleNoTag));
+    // `all` is an ordinary tag now, so it sits alongside the ones already there.
+    assertEquals(List.of("beach", FileStorageService.ALL_TAG), tagNames(beachOnly));
   }
 
   @Test
@@ -144,7 +138,7 @@ class FileStorageServiceBulkTagTest {
   }
 
   @Test
-  void removeSkipsFilesWithoutTheTagAndRestoresNoTag() {
+  void removeSkipsFilesWithoutTheTagAndLeavesTheRestBare() {
     FileMetadata onlyAll = file(100L, allTag);
     FileMetadata allPlusBeach = file(101L, allTag, tag(12L, "beach"));
     FileMetadata withoutAll = file(102L, tag(12L, "beach"));
@@ -154,14 +148,11 @@ class FileStorageServiceBulkTagTest {
 
     assertEquals(2, changed);
     // The tag is gone from the collection, which is what orphanRemoval acts on.
-    assertEquals(List.of(FileStorageService.NO_TAG), tagNames(onlyAll));
+    assertEquals(List.of(), tagNames(onlyAll));
     assertEquals(List.of("beach"), tagNames(allPlusBeach));
     assertEquals(List.of("beach"), tagNames(withoutAll));
-    // Only the file left with no real tag gets no_tag back.
-    ArgumentCaptor<ImageTag> saved = ArgumentCaptor.forClass(ImageTag.class);
-    verify(imageTagRepo, times(1)).save(saved.capture());
-    assertEquals(100L, saved.getValue().getFileMetadata().getId());
-    assertEquals(FileStorageService.NO_TAG, saved.getValue().getTag().getName());
+    // Nothing is written back: with `no_tag` retired (D68), a file may simply have no tags.
+    verify(imageTagRepo, never()).save(any());
   }
 
   private static List<String> tagNames(FileMetadata metadata) {

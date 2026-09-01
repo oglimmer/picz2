@@ -2,15 +2,15 @@ import Foundation
 
 /// A user-level tag, mirroring `TagInfo` on the server.
 ///
-/// `no_tag` and `all` are system tags the gallery relies on. The server keeps them, so the app
-/// shows them read-only rather than hiding them — a tag that exists but cannot be renamed is
+/// `all` is a system tag the gallery relies on: the server puts it on every newly uploaded asset
+/// (D68). It is shown read-only rather than hidden — a tag that exists but cannot be renamed is
 /// less confusing than one that silently is not listed.
 struct Tag: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
     let createdAt: String?
 
-    private static let systemNames: Set<String> = ["no_tag", "all"]
+    private static let systemNames: Set<String> = ["all"]
 
     var isSystem: Bool {
         Self.systemNames.contains(name)
@@ -39,7 +39,7 @@ struct LanguageSettingsResponse: Codable {
 /// Answer to the per-file tag endpoints (`POST`/`DELETE /api/files/{id}/tags`).
 ///
 /// `tags` is the file's whole tag list after the change, so it replaces the local list rather
-/// than being merged into it — the server may have added or dropped `no_tag` on its own.
+/// than being merged into it.
 struct FileTagsResponse: Codable {
     let success: Bool
     let message: String?

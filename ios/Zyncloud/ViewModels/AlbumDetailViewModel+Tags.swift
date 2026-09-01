@@ -438,11 +438,3 @@ extension AlbumDetailViewModel {
         )
     }
 }
-
-extension Photo {
-    /// The tags worth showing. `no_tag` is the server's own marker for "this photo has none",
-    /// so printing it would say the opposite of what it means.
-    var visibleTags: [String] {
-        tags.filter { $0 != "no_tag" }
-    }
-}

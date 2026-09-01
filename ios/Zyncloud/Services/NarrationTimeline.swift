@@ -18,13 +18,11 @@ enum NarrationSlides {
 
     /// The tags worth offering as a filter, with how many ready assets each one covers.
     ///
-    /// `no_tag` is left out: it is the server's marker for "this asset has none", so offering it
-    /// would say the opposite of what it means. Sorted by name, case-insensitively, so the list
-    /// does not reshuffle between runs.
+    /// Sorted by name, case-insensitively, so the list does not reshuffle between runs.
     static func tagCounts(for photos: [Photo]) -> [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
         for photo in ready(from: photos) {
-            for tag in photo.tags where tag != "no_tag" {
+            for tag in photo.tags {
                 counts[tag, default: 0] += 1
             }
         }

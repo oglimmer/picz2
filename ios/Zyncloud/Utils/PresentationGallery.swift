@@ -132,13 +132,11 @@ enum PresentationGallery {
 
     /// The tags this album's photos actually carry, with their counts.
     ///
-    /// `no_tag` is left out: it is the server's marker for "this photo has none", so offering it
-    /// as a filter would say the opposite of what it means. Sorted by name, case-insensitively,
-    /// so the list does not reshuffle between visits.
+    /// Sorted by name, case-insensitively, so the list does not reshuffle between visits.
     static func tagCounts(for photos: [Photo]) -> [TagCount] {
         var counts: [String: Int] = [:]
         for photo in photos {
-            for tag in photo.tags where tag != "no_tag" {
+            for tag in photo.tags {
                 counts[tag, default: 0] += 1
             }
         }

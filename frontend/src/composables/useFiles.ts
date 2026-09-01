@@ -56,7 +56,6 @@ export function useFiles(): FilesComposable {
     });
 
     return Array.from(tagCounts.entries())
-      .filter(([name]) => name !== "no_tag")
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => a.name.localeCompare(b.name));
   });
@@ -198,7 +197,6 @@ export function useFiles(): FilesComposable {
         const file = files.value.find((f) => f.id === fileId);
         if (file && data.tags) {
           // Update with the tags returned from the backend
-          // (backend automatically manages no_tag)
           file.tags = data.tags;
         }
       } else {
@@ -228,7 +226,6 @@ export function useFiles(): FilesComposable {
         const file = files.value.find((f) => f.id === fileId);
         if (file && data.tags) {
           // Update with the tags returned from the backend
-          // (backend automatically manages no_tag)
           file.tags = data.tags;
         }
       } else {

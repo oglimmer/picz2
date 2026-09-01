@@ -880,11 +880,11 @@ struct PhotoThumbnailView: View {
                     .tint(.white)
             }
 
-            if showsTags, !photo.visibleTags.isEmpty, photo.isThumbnailReady {
+            if showsTags, !photo.tags.isEmpty, photo.isThumbnailReady {
                 VStack {
                     Spacer()
                     HStack {
-                        PhotoTagChips(tags: photo.visibleTags)
+                        PhotoTagChips(tags: photo.tags)
                         Spacer()
                     }
                 }
@@ -1060,7 +1060,7 @@ struct PhotoDetailView: View {
             .safeAreaInset(edge: .bottom) {
                 // Only drawn when there is something to say, so a photo with no tags keeps the
                 // whole screen for the picture.
-                if !photo.visibleTags.isEmpty {
+                if !photo.tags.isEmpty {
                     tagBar
                 }
             }
@@ -1116,7 +1116,7 @@ private extension PhotoDetailView {
     var tagBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(photo.visibleTags, id: \.self) { tag in
+                ForEach(photo.tags, id: \.self) { tag in
                     Text(tag)
                         .font(.footnote)
                         .foregroundColor(.white)

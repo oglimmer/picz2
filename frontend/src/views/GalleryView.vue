@@ -1599,7 +1599,7 @@ export default {
     const bulkActionBusy = ref(false)
     const bulkActionLabel = ref('')
     const ALL_TAG = 'all'
-    const SYSTEM_TAGS = new Set(['no_tag', ALL_TAG])
+    const SYSTEM_TAGS = new Set([ALL_TAG])
     // Which tag the album-wide Add to All / Remove from All pair acts on.
     const bulkTagName = ref('')
     // 'add' | 'remove' | null — holds the mode so the spinner lands on the button that was clicked.
@@ -2181,7 +2181,7 @@ export default {
     // Album-wide add/remove of the one tag picked in the dropdown. The api's bulk endpoints are
     // per-tag, and they reject any tag outside the album's enabled list
     // (FileStorageService.addTagToAllFilesInAlbum), which is why the dropdown is fed from
-    // `enabledAlbumTags` — the `all` system tag plus the album's enabled tags, `no_tag` excluded.
+    // `enabledAlbumTags` — the `all` system tag plus the album's enabled tags.
     async function handleAlbumTagAll(mode) {
       if (!album.value || albumTagBusy.value) return
       const tagName = bulkTagName.value

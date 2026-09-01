@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Create, rename and delete the account's tags — the web app's "Manage Tags" panel.
 ///
-/// `no_tag` and `all` come back from the server like any other tag but the gallery depends on
-/// them, so they are listed with a badge and neither swipe action nor rename is offered.
+/// `all` comes back from the server like any other tag but the gallery depends on it, so it is
+/// listed with a badge and neither swipe action nor rename is offered.
 struct TagManagerView: View {
     @StateObject private var viewModel = UserSettingsViewModel()
     @State private var newTagName: String = ""

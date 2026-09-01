@@ -23,10 +23,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * Album-wide tag add/remove against a real MariaDB. The mock-based {@code
  * FileStorageServiceBulkTagTest} can only assert which repository calls happen — it cannot see
- * Hibernate's flush, and the {@code no_tag} bookkeeping here depends on it: the bulk methods load
- * {@code FileMetadata.imageTags} via JOIN FETCH, and that collection is mapped {@code
- * CascadeType.ALL} + {@code orphanRemoval}, so a row deleted behind the collection's back gets
- * re-persisted on flush. Only a real transaction commit shows that.
+ * Hibernate's flush, and the tag bookkeeping here depends on it: the bulk methods load {@code
+ * FileMetadata.imageTags} via JOIN FETCH, and that collection is mapped {@code CascadeType.ALL} +
+ * {@code orphanRemoval}, so a row deleted behind the collection's back gets re-persisted on flush.
+ * Only a real transaction commit shows that.
  */
 // Note: the default MOCK web environment, not NONE — the api profile's SecurityConfig needs the
 // CorsConfigurationSource that WebMvc auto-config contributes.
@@ -52,9 +52,9 @@ class FileStorageServiceBulkTagIT {
 
   private Long userId;
   private Long albumId;
-  private Long onlyNoTag;
+  private Long untagged;
   private Long onlyRealTag;
-  private Long noTagPlusRealTag;
+  private Long twoRealTags;
 
   @BeforeEach
   void seedFixtures() {
@@ -70,20 +70,18 @@ class FileStorageServiceBulkTagIT {
             userId,
             "bulktag-album");
 
-    Long noTagId = insertTag(FileStorageService.NO_TAG);
     Long beachId = insertTag("beach");
+    Long sunsetId = insertTag("sunset");
 
     // Three starting states a real album can be in.
-    onlyNoTag = insertFile("a");
-    tagFile(onlyNoTag, noTagId);
+    untagged = insertFile("a");
 
     onlyRealTag = insertFile("b");
     tagFile(onlyRealTag, beachId);
 
-    // Inconsistent leftover: no_tag sitting next to a real tag.
-    noTagPlusRealTag = insertFile("c");
-    tagFile(noTagPlusRealTag, noTagId);
-    tagFile(noTagPlusRealTag, beachId);
+    twoRealTags = insertFile("c");
+    tagFile(twoRealTags, beachId);
+    tagFile(twoRealTags, sunsetId);
 
     SecurityContextHolder.getContext()
         .setAuthentication(
@@ -105,15 +103,13 @@ class FileStorageServiceBulkTagIT {
   }
 
   @Test
-  void addingAllToEveryFileClearsNoTagEverywhere() {
+  void addingAllToEveryFileKeepsTheTagsAlreadyThere() {
     int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
 
     assertThat(changed).isEqualTo(3);
-    assertThat(tagsOf(onlyNoTag)).containsExactly(FileStorageService.ALL_TAG);
+    assertThat(tagsOf(untagged)).containsExactly(FileStorageService.ALL_TAG);
     assertThat(tagsOf(onlyRealTag)).containsExactly(FileStorageService.ALL_TAG, "beach");
-    assertThat(tagsOf(noTagPlusRealTag)).containsExactly(FileStorageService.ALL_TAG, "beach");
-    // The invariant that matters: no_tag never coexists with a real tag.
-    assertThat(noTagRowCount()).isZero();
+    assertThat(tagsOf(twoRealTags)).containsExactly(FileStorageService.ALL_TAG, "beach", "sunset");
   }
 
   @Test
@@ -122,22 +118,22 @@ class FileStorageServiceBulkTagIT {
     int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
 
     assertThat(changed).isZero();
-    assertThat(tagsOf(onlyNoTag)).containsExactly(FileStorageService.ALL_TAG);
-    assertThat(noTagRowCount()).isZero();
+    assertThat(tagsOf(untagged)).containsExactly(FileStorageService.ALL_TAG);
   }
 
   @Test
-  void removingAllRestoresNoTagOnlyWhereNothingElseRemains() {
+  void removingAllLeavesAFileWithNoTagsAtAll() {
     fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
 
     int changed =
         fileStorageService.removeTagFromAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
 
     assertThat(changed).isEqualTo(3);
-    // The tag really is gone — not resurrected by a cascade on flush.
-    assertThat(tagsOf(onlyNoTag)).containsExactly(FileStorageService.NO_TAG);
+    // The tag really is gone — not resurrected by a cascade on flush. Since D68 nothing is put
+    // back in its place, so a file can legitimately end up carrying no tags.
+    assertThat(tagsOf(untagged)).isEmpty();
     assertThat(tagsOf(onlyRealTag)).containsExactly("beach");
-    assertThat(tagsOf(noTagPlusRealTag)).containsExactly("beach");
+    assertThat(tagsOf(twoRealTags)).containsExactly("beach", "sunset");
   }
 
   private List<String> tagsOf(Long fileId) {
@@ -146,16 +142,6 @@ class FileStorageServiceBulkTagIT {
             + " WHERE it.file_metadata_id = ? ORDER BY t.name",
         String.class,
         fileId);
-  }
-
-  private int noTagRowCount() {
-    return jdbcTemplate.queryForObject(
-        "SELECT COUNT(*) FROM image_tags it JOIN tags t ON t.id = it.tag_id"
-            + " JOIN file_metadata f ON f.id = it.file_metadata_id"
-            + " WHERE f.album_id = ? AND t.name = ?",
-        Integer.class,
-        albumId,
-        FileStorageService.NO_TAG);
   }
 
   private Long insertTag(String name) {

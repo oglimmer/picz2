@@ -177,19 +177,11 @@ struct PresentationViewModelTests {
 
     /// An album with no tags at all is the one case shown unfiltered — there is nothing to ask.
     @Test func `analbum with no tags is shown whole with no prompt`() async {
-        await presenting(photos: [photo(1), photo(2, tags: ["no_tag"])]) { model in
+        await presenting(photos: [photo(1), photo(2)]) { model in
             #expect(model.availableTags.isEmpty)
             #expect(model.needsTagChoice == false)
             #expect(model.selectedTag == nil)
             #expect(model.sections.flatMap(\.photos).map(\.id) == [1, 2])
-        }
-    }
-
-    /// `no_tag` is the server's marker for "this photo carries none". Offering it as something to
-    /// present under would say the opposite of what it means.
-    @Test func `nottag is never offered as A tag`() async {
-        await presenting(photos: [photo(1, tags: ["no_tag", "beach"]), photo(2, tags: ["no_tag"])]) { model in
-            #expect(model.availableTags.map(\.name) == ["beach"])
         }
     }
 
