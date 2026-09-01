@@ -11,8 +11,13 @@ struct AlbumListView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    /// How big the album cards are drawn. A reading preference, not a fact about the account, so
+    /// it lives in app storage; separate from the key the photo grid uses because the web app
+    /// keeps the two switches apart as well.
+    @AppStorage("albumGridSize") private var gridSize: GridSizeMode = .medium
+
     private var columns: [GridItem] {
-        AdaptiveGrid.cardColumns(horizontalSizeClass)
+        AdaptiveGrid.cardColumns(horizontalSizeClass, size: gridSize)
     }
 
     var body: some View {
@@ -33,6 +38,7 @@ struct AlbumListView: View {
                             )) {
                                 AlbumCardView(
                                     album: album,
+                                    size: gridSize,
                                     onEdit: {
                                         albumToEdit = album
                                     },
@@ -59,6 +65,7 @@ struct AlbumListView: View {
                     .padding()
                 }
             }
+            .gridZoom($gridSize)
             .navigationTitle("Albums")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -66,6 +73,14 @@ struct AlbumListView: View {
                         action: { showingCreateSheet = true },
                         label: { Image(systemName: "plus") },
                     )
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        GridSizePicker(size: $gridSize)
+                    } label: {
+                        Image(systemName: gridSize.systemImage)
+                    }
+                    .accessibilityLabel("Card size")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(
@@ -146,6 +161,12 @@ struct AlbumListView: View {
 
 struct AlbumCardView: View {
     let album: Album
+
+    /// How wide the card is being drawn. At ``GridSizeMode/small`` three cards share a phone
+    /// screen, and the headline title with 12 points of padding around it leaves the cover
+    /// barely bigger than its own caption — so the chrome shrinks with the card.
+    let size: GridSizeMode
+
     let onEdit: () -> Void
 
     /// Opens or closes public access. Kept next to Share in the menu because it is the switch
@@ -215,22 +236,23 @@ struct AlbumCardView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.name)
-                    .font(.headline)
+                    .font(size == .small ? .caption : .headline)
+                    .fontWeight(size == .small ? .semibold : .regular)
                     .foregroundColor(.primary)
                     .lineLimit(1)
 
                 if let imageCount = album.imageCount {
                     Text("\(imageCount) photo\(imageCount == 1 ? "" : "s")")
-                        .font(.caption)
+                        .font(size == .small ? .caption2 : .caption)
                         .foregroundColor(.secondary)
                 } else {
                     Text("0 photos")
-                        .font(.caption)
+                        .font(size == .small ? .caption2 : .caption)
                         .foregroundColor(.secondary)
                 }
             }
         }
-        .padding(12)
+        .padding(size == .small ? 6 : 12)
         .background(Color(.systemBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)

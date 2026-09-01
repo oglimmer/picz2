@@ -59,8 +59,12 @@ struct AlbumDetailView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    /// How big the thumbnails are drawn. A reading preference like ``layoutMode``, and stored
+    /// the same way, under its own key: the album shelf keeps a separate one.
+    @AppStorage("photoGridSize") private var gridSize: GridSizeMode = .medium
+
     private var columns: [GridItem] {
-        AdaptiveGrid.photoColumns(horizontalSizeClass)
+        AdaptiveGrid.photoColumns(horizontalSizeClass, size: gridSize)
     }
 
     /// Flat grid, or day-and-place sections. Kept in app storage rather than on the view model
@@ -478,6 +482,8 @@ struct AlbumDetailView: View {
             }
             .pickerStyle(.inline)
 
+            GridSizePicker(size: $gridSize)
+
             Toggle(isOn: $showsTags) {
                 Label("Show Tags", systemImage: "tag")
             }
@@ -578,6 +584,7 @@ struct AlbumDetailView: View {
                 }
             }
         }
+        .gridZoom($gridSize)
         .refreshable {
             await viewModel.reloadPhotosAndImagesAwaiting()
         }
@@ -592,7 +599,10 @@ struct AlbumDetailView: View {
             isRotating: viewModel.rotatingPhotoIds.contains(photo.id),
             isSelecting: viewModel.isSelecting,
             isSelected: viewModel.selectedPhotoIds.contains(photo.id),
-            showsTags: showsTags,
+            // Chips are dropped at the smallest step whatever the toggle says: five tiles across
+            // a phone leaves a tag name about a centimetre wide, which is clutter rather than
+            // information. The toggle still governs the two sizes where they can be read.
+            showsTags: showsTags && gridSize != .small,
             onDelete: { pendingDelete = photo },
             onTag: { taggingPhoto = photo },
             onBeginSelecting: { viewModel.beginSelecting(with: photo) },
@@ -653,6 +663,9 @@ struct AlbumDetailView: View {
                 .padding(.bottom, 16)
             }
         }
+        // The day sections draw the same tiles from the same `columns`, so the pinch has to work
+        // here too — a gesture that only answers in one of two layouts reads as broken.
+        .gridZoom($gridSize)
         .refreshable {
             await viewModel.reloadPhotosAndImagesAwaiting()
         }
