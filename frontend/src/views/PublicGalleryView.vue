@@ -548,7 +548,6 @@ export default {
       })
 
       return Array.from(tagCounts.entries())
-        .filter(([name]) => name !== 'no_tag')
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => a.name.localeCompare(b.name))
     })

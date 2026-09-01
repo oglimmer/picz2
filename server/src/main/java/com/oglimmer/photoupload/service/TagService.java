@@ -22,11 +22,10 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class TagService {
 
-  private static final String NO_TAG = FileStorageService.NO_TAG;
   private static final String ALL_TAG = FileStorageService.ALL_TAG;
 
   private static boolean isSystemTag(String name) {
-    return NO_TAG.equals(name) || ALL_TAG.equals(name);
+    return ALL_TAG.equals(name);
   }
 
   private final TagRepository tagRepository;

@@ -15,14 +15,14 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Lazily creates the per-user system tags ({@code no_tag}, {@code all}) without letting a lost
- * insert race kill the caller's transaction.
+ * Lazily creates the per-user {@code all} system tag without letting a lost insert race kill the
+ * caller's transaction.
  *
  * <p>Why this exists: system tags are created on first use, so a user's very first upload is the
  * one that creates them. The iOS share sheet fires several TUS post-finish hooks concurrently, so
  * for a brand-new user N requests all saw "tag missing", all inserted, one won, and the losers took
- * a {@code Duplicate entry '<uid>-no_tag' for key 'uk_user_tag_name'}. That violation rolled back
- * the whole registration transaction, so the file_metadata row went with it and the photo silently
+ * a {@code Duplicate entry '<uid>-all' for key 'uk_user_tag_name'}. That violation rolled back the
+ * whole registration transaction, so the file_metadata row went with it and the photo silently
  * vanished. Observed 2026-08-28: 6 photos uploaded, 4 arrived, ids 6767/6768 burned.
  *
  * <p>The insert therefore runs in its OWN transaction (REQUIRES_NEW). A constraint violation there

@@ -27,7 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AlbumTagService {
 
-  private static final String NO_TAG = FileStorageService.NO_TAG;
   private static final String ALL_TAG = FileStorageService.ALL_TAG;
 
   private final AlbumRepository albumRepository;
@@ -63,8 +62,8 @@ public class AlbumTagService {
     Set<Long> desired = tagIds == null ? new HashSet<>() : new HashSet<>(tagIds);
 
     // Validate all requested tags belong to current user.
-    // System tags (`no_tag`, `all`) are always implicitly enabled — no row is stored for them,
-    // so silently drop their IDs from the incoming set if the client sent them.
+    // The `all` system tag is always implicitly enabled — no row is stored for it, so silently
+    // drop its ID from the incoming set if the client sent it.
     List<Tag> desiredTags = new ArrayList<>();
     for (Long tagId : desired) {
       Tag tag =
@@ -129,6 +128,6 @@ public class AlbumTagService {
   }
 
   private static boolean isSystemTag(String name) {
-    return NO_TAG.equals(name) || ALL_TAG.equals(name);
+    return ALL_TAG.equals(name);
   }
 }

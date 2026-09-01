@@ -69,7 +69,6 @@ import org.springframework.web.multipart.MultipartFile;
 @Slf4j
 public class FileStorageService {
 
-  public static final String NO_TAG = "no_tag";
   public static final String ALL_TAG = "all";
 
   private static final long ONE_KB = 1024L;
@@ -362,12 +361,12 @@ public class FileStorageService {
     final String finalNewFilename = newFilename;
     final String finalContentType = contentType;
     final String finalStoredPath = storedPath;
-    // Commit no_tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
+    // Commit the `all` tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
     // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
     // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
     // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
     // Provisioning first means this transaction's snapshot always contains the tag it references.
-    final Long noTagId = ensureNoTagExists(currentUser);
+    final Long allTagId = ensureAllTagExists(currentUser);
 
     FileInfo result =
         transactionTemplate.execute(
@@ -396,7 +395,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addNoTagToFile(saved, noTagId);
+              addAllTagToFile(saved, allTagId);
               // Same TX as the metadata insert → either both visible or neither.
               jobEnqueueService.enqueue(saved.getId());
               return convertToFileInfoWithId(saved);
@@ -490,12 +489,12 @@ public class FileStorageService {
     final String finalContentType = contentType;
     final String finalNewFilename = newFilename;
     final String finalOriginalKey = originalKey;
-    // Commit no_tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
+    // Commit the `all` tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
     // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
     // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
     // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
     // Provisioning first means this transaction's snapshot always contains the tag it references.
-    final Long noTagId = ensureNoTagExists(currentUser);
+    final Long allTagId = ensureAllTagExists(currentUser);
 
     FileInfo result =
         transactionTemplate.execute(
@@ -524,7 +523,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addNoTagToFile(saved, noTagId);
+              addAllTagToFile(saved, allTagId);
               jobEnqueueService.enqueue(saved.getId(), JobType.PROCESS);
               return convertToFileInfo(saved);
             });
@@ -984,9 +983,8 @@ public class FileStorageService {
             .findByUserAndName(currentUser, tagName)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
 
-    // Enforce album's enabled-tags list (system tags NO_TAG and ALL_TAG are always allowed)
-    if (!NO_TAG.equals(tagName)
-        && !ALL_TAG.equals(tagName)
+    // Enforce album's enabled-tags list (the ALL_TAG system tag is always allowed)
+    if (!ALL_TAG.equals(tagName)
         && !albumEnabledTagRepository.existsByAlbumIdAndTagId(
             metadata.getAlbum().getId(), tag.getId())) {
       throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
@@ -997,22 +995,12 @@ public class FileStorageService {
       throw new DuplicateResourceException("File already has this tag");
     }
 
-    // Count current tags (excluding no_tag)
-    List<ImageTag> existingTags = imageTagRepository.findByFileMetadataId(fileId);
-    long otherTagsCount =
-        existingTags.stream().filter(it -> !NO_TAG.equals(it.getTag().getName())).count();
-
     ImageTag imageTag = new ImageTag();
     imageTag.setFileMetadata(metadata);
     imageTag.setTag(tag);
     imageTagRepository.save(imageTag);
 
     log.info("Added tag '{}' to file: {}", tagName, metadata.getStoredFilename());
-
-    // If this is the first real tag being added, remove no_tag
-    if (otherTagsCount == 0 && !NO_TAG.equals(tagName)) {
-      removeNoTagFromFile(fileId, currentUser);
-    }
 
     // Return updated tags list
     return imageTagRepository.findByFileMetadataId(fileId).stream()
@@ -1041,16 +1029,6 @@ public class FileStorageService {
     imageTagRepository.delete(imageTag);
     log.info("Removed tag '{}' from file: {}", tagName, metadata.getStoredFilename());
 
-    // Check if this was the last real tag (excluding no_tag)
-    List<ImageTag> remainingTags = imageTagRepository.findByFileMetadataId(fileId);
-    long otherTagsCount =
-        remainingTags.stream().filter(it -> !NO_TAG.equals(it.getTag().getName())).count();
-
-    // If no other tags remain, restore no_tag
-    if (otherTagsCount == 0) {
-      addNoTagToFile(metadata, ensureNoTagExists(currentUser));
-    }
-
     // Return updated tags list
     return imageTagRepository.findByFileMetadataId(fileId).stream()
         .map(it -> it.getTag().getName())
@@ -1058,10 +1036,8 @@ public class FileStorageService {
   }
 
   /**
-   * Add {@code tagName} to every file in the album, skipping files that already carry it. Any
-   * {@code no_tag} marker is dropped from the files that end up with a real tag — unconditionally,
-   * unlike {@link #addTagToFile}, which only drops it when the new tag is the file's first real
-   * one. Returns the number of files actually changed.
+   * Add {@code tagName} to every file in the album, skipping files that already carry it. Returns
+   * the number of files actually changed.
    */
   @Transactional
   public int addTagToAllFilesInAlbum(Long albumId, String tagName) {
@@ -1069,7 +1045,7 @@ public class FileStorageService {
     Album album = requireOwnedAlbum(currentUser, albumId);
     Tag tag = resolveTagForBulkOperation(currentUser, tagName);
 
-    // Enforce album's enabled-tags list (system tags NO_TAG and ALL_TAG are always allowed)
+    // Enforce album's enabled-tags list (the ALL_TAG system tag is always allowed)
     if (!isSystemTag(tagName)
         && !albumEnabledTagRepository.existsByAlbumIdAndTagId(album.getId(), tag.getId())) {
       throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
@@ -1088,13 +1064,6 @@ public class FileStorageService {
       imageTagRepository.save(imageTag);
       imageTags.add(imageTag);
       changed++;
-
-      // no_tag only ever means "this file has no real tag", so strip it as soon as one is present.
-      // Deliberately not gated on "was this the first real tag": a file can carry a stale no_tag
-      // next to a real one, and this sweep is the natural place to heal that.
-      if (!NO_TAG.equals(tagName)) {
-        removeTagRowFromFetchedFile(metadata, it -> NO_TAG.equals(it.getTag().getName()));
-      }
     }
 
     log.info(
@@ -1108,8 +1077,7 @@ public class FileStorageService {
 
   /**
    * Remove {@code tagName} from every file in the album, skipping files that don't carry it.
-   * Mirrors the {@code no_tag} bookkeeping of {@link #removeTagFromFile}: a file left without any
-   * real tag gets {@code no_tag} back. Returns the number of files actually changed.
+   * Returns the number of files actually changed.
    */
   @Transactional
   public int removeTagFromAllFilesInAlbum(Long albumId, String tagName) {
@@ -1128,13 +1096,6 @@ public class FileStorageService {
         continue;
       }
       changed++;
-
-      // If no real tag remains, restore no_tag
-      boolean hasRealTag =
-          metadata.getImageTags().stream().anyMatch(it -> !NO_TAG.equals(it.getTag().getName()));
-      if (!hasRealTag) {
-        addNoTagToFetchedFile(metadata, currentUser);
-      }
     }
 
     log.info(
@@ -1182,23 +1143,9 @@ public class FileStorageService {
     return true;
   }
 
-  /** Counterpart of {@link #removeTagRowFromFetchedFile} for restoring {@code no_tag}. */
-  private void addNoTagToFetchedFile(FileMetadata metadata, User user) {
-    Long noTagId = ensureNoTagExists(user);
-    Tag noTag = tagRepository.getReferenceById(noTagId);
-    if (metadata.getImageTags().stream().anyMatch(it -> it.getTag().getId().equals(noTagId))) {
-      return;
-    }
-    ImageTag imageTag = new ImageTag();
-    imageTag.setFileMetadata(metadata);
-    imageTag.setTag(noTag);
-    imageTagRepository.save(imageTag);
-    metadata.getImageTags().add(imageTag);
-  }
-
   /**
-   * Look up the tag for a bulk add. System tags are lazily created (same as {@code no_tag} on
-   * upload) because a user may never have touched them before; any other tag must already exist.
+   * Look up the tag for a bulk add. System tags are lazily created (same as {@code all} on upload)
+   * because a user may never have touched them before; any other tag must already exist.
    */
   private Tag resolveTagForBulkOperation(User user, String tagName) {
     Optional<Tag> existing = tagRepository.findByUserAndName(user, tagName);
@@ -1212,7 +1159,7 @@ public class FileStorageService {
   }
 
   private static boolean isSystemTag(String tagName) {
-    return NO_TAG.equals(tagName) || ALL_TAG.equals(tagName);
+    return ALL_TAG.equals(tagName);
   }
 
   @Transactional
@@ -1422,41 +1369,32 @@ public class FileStorageService {
   }
 
   /**
-   * Ensure the special "no_tag" tag exists for the current user, and return its id. Creation runs
-   * in its own transaction (see {@link SystemTagProvisioner}) so that two concurrent uploads by a
+   * Ensure the special "all" tag exists for the current user, and return its id. Creation runs in
+   * its own transaction (see {@link SystemTagProvisioner}) so that two concurrent uploads by a
    * brand-new user cannot roll each other's file_metadata insert back.
    */
-  private Long ensureNoTagExists(User user) {
-    return systemTagProvisioner.ensureTag(user, NO_TAG);
+  private Long ensureAllTagExists(User user) {
+    return systemTagProvisioner.ensureTag(user, ALL_TAG);
   }
 
-  /** Add the "no_tag" tag to a file (without any checks or side effects). */
-  private void addNoTagToFile(FileMetadata metadata, Long noTagId) {
+  /**
+   * Add the "all" tag to a file (without any checks or side effects). Every new asset carries it
+   * from the moment it is registered, so the `all` filter really means every photo and video — see
+   * D68. A user who does not want it on a given asset removes it like any other tag; nothing puts
+   * it back.
+   */
+  private void addAllTagToFile(FileMetadata metadata, Long allTagId) {
     // getReferenceById, not a fresh lookup: the row may have been committed by a concurrent
     // request after this transaction took its REPEATABLE READ snapshot, so a SELECT could miss it.
-    Tag noTag = tagRepository.getReferenceById(noTagId);
+    Tag allTag = tagRepository.getReferenceById(allTagId);
 
-    // Check if no_tag already exists for this file
-    if (imageTagRepository.findByFileMetadataIdAndTagId(metadata.getId(), noTagId).isEmpty()) {
+    // Check if the tag already exists for this file
+    if (imageTagRepository.findByFileMetadataIdAndTagId(metadata.getId(), allTagId).isEmpty()) {
       ImageTag imageTag = new ImageTag();
       imageTag.setFileMetadata(metadata);
-      imageTag.setTag(noTag);
+      imageTag.setTag(allTag);
       imageTagRepository.save(imageTag);
-      log.info("Added '{}' to file: {}", NO_TAG, metadata.getStoredFilename());
-    }
-  }
-
-  /** Remove the "no_tag" tag from a file (if it exists). */
-  private void removeNoTagFromFile(Long fileId, User user) {
-    Optional<Tag> noTagOpt = tagRepository.findByUserAndName(user, NO_TAG);
-    if (noTagOpt.isPresent()) {
-      Tag noTag = noTagOpt.get();
-      Optional<ImageTag> imageTagOpt =
-          imageTagRepository.findByFileMetadataIdAndTagId(fileId, noTag.getId());
-      if (imageTagOpt.isPresent()) {
-        imageTagRepository.delete(imageTagOpt.get());
-        log.info("Removed '{}' from file ID: {}", NO_TAG, fileId);
-      }
+      log.info("Added '{}' to file: {}", ALL_TAG, metadata.getStoredFilename());
     }
   }
 

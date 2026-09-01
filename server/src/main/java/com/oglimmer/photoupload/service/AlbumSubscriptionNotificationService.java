@@ -163,37 +163,33 @@ public class AlbumSubscriptionNotificationService {
    * Count visible images based on tag filtering rules. If beforeTime is provided, only count images
    * that existed and were visible before that time.
    *
-   * <p>Tag visibility rules (excluding 'no_tag' which is a special marker): - If no images have
-   * real tags: all images are visible - If at least one image has real tags: only images WITH real
-   * tags are visible
+   * <p>Tag visibility rules: - If no images have tags: all images are visible - If at least one
+   * image has tags: only images WITH tags are visible
    *
-   * <p>A file is considered to "have real tags at time T" if it has at least one ImageTag (where
-   * tag.name != 'no_tag') with taggedAt < T
+   * <p>A file is considered to "have tags at time T" if it has at least one ImageTag with taggedAt
+   * < T. Since D68 every newly uploaded asset carries the {@code all} tag, so in practice a fresh
+   * album counts every asset.
    *
    * @param allFiles All files in the album (with tags eagerly loaded)
    * @param beforeTime Optional cutoff time - only count images visible before this time
    * @return Count of visible images
    */
   private int countVisibleImages(List<FileMetadata> allFiles, Instant beforeTime) {
-    final String NO_TAG = FileStorageService.NO_TAG;
-
     if (beforeTime == null) {
       // Current state - simple logic
       if (allFiles.isEmpty()) {
         return 0;
       }
 
-      // Check if any image has real tags (excluding 'no_tag')
-      boolean anyImageHasRealTags =
-          allFiles.stream().anyMatch(file -> hasRealTags(file.getImageTags(), NO_TAG));
+      // Check if any image has tags
+      boolean anyImageHasTags = allFiles.stream().anyMatch(file -> hasTags(file.getImageTags()));
 
-      if (!anyImageHasRealTags) {
-        // No real tags exist - all images are visible
+      if (!anyImageHasTags) {
+        // No tags exist - all images are visible
         return allFiles.size();
       } else {
-        // At least one image has real tags - only count images WITH real tags
-        return (int)
-            allFiles.stream().filter(file -> hasRealTags(file.getImageTags(), NO_TAG)).count();
+        // At least one image has tags - only count images WITH tags
+        return (int) allFiles.stream().filter(file -> hasTags(file.getImageTags())).count();
       }
     }
 
@@ -206,51 +202,43 @@ public class AlbumSubscriptionNotificationService {
       return 0;
     }
 
-    // Check if any file had real tags at that time
-    // A file "had real tags" if it has at least one ImageTag (where tag.name != 'no_tag') with
-    // taggedAt < beforeTime
-    boolean anyImageHadRealTags =
+    // Check if any file had tags at that time
+    // A file "had tags" if it has at least one ImageTag with taggedAt < beforeTime
+    boolean anyImageHadTags =
         filesExistedBefore.stream()
-            .anyMatch(file -> hasRealTagsBefore(file.getImageTags(), NO_TAG, beforeTime));
+            .anyMatch(file -> hasTagsBefore(file.getImageTags(), beforeTime));
 
-    if (!anyImageHadRealTags) {
-      // No real tags existed at that time - all files were visible
+    if (!anyImageHadTags) {
+      // No tags existed at that time - all files were visible
       return filesExistedBefore.size();
     } else {
-      // At least one file had real tags - only count files that had real tags at that time
+      // At least one file had tags - only count files that had tags at that time
       return (int)
           filesExistedBefore.stream()
-              .filter(file -> hasRealTagsBefore(file.getImageTags(), NO_TAG, beforeTime))
+              .filter(file -> hasTagsBefore(file.getImageTags(), beforeTime))
               .count();
     }
   }
 
   /**
-   * Check if a file has any real tags (excluding 'no_tag')
+   * Check if a file has any tags
    *
    * @param imageTags The image tags to check
-   * @param noTagValue The value to exclude ('no_tag')
-   * @return true if file has at least one real tag
+   * @return true if file has at least one tag
    */
-  private boolean hasRealTags(java.util.List<ImageTag> imageTags, String noTagValue) {
-    return imageTags.stream().anyMatch(imageTag -> !noTagValue.equals(imageTag.getTag().getName()));
+  private boolean hasTags(java.util.List<ImageTag> imageTags) {
+    return !imageTags.isEmpty();
   }
 
   /**
-   * Check if a file had any real tags before a specific time
+   * Check if a file had any tags before a specific time
    *
    * @param imageTags The image tags to check
-   * @param noTagValue The value to exclude ('no_tag')
    * @param beforeTime The cutoff time
-   * @return true if file had at least one real tag before the time
+   * @return true if file had at least one tag before the time
    */
-  private boolean hasRealTagsBefore(
-      java.util.List<ImageTag> imageTags, String noTagValue, Instant beforeTime) {
-    return imageTags.stream()
-        .anyMatch(
-            imageTag ->
-                !noTagValue.equals(imageTag.getTag().getName())
-                    && imageTag.getTaggedAt().isBefore(beforeTime));
+  private boolean hasTagsBefore(java.util.List<ImageTag> imageTags, Instant beforeTime) {
+    return imageTags.stream().anyMatch(imageTag -> imageTag.getTaggedAt().isBefore(beforeTime));
   }
 
   /**

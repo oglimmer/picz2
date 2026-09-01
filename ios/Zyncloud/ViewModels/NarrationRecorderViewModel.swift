@@ -29,7 +29,6 @@ final class NarrationRecorderViewModel: ViewModelProtocol {
     // MARK: - Setup choices
 
     /// Tags that at least one asset in this album actually carries, with their counts.
-    /// `no_tag` is left out, exactly as the web gallery's tag dropdown does.
     @Published private(set) var availableTags: [TagCount] = []
 
     /// nil means "every photo in the album" — the same as the web app's empty filter, and it is

@@ -43,18 +43,6 @@ struct PresentationGalleryTests {
 
     // MARK: - Tag counts
 
-    /// `no_tag` is the server's marker for "this photo has none", so offering it as a filter
-    /// would say the opposite of what it means.
-    @Test func tagCountsLeaveOutTheServersNoTagMarker() {
-        let counts = PresentationGallery.tagCounts(for: [
-            photo(id: 1, tags: ["beach", "no_tag"]),
-            photo(id: 2, tags: ["no_tag"]),
-        ])
-
-        #expect(counts.map(\.name) == ["beach"])
-        #expect(counts.first?.count == 1)
-    }
-
     /// Sorted case-insensitively so the picker does not reshuffle between visits — a dictionary
     /// walked in its own order would.
     @Test func tagCountsAreSortedByNameIgnoringCase() {

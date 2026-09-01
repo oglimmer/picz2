@@ -177,7 +177,7 @@ class AlbumServiceTest {
     when(albumRepository.findByUserAndName(eq(testUser), anyString())).thenReturn(Optional.empty());
     when(albumRepository.save(any(Album.class))).thenAnswer(inv -> inv.getArgument(0));
     when(albumEnabledTagRepository.findByAlbumId(1L)).thenReturn(List.of());
-    // no_tag is provisioned in its own transaction now and resolved by id, not re-queried.
+    // The `all` tag is provisioned in its own transaction and resolved by id, not re-queried.
     when(systemTagProvisioner.ensureTag(eq(testUser), anyString())).thenReturn(11L);
     when(tagRepository.getReferenceById(11L)).thenReturn(new Tag());
 

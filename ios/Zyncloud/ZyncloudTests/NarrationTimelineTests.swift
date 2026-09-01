@@ -90,17 +90,6 @@ struct NarrationTimelineTests {
         #expect(counts.first { $0.name == "2024" }?.count == 1)
     }
 
-    /// `no_tag` is the server's marker for "this asset has none", so offering it as a filter
-    /// would say the opposite of what it means.
-    @Test func theNoTagMarkerIsNeverOffered() {
-        let counts = NarrationSlides.tagCounts(for: [
-            photo(id: 1, tags: ["no_tag"]),
-            photo(id: 2, tags: ["beach", "no_tag"]),
-        ])
-
-        #expect(counts.map { $0.name } == ["beach"])
-    }
-
     /// The count is of *narratable* assets. Counting a processing one would promise a slideshow
     /// longer than the one that runs.
     @Test func tagCountsIgnoreAssetsThatCannotBeNarrated() {
