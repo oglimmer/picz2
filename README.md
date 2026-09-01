@@ -73,6 +73,12 @@ In one paragraph: backend runs as `api` and `worker` pods sharing the same JAR; 
 
 Storage is per album (D59). `storage_backends` holds one credential-free system-default row — it resolves `storage.s3.*` at runtime, so the cluster secret is never copied into a table — plus any S3-compatible endpoint a user registers for themselves; secret keys are AES-GCM encrypted with `storage.backend-secret-key`, and without that setting the feature stays off instead of failing at upload time. An album's backend is fixed at creation. tusd always writes to the system default; the finish hook server-side COPYs when the album lives there too and streams through the api pod when it does not. Retention and the orphan sweep run one bucket at a time. What a user keeps on the *system* backend is capped by `users.storage_quota_bytes` (D60, 100 MiB by default, raised with an `UPDATE`); their own buckets are neither metered nor capped, and refusals are `507`.
 
+## Migrating from picz v1
+
+The previous generation (`picz-api` / `picz-web`, repo `../picz`) still runs in the same
+cluster. **[`bin/migrate-v1.md`](bin/migrate-v1.md)** is the runbook for moving one account's
+albums and photos across; it has not been run yet beyond a 5-photo smoke test. See **D66**.
+
 ## License
 
 MIT.
