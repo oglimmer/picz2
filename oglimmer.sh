@@ -120,7 +120,7 @@ VERSION MANAGEMENT:
     Versions are read from the VERSION file and applied to:
       - Frontend image tag (e.g., registry.oglimmer.com/${DEFAULT_FRONTEND_IMAGE}:X.Y.Z)
       - Backend image tag  (e.g., registry.oglimmer.com/${DEFAULT_BACKEND_IMAGE}:X.Y.Z)
-      - frontend/package.json "version" field
+      - frontend/package.json + package-lock.json "version" field
       - server/pom.xml artifact version (keeps -SNAPSHOT on main unless --release)
       - iOS MARKETING_VERSION, plus CURRENT_PROJECT_VERSION from the commit count
         (release only - there is no iOS image for a plain build to tag)
@@ -281,10 +281,21 @@ update_frontend_version() {
     fi
     log_info "Updating frontend/package.json to version $v"
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v frontend/package.json"
+        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v frontend/package.json package-lock.json"
         return
     fi
     sed_inplace "s/\"version\": \".*\"/\"version\": \"$v\"/" "$FRONTEND_DIR/package.json"
+    update_frontend_lock_version "$v"
+}
+
+# package-lock.json repeats the project version twice - at the top level and again in
+# packages[""] - above hundreds of dependency "version" keys that must not be touched.
+# npm always writes both before the first "dependencies" block, so the range ends there.
+# Left unsynced the lock drifts a release behind package.json on every bump.
+update_frontend_lock_version() {
+    local v="$1" lock="$FRONTEND_DIR/package-lock.json"
+    [[ -f "$lock" ]] || return 0
+    sed_inplace "1,/\"dependencies\"/s/\"version\": \".*\"/\"version\": \"$v\"/" "$lock"
 }
 
 # Write the artifact version in server/pom.xml. Release builds and non-main
@@ -485,17 +496,25 @@ rearm_snapshot() {
     local v="$1"
     log_info "Re-arming -SNAPSHOT for next development iteration"
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v-SNAPSHOT frontend/package.json server/pom.xml"
+        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v-SNAPSHOT frontend/package.json package-lock.json server/pom.xml"
         echo -e "${YELLOW}[DRY-RUN]${RESET} git commit -m \"Prepare for next development iteration\""
         return
     fi
     if [[ -f "$FRONTEND_DIR/package.json" ]]; then
         sed_inplace "s/\"version\": \".*\"/\"version\": \"$v-SNAPSHOT\"/" "$FRONTEND_DIR/package.json"
     fi
+    update_frontend_lock_version "$v-SNAPSHOT"
     if [[ -f "$SERVER_DIR/pom.xml" ]]; then
         sed_inplace "/<artifactId>photo-upload-server<\/artifactId>/{n;s|<version>.*</version>|<version>$v-SNAPSHOT</version>|;}" "$SERVER_DIR/pom.xml"
     fi
-    git add "$FRONTEND_DIR/package.json" "$SERVER_DIR/pom.xml"
+    # Named individually rather than `git add -A`: a release must not sweep in whatever
+    # else is dirty. Missing paths are dropped first, because `set -e` makes `git add` on
+    # one abort the whole release.
+    local to_add=()
+    for f in "$FRONTEND_DIR/package.json" "$FRONTEND_DIR/package-lock.json" "$SERVER_DIR/pom.xml"; do
+        [[ -f "$f" ]] && to_add+=("$f")
+    done
+    git add "${to_add[@]}"
     git commit -m "Prepare for next development iteration"
 }
 
