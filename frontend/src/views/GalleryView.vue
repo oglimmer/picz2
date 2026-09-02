@@ -1602,7 +1602,12 @@ export default {
     const bulkActionBusy = ref(false)
     const bulkActionLabel = ref('')
     const ALL_TAG = 'all'
-    const SYSTEM_TAGS = new Set([ALL_TAG])
+    const HIDDEN_TAG = 'hidden'
+    // Neither can be renamed, deleted, or switched off per album — the server always enables both,
+    // so they are dropped from the album's tag picker rather than shown as permanently ticked.
+    // They stay ordinary tags everywhere else: `hidden` in particular has to be filterable and
+    // bulk-removable here, because taking it off is how the owner publishes a photo (D70).
+    const SYSTEM_TAGS = new Set([ALL_TAG, HIDDEN_TAG])
     // Which tag the album-wide Add to All / Remove from All pair acts on.
     const bulkTagName = ref('')
     // 'add' | 'remove' | null — holds the mode so the spinner lands on the button that was clicked.

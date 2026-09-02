@@ -4,6 +4,8 @@ package com.oglimmer.photoupload.controller;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
+import com.oglimmer.photoupload.model.NewAssetTagRequest;
+import com.oglimmer.photoupload.model.NewAssetTagResponse;
 import com.oglimmer.photoupload.model.SettingRequest;
 import com.oglimmer.photoupload.model.SettingResponse;
 import com.oglimmer.photoupload.model.TargetAlbumRequest;
@@ -116,5 +118,31 @@ public class SettingsController {
             .build();
 
     return ResponseEntity.ok(response);
+  }
+
+  /** Which tag new uploads get for this user — {@code hidden} or {@code all} (D70). */
+  @GetMapping("/new-asset-tag")
+  public ResponseEntity<NewAssetTagResponse> getNewAssetTag() {
+    return ResponseEntity.ok(
+        NewAssetTagResponse.builder()
+            .success(true)
+            .tagName(userSettingService.getNewAssetTag())
+            .build());
+  }
+
+  /**
+   * Change it. Moving to {@code all} needs {@code confirmed: true} in the body — the clients only
+   * send that after the user has read what it means in a dialog.
+   */
+  @PutMapping("/new-asset-tag")
+  public ResponseEntity<NewAssetTagResponse> setNewAssetTag(
+      @RequestBody NewAssetTagRequest request) {
+    userSettingService.setNewAssetTag(request.getTagName(), request.isConfirmed());
+
+    return ResponseEntity.ok(
+        NewAssetTagResponse.builder()
+            .success(true)
+            .tagName(userSettingService.getNewAssetTag())
+            .build());
   }
 }

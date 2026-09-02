@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -22,12 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class TagService {
 
-  private static final String ALL_TAG = FileStorageService.ALL_TAG;
-
-  private static boolean isSystemTag(String name) {
-    return ALL_TAG.equals(name);
-  }
-
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
   private final UserContext userContext;
@@ -44,7 +39,7 @@ public class TagService {
     User currentUser = userContext.getCurrentUser();
 
     // Prevent manual creation of special system tags
-    if (isSystemTag(tagName)) {
+    if (SystemTags.isSystemTag(tagName)) {
       throw new ValidationException(
           "The '" + tagName + "' tag is a special system tag and cannot be manually created");
     }
@@ -78,13 +73,13 @@ public class TagService {
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "id", tagId));
 
     // Prevent modification of special system tags
-    if (isSystemTag(tag.getName())) {
+    if (SystemTags.isSystemTag(tag.getName())) {
       throw new ValidationException(
           "The '" + tag.getName() + "' tag is a special system tag and cannot be modified");
     }
 
     // Prevent renaming to a reserved system tag name
-    if (isSystemTag(newTagName)) {
+    if (SystemTags.isSystemTag(newTagName)) {
       throw new ValidationException(
           "Cannot rename tag to '" + newTagName + "' as it is a reserved system tag name");
     }
@@ -117,7 +112,7 @@ public class TagService {
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "id", tagId));
 
     // Prevent deletion of special system tags
-    if (isSystemTag(tag.getName())) {
+    if (SystemTags.isSystemTag(tag.getName())) {
       throw new ValidationException(
           "The '" + tag.getName() + "' tag is a special system tag and cannot be deleted");
     }

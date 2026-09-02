@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.oglimmer.photoupload.entity.SystemTags;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,29 +105,28 @@ class FileStorageServiceBulkTagIT {
 
   @Test
   void addingAllToEveryFileKeepsTheTagsAlreadyThere() {
-    int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
+    int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, SystemTags.ALL);
 
     assertThat(changed).isEqualTo(3);
-    assertThat(tagsOf(untagged)).containsExactly(FileStorageService.ALL_TAG);
-    assertThat(tagsOf(onlyRealTag)).containsExactly(FileStorageService.ALL_TAG, "beach");
-    assertThat(tagsOf(twoRealTags)).containsExactly(FileStorageService.ALL_TAG, "beach", "sunset");
+    assertThat(tagsOf(untagged)).containsExactly(SystemTags.ALL);
+    assertThat(tagsOf(onlyRealTag)).containsExactly(SystemTags.ALL, "beach");
+    assertThat(tagsOf(twoRealTags)).containsExactly(SystemTags.ALL, "beach", "sunset");
   }
 
   @Test
   void addingAllTwiceIsANoOp() {
-    fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
-    int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
+    fileStorageService.addTagToAllFilesInAlbum(albumId, SystemTags.ALL);
+    int changed = fileStorageService.addTagToAllFilesInAlbum(albumId, SystemTags.ALL);
 
     assertThat(changed).isZero();
-    assertThat(tagsOf(untagged)).containsExactly(FileStorageService.ALL_TAG);
+    assertThat(tagsOf(untagged)).containsExactly(SystemTags.ALL);
   }
 
   @Test
   void removingAllLeavesAFileWithNoTagsAtAll() {
-    fileStorageService.addTagToAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
+    fileStorageService.addTagToAllFilesInAlbum(albumId, SystemTags.ALL);
 
-    int changed =
-        fileStorageService.removeTagFromAllFilesInAlbum(albumId, FileStorageService.ALL_TAG);
+    int changed = fileStorageService.removeTagFromAllFilesInAlbum(albumId, SystemTags.ALL);
 
     assertThat(changed).isEqualTo(3);
     // The tag really is gone — not resurrected by a cascade on flush. Since D68 nothing is put

@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumEnabledTag;
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
@@ -27,8 +28,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AlbumTagService {
 
-  private static final String ALL_TAG = FileStorageService.ALL_TAG;
-
   private final AlbumRepository albumRepository;
   private final TagRepository tagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
@@ -40,15 +39,15 @@ public class AlbumTagService {
     User currentUser = userContext.getCurrentUser();
     Album album = requireOwnedAlbum(albumId);
 
-    // The `all` system tag is always implicitly enabled for every album. Ensure it exists
-    // and prepend it to the list so the frontend surfaces it in every album's pickers.
-    Tag allTag = ensureSystemTag(currentUser, ALL_TAG);
-
+    // Both system tags are always implicitly enabled for every album. Ensure they exist and
+    // prepend them so the frontend surfaces them in every album's pickers — `hidden` has to be
+    // there or the owner could not take a new photo out of the holding pen (D70).
     List<Tag> tags = new ArrayList<>();
-    tags.add(allTag);
+    tags.add(ensureSystemTag(currentUser, SystemTags.ALL));
+    tags.add(ensureSystemTag(currentUser, SystemTags.HIDDEN));
     albumEnabledTagRepository.findByAlbumId(album.getId()).stream()
         .map(AlbumEnabledTag::getTag)
-        .filter(t -> !isSystemTag(t.getName()))
+        .filter(t -> !SystemTags.isSystemTag(t.getName()))
         .sorted((a, b) -> a.getName().compareToIgnoreCase(b.getName()))
         .forEach(tags::add);
     return tagMapper.tagsToTagInfos(tags);
@@ -62,15 +61,15 @@ public class AlbumTagService {
     Set<Long> desired = tagIds == null ? new HashSet<>() : new HashSet<>(tagIds);
 
     // Validate all requested tags belong to current user.
-    // The `all` system tag is always implicitly enabled — no row is stored for it, so silently
-    // drop its ID from the incoming set if the client sent it.
+    // The system tags are always implicitly enabled — no row is stored for them, so silently
+    // drop their IDs from the incoming set if the client sent them.
     List<Tag> desiredTags = new ArrayList<>();
     for (Long tagId : desired) {
       Tag tag =
           tagRepository
               .findByUserAndId(currentUser, tagId)
               .orElseThrow(() -> new ResourceNotFoundException("Tag", "id", tagId));
-      if (isSystemTag(tag.getName())) {
+      if (SystemTags.isSystemTag(tag.getName())) {
         continue;
       }
       desiredTags.add(tag);
@@ -125,9 +124,5 @@ public class AlbumTagService {
               log.info("Created special '{}' tag for user: {}", name, user.getEmail());
               return saved;
             });
-  }
-
-  private static boolean isSystemTag(String name) {
-    return ALL_TAG.equals(name);
   }
 }

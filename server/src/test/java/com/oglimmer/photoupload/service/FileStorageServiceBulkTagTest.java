@@ -13,6 +13,7 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.ValidationException;
@@ -96,12 +97,11 @@ class FileStorageServiceBulkTagTest {
     album.setUser(user);
     album.setName("Holiday");
 
-    allTag = tag(10L, FileStorageService.ALL_TAG);
+    allTag = tag(10L, SystemTags.ALL);
 
     when(userContext.getCurrentUser()).thenReturn(user);
     when(albumRepo.findByUserAndId(user, ALBUM_ID)).thenReturn(Optional.of(album));
-    when(tagRepo.findByUserAndName(user, FileStorageService.ALL_TAG))
-        .thenReturn(Optional.of(allTag));
+    when(tagRepo.findByUserAndName(user, SystemTags.ALL)).thenReturn(Optional.of(allTag));
   }
 
   @Test
@@ -111,7 +111,7 @@ class FileStorageServiceBulkTagTest {
     FileMetadata beachOnly = file(102L, tag(12L, "beach"));
     givenAlbumFiles(untagged, tagged, beachOnly);
 
-    int changed = svc.addTagToAllFilesInAlbum(ALBUM_ID, FileStorageService.ALL_TAG);
+    int changed = svc.addTagToAllFilesInAlbum(ALBUM_ID, SystemTags.ALL);
 
     assertEquals(2, changed);
     ArgumentCaptor<ImageTag> saved = ArgumentCaptor.forClass(ImageTag.class);
@@ -121,10 +121,10 @@ class FileStorageServiceBulkTagTest {
         saved.getAllValues().stream().map(it -> it.getFileMetadata().getId()).toList());
     // Assert on the fetched collection, not on repository.delete: it is mapped cascade-ALL +
     // orphanRemoval, so the collection is what decides which rows survive the flush.
-    assertEquals(List.of(FileStorageService.ALL_TAG), tagNames(untagged));
-    assertEquals(List.of(FileStorageService.ALL_TAG), tagNames(tagged));
+    assertEquals(List.of(SystemTags.ALL), tagNames(untagged));
+    assertEquals(List.of(SystemTags.ALL), tagNames(tagged));
     // `all` is an ordinary tag now, so it sits alongside the ones already there.
-    assertEquals(List.of("beach", FileStorageService.ALL_TAG), tagNames(beachOnly));
+    assertEquals(List.of("beach", SystemTags.ALL), tagNames(beachOnly));
   }
 
   @Test
@@ -144,7 +144,7 @@ class FileStorageServiceBulkTagTest {
     FileMetadata withoutAll = file(102L, tag(12L, "beach"));
     givenAlbumFiles(onlyAll, allPlusBeach, withoutAll);
 
-    int changed = svc.removeTagFromAllFilesInAlbum(ALBUM_ID, FileStorageService.ALL_TAG);
+    int changed = svc.removeTagFromAllFilesInAlbum(ALBUM_ID, SystemTags.ALL);
 
     assertEquals(2, changed);
     // The tag is gone from the collection, which is what orphanRemoval acts on.

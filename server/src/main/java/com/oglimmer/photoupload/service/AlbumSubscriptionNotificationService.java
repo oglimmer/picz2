@@ -6,6 +6,7 @@ import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumSubscription;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.AlbumSubscriptionRepository;
@@ -112,10 +113,17 @@ public class AlbumSubscriptionNotificationService {
       lastNotified = subscription.getCreatedAt();
     }
 
-    // Get all files in the album
+    // Get all files in the album, minus the ones in the holding pen (D70). A `hidden` asset is
+    // not on the share page, so a mail announcing it would send the reader to an album that looks
+    // unchanged. Dropping it from BOTH counts also gives the behaviour we want on release: when
+    // the owner reviews it and takes `hidden` off, the file joins the visible set and the next
+    // sweep sees the count rise — one mail, at the moment of publishing rather than of shooting.
     List<FileMetadata> allFiles =
-        fileMetadataRepository.findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(
-            album.getShareToken());
+        fileMetadataRepository
+            .findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(album.getShareToken())
+            .stream()
+            .filter(file -> !isHidden(file))
+            .toList();
 
     // Calculate visible image count at the time of last notification
     int visibleCountBefore = countVisibleImages(allFiles, lastNotified);
@@ -167,8 +175,9 @@ public class AlbumSubscriptionNotificationService {
    * image has tags: only images WITH tags are visible
    *
    * <p>A file is considered to "have tags at time T" if it has at least one ImageTag with taggedAt
-   * < T. Since D68 every newly uploaded asset carries the {@code all} tag, so in practice a fresh
-   * album counts every asset.
+   * < T. Since D68 every newly uploaded asset carries a tag from the moment it is registered, so in
+   * practice a fresh album counts every asset it is given — and since D70 the hidden ones are not
+   * given to it at all, having been filtered out by the caller.
    *
    * @param allFiles All files in the album (with tags eagerly loaded)
    * @param beforeTime Optional cutoff time - only count images visible before this time
@@ -218,6 +227,12 @@ public class AlbumSubscriptionNotificationService {
               .filter(file -> hasTagsBefore(file.getImageTags(), beforeTime))
               .count();
     }
+  }
+
+  /** True while the asset carries the {@code hidden} system tag (D70). */
+  private static boolean isHidden(FileMetadata file) {
+    return file.getImageTags().stream()
+        .anyMatch(it -> SystemTags.HIDDEN.equals(it.getTag().getName()));
   }
 
   /**

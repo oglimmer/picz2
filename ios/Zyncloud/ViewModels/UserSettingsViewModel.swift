@@ -1,10 +1,11 @@
 import Combine
 import Foundation
 
-/// Backs the two account-level settings screens: narration languages and tags.
+/// Backs the account-level settings screens: narration languages, tags, and which tag new uploads
+/// get.
 ///
-/// Both live on the user, not on an album, so one view model owns both and each screen reads the
-/// part it needs. That also means the tag list is loaded once when either screen opens.
+/// They all live on the user, not on an album, so one view model owns them and each screen reads
+/// the part it needs. That also means the tag list is loaded once when any of them opens.
 @MainActor
 class UserSettingsViewModel: ViewModelProtocol {
     @Published var isLoading: Bool = false
@@ -14,6 +15,11 @@ class UserSettingsViewModel: ViewModelProtocol {
     @Published var language1: String = ""
     @Published var language2: String = ""
     @Published var isSavingLanguages: Bool = false
+
+    // New photo visibility (D70)
+    @Published var newAssetTag: NewAssetTag = .hidden
+    @Published var isLoadingNewAssetTag: Bool = false
+    @Published var isSavingNewAssetTag: Bool = false
 
     // Tags
     @Published var tags: [Tag] = []
@@ -116,6 +122,81 @@ class UserSettingsViewModel: ViewModelProtocol {
             language1 = savedLanguage1
         } else {
             language2 = savedLanguage2
+        }
+    }
+
+    // MARK: - New Photo Visibility
+
+    func loadNewAssetTag() {
+        guard let apiClient = requireClient() else { return }
+
+        isLoadingNewAssetTag = true
+
+        apiClient.fetchNewAssetTag { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isLoadingNewAssetTag = false
+
+                switch result {
+                case let .success(tag):
+                    self.newAssetTag = tag
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    /// Ask before switching, then switch.
+    ///
+    /// Only the move towards `.all` puts up a dialog. Going back to `.hidden` can only ever take
+    /// photos off a public page; going to `.all` puts every future upload in front of strangers
+    /// the moment it finishes processing, and the server refuses that change unless the client
+    /// says the user was told.
+    func selectNewAssetTag(_ tag: NewAssetTag) {
+        guard tag != newAssetTag, !isSavingNewAssetTag else { return }
+
+        guard tag == .all else {
+            applyNewAssetTag(tag)
+            return
+        }
+
+        alertState = .confirmation(
+            title: "Publish every new photo?",
+            message: "From now on each photo and video you upload becomes visible to anyone "
+                + "holding the share link of a published album — within seconds, with no review. "
+                + "Photos this app uploads automatically are included.\n\n"
+                + "You can switch back later, but anything published in the meantime stays "
+                + "published until you re-tag it by hand.",
+            confirmTitle: "Publish New Photos",
+            confirmAction: { [weak self] in
+                self?.applyNewAssetTag(tag)
+            },
+        )
+    }
+
+    private func applyNewAssetTag(_ tag: NewAssetTag) {
+        guard let apiClient = requireClient() else { return }
+
+        isSavingNewAssetTag = true
+
+        apiClient.setNewAssetTag(tag) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSavingNewAssetTag = false
+
+                switch result {
+                case .success:
+                    self.newAssetTag = tag
+                    // `hidden` may have been created server-side by this very call, so a tag list
+                    // loaded earlier in the session is now one row short.
+                    if !self.tags.isEmpty {
+                        self.loadTags()
+                    }
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
         }
     }
 
