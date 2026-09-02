@@ -938,6 +938,7 @@
               @delete="handleDeleteFile"
               @rotate="handleRotateImage"
               @add-tag="handleAddTag"
+              @update-caption="handleUpdateCaption"
               @remove-tag="handleRemoveTag"
               @filter-tag="filterByTagName"
               @toggle-select="(fileId, shiftKey) => handleToggleSelect(fileId, albumIndexOf(fileId), shiftKey)"
@@ -974,6 +975,7 @@
         @delete="handleDeleteFile"
         @rotate="handleRotateImage"
         @add-tag="handleAddTag"
+        @update-caption="handleUpdateCaption"
         @remove-tag="handleRemoveTag"
         @filter-tag="filterByTagName"
         @toggle-select="(fileId, shiftKey) => handleToggleSelect(fileId, index, shiftKey)"
@@ -1115,6 +1117,7 @@ export default {
       deleteFile,
       addTag,
       removeTag,
+      updateCaption,
       addTagToAllFiles,
       removeTagFromAllFiles,
       reorderFiles,
@@ -2255,6 +2258,15 @@ export default {
       }
     }
 
+    async function handleUpdateCaption(fileId, caption) {
+      try {
+        await updateCaption(fileId, caption)
+        success(caption ? 'Caption saved' : 'Caption removed')
+      } catch (err) {
+        error(`Error saving caption: ${err.message}`)
+      }
+    }
+
     function filterByTagName(tagName) {
       selectedTag.value = tagName
     }
@@ -2798,6 +2810,7 @@ export default {
       handleRotateImage,
       handleAddTag,
       handleRemoveTag,
+      handleUpdateCaption,
       filterByTagName,
       handleReorderByFilename,
       handleReorderByExif,

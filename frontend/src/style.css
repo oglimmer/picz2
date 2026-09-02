@@ -2944,6 +2944,16 @@ body.landing-dark { background: #0B1D2E; }
     padding: var(--sp-2) var(--sp-3);
   }
   .group-hint-label { font-size: .9375rem; }
+  .lightbox-caption {
+    bottom: var(--sp-3);
+    max-width: calc(100vw - 2rem);
+    padding: var(--sp-2) var(--sp-3);
+  }
+  .lightbox-caption-text {
+    font-size: .8125rem;
+    /* Lower cap on a phone: 40vh of a tall screen would leave the photo a letterbox. */
+    max-height: 30vh;
+  }
   .gallery-header { padding: var(--sp-3) var(--sp-4); }
   .tag-picker-panel { margin: 0 var(--sp-4) var(--sp-2); }
   .tag-picker-notice { margin: 0 var(--sp-4) var(--sp-2); }
@@ -3162,6 +3172,63 @@ body.landing-dark { background: #0B1D2E; }
   transition: color var(--t-fast);
 }
 .group-hint-toggle:hover { color: #fff; }
+
+/* The owner's caption (D69) inside the lightbox. Bottom-centred over the frame, on its own
+   translucent plate so it stays readable over a bright photo. Pointer events off: the image
+   itself is the "next" target and the caption must not swallow that tap. */
+.lightbox-caption {
+  position: absolute;
+  bottom: var(--sp-6);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  max-width: min(720px, calc(100vw - 4rem));
+  padding: var(--sp-3) var(--sp-4);
+  background: rgba(10,5,2,.62);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: var(--r-md);
+  backdrop-filter: blur(6px);
+  /* Left, not centred. Centring is fine for the one-line captions most photos get, but a
+     paragraph centred over a photo wraps into a ragged block that is tiring to read — and a
+     one-liner looks identical either way, because the plate shrinks to fit its text. */
+  text-align: start;
+}
+.lightbox-caption-text {
+  margin: 0;
+  font-size: .9375rem;
+  line-height: 1.55;
+  color: rgba(255,255,255,.92);
+  white-space: pre-wrap;
+  /* `break-word`, not `anywhere`: `anywhere` may split a word mid-way even where an ordinary
+     wrap would have fitted it, which is what made captions break in odd places. This only
+     splits a word that cannot fit on a line of its own. */
+  overflow-wrap: break-word;
+  /* Capped rather than free-growing: an expanded caption would otherwise climb the frame and
+     cover the photo it describes. The cap is on the text, not the plate, so Show less stays
+     put at the bottom instead of scrolling away with the words above it. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.lightbox-caption-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lightbox-caption-toggle {
+  margin-top: var(--sp-1);
+  padding: 0;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,.62);
+  font-family: var(--f-body);
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--t-fast);
+}
+.lightbox-caption-toggle:hover { color: #fff; }
 
 .recording-overlay {
   position: absolute;
@@ -3510,6 +3577,73 @@ body.landing-dark { background: #0B1D2E; }
   color: var(--c-text-3);
 }
 .file-exif-date { color: var(--c-text-3); }
+
+/* The owner's caption (D69) under a gallery thumbnail. Clamped to three lines so one long
+   caption cannot make its tile twice the height of its neighbours in the grid. */
+.file-caption {
+  /* Vertical space as margin, horizontal as padding. `-webkit-line-clamp` clips at the padding
+     box, not the content box, so a fourth line stays *visible* inside any bottom padding and
+     bleeds out of the card. Margin sits outside that box, so nothing can leak into it. */
+  margin: var(--sp-2) 0;
+  padding: 0 var(--sp-3);
+  background: var(--c-surface);
+  font-size: .8125rem;
+  line-height: 1.45;
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  /* See .lightbox-caption-text — `anywhere` broke words mid-way for no reason. */
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.file-caption + .file-info { padding-top: 0; }
+
+.caption-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.caption-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--f-body);
+  font-size: .75rem;
+  line-height: 1.45;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1.5px solid var(--c-border);
+  background: var(--c-surface-alt);
+  color: var(--c-text);
+}
+.caption-input:focus-visible { border-color: var(--c-accent); outline: 2px solid var(--c-accent); outline-offset: 1px; }
+.caption-editor-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+.caption-btn,
+.caption-toggle {
+  font-family: var(--f-body);
+  font-size: .75rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  border: 1.5px solid transparent;
+  background: none;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+/* Same restraint as .tag-select: quiet until the tile is hovered, so a grid of two dozen
+   photos is not also a grid of two dozen buttons. */
+.gallery-item:hover .caption-toggle { color: var(--c-text-2); border-color: var(--c-border); background: var(--c-surface-alt); }
+.caption-btn:hover,
+.caption-toggle:hover { color: var(--c-accent); border-color: var(--c-border-2); }
+.caption-btn--save { color: var(--c-accent); border-color: var(--c-border); }
 
 .file-tags {
   display: flex;

@@ -120,6 +120,9 @@ export interface AlbumFile {
   // next morning for anyone browsing from Europe.
   captureUtcOffsetSeconds?: number | null;
   rotation?: number;
+  // Free text the album owner wrote about this photo (D69). Shown to public visitors in the
+  // grid and in the lightbox. Absent or empty means the photo has no caption.
+  caption?: string | null;
   tags: string[];
   order?: number;
   publicToken?: string;

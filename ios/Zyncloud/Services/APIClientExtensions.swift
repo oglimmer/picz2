@@ -441,6 +441,19 @@ extension APIClient {
     func rotateImageLeft(id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         send(.post, "api/files/\(id)/rotate", completion: completion)
     }
+
+    /// Writes the owner's caption on one photo (D69), and answers with the photo as it now is.
+    ///
+    /// Synchronous on the server — nothing is re-rendered — so unlike a rotate there is no
+    /// status to poll and no reload to follow. An empty `caption` clears it.
+    func updateCaption(id: Int, caption: String, completion: @escaping @Sendable (Result<Photo, Error>) -> Void) {
+        send(.put, "api/files/\(id)/caption", body: CaptionBody(caption: caption), expecting: Photo.self, completion: completion)
+    }
+}
+
+/// The body of `PUT /api/files/{id}/caption`. Blank means "clear it" — the server stores null.
+struct CaptionBody: Encodable {
+    let caption: String
 }
 
 struct ReorderResponse: Codable {

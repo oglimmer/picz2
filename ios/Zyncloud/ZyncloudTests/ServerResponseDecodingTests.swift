@@ -100,6 +100,29 @@ struct ServerResponseDecodingTests {
         #expect(file.tags.isEmpty)
     }
 
+    /// The owner's caption (D69). Absent on every asset that has none, so both shapes have to
+    /// decode — an over-eager non-optional here would fail the whole album's decode.
+    @Test func decodesTheCaption() throws {
+        let withCaption = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7,
+          "caption": "Sunrise over the fjord"
+        }
+        """)
+        #expect(withCaption.caption == "Sunrise over the fjord")
+
+        let without = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7
+        }
+        """)
+        #expect(without.caption == nil)
+    }
+
     /// The four fields the "By Day & Place" shelving reads. Their names have to match
     /// `FileInfo.java` exactly — a typo here would silently put every photo in one nameless
     /// place on the wrong day.

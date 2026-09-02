@@ -106,6 +106,29 @@
       @load="handleImageLoad"
       @error="handleImageLoad"
     >
+    <!-- The owner's caption (D69). Sits over the bottom of the frame so it reads as part of the
+         photo, and hides with the rest of the chrome during slideshow playback. Clamped to three
+         lines with a toggle, like the group hint above: a long caption left to run free would
+         climb the frame and cover the photo it describes. -->
+    <div
+      v-if="file.caption && captionVisible"
+      class="lightbox-caption"
+      @click.stop
+    >
+      <p
+        class="lightbox-caption-text"
+        :class="{ 'lightbox-caption-text--clamped': !captionExpanded }"
+      >
+        {{ file.caption }}
+      </p>
+      <button
+        v-if="captionIsLong"
+        class="lightbox-caption-toggle"
+        @click.stop="captionExpanded = !captionExpanded"
+      >
+        {{ captionExpanded ? 'Show less' : 'Show more' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -154,12 +177,25 @@ export default {
     const controlsVisible = ref(true)
     const isLoading = ref(false)
     const groupTextExpanded = ref(false)
+    const captionExpanded = ref(false)
     const groupHintDismissed = ref(false)
 
     const isVideoFile = computed(() => isVideo(props.file))
 
     // Stays out of the way of the REC badge (same corner) and honours "Hide Controls" during
     // slideshow playback, so the photo can still be seen unobstructed.
+    // Whether the toggle is worth drawing at all. A character count rather than a measured
+    // height: the plate's width varies with the viewport, so any exact answer would need a
+    // resize observer to stay right, and being one line out here costs nothing — the toggle
+    // simply appears on a caption that turns out to fit.
+    const captionIsLong = computed(() => (props.file?.caption?.length ?? 0) > 140)
+
+    // Same rule as the group hint: the caption is chrome, so "Hide Controls" hides it too, and
+    // it stays out of the way while a recording is being made.
+    const captionVisible = computed(
+      () => !props.isRecording && !props.isSaving && (!props.isPlaying || controlsVisible.value)
+    )
+
     const groupHintVisible = computed(
       () =>
         !groupHintDismissed.value &&
@@ -184,6 +220,9 @@ export default {
     watch(() => props.file, (newFile, oldFile) => {
       if (newFile && oldFile && newFile.id !== oldFile.id) {
         isLoading.value = true
+        // A caption belongs to its photo, so an expanded one must not stay expanded over the
+        // next photo's — the reader would meet a wall of text they never asked to unfold.
+        captionExpanded.value = false
       }
     })
 
@@ -234,6 +273,9 @@ export default {
       controlsVisible,
       isLoading,
       shouldMuteVideo,
+      captionVisible,
+      captionExpanded,
+      captionIsLong,
       groupHintVisible,
       groupTextExpanded,
       groupHintDismissed,

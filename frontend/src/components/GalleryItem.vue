@@ -191,6 +191,17 @@
         Start group
       </button>
     </div>
+    <!-- The owner's caption (D69). Outside `file-info` on purpose: that block is owner-only
+         chrome, while the caption is written for the readers and has to survive presentation
+         mode, where showFileInfo is false. -->
+    <p
+      v-if="file.caption && !editingCaption"
+      class="file-caption"
+      :title="file.caption"
+      @click.stop
+    >
+      {{ file.caption }}
+    </p>
     <div
       v-if="showFileInfo"
       class="file-info"
@@ -227,7 +238,45 @@
           >&times;</button>
         </span>
       </div>
+      <div
+        v-if="editingCaption"
+        class="caption-editor"
+        @click.stop
+      >
+        <textarea
+          ref="captionInput"
+          v-model="captionDraft"
+          class="caption-input"
+          rows="3"
+          :maxlength="MAX_CAPTION_LENGTH"
+          placeholder="Say something about this photo…"
+          @keydown.esc.stop="cancelCaption"
+          @keydown.enter.meta.prevent="saveCaption"
+          @keydown.enter.ctrl.prevent="saveCaption"
+        />
+        <div class="caption-editor-actions">
+          <button
+            class="caption-btn caption-btn--save"
+            @click.stop="saveCaption"
+          >
+            Save
+          </button>
+          <button
+            class="caption-btn"
+            @click.stop="cancelCaption"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
       <div class="file-actions">
+        <button
+          class="caption-toggle"
+          :title="file.caption ? 'Edit caption' : 'Add a caption'"
+          @click.stop="startEditingCaption"
+        >
+          {{ file.caption ? 'Edit caption' : '+ Add caption' }}
+        </button>
         <select
           class="tag-select"
           :value="''"
@@ -253,7 +302,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import LazyImage from '@/components/LazyImage.vue'
 import { useApi } from '@/composables/useApi'
 import { formatBytes, formatDate, isVideo } from '@/utils/format'
@@ -301,6 +350,7 @@ const emit = defineEmits<{
   delete: [fileId: number]
   rotate: [fileId: number]
   'add-tag': [fileId: number, tagName: string]
+  'update-caption': [fileId: number, caption: string]
   'remove-tag': [fileId: number, tagName: string]
   'filter-tag': [tagName: string]
   'toggle-select': [fileId: number, shiftKey?: boolean]
@@ -350,6 +400,30 @@ const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))
 const exifDate = computed(() => props.file.exifDateTimeOriginal ? formatDate(props.file.exifDateTimeOriginal) : null)
 const uploadedTitle = computed(() => fileDate.value ? `Uploaded ${fileDate.value}` : '')
+
+// Mirrors MAX_CAPTION_LENGTH in FileStorageService — the textarea stops typing at the same
+// point the server would reject, so nobody writes a paragraph and loses it on Save.
+const MAX_CAPTION_LENGTH = 2000
+
+const editingCaption = ref(false)
+const captionDraft = ref('')
+const captionInput = ref<HTMLTextAreaElement | null>(null)
+
+function startEditingCaption() {
+  captionDraft.value = props.file.caption ?? ''
+  editingCaption.value = true
+  nextTick(() => captionInput.value?.focus())
+}
+
+function cancelCaption() {
+  editingCaption.value = false
+}
+
+/** Emitting a blank caption is how the caption is cleared — the server stores null for it. */
+function saveCaption() {
+  emit('update-caption', props.file.id, captionDraft.value.trim())
+  editingCaption.value = false
+}
 
 function handleAddTag(event: Event) {
   const target = event.target as HTMLSelectElement
