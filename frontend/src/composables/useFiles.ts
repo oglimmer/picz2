@@ -17,6 +17,7 @@ export interface FilesComposable {
   deleteFile: (fileId: number) => Promise<void>;
   addTag: (fileId: number, tagName: string) => Promise<void>;
   removeTag: (fileId: number, tagName: string) => Promise<void>;
+  updateCaption: (fileId: number, caption: string) => Promise<void>;
   addTagToAllFiles: (albumId: number, tagName: string) => Promise<number>;
   removeTagFromAllFiles: (albumId: number, tagName: string) => Promise<number>;
   reorderFiles: (fileIds: number[]) => Promise<void>;
@@ -238,6 +239,37 @@ export function useFiles(): FilesComposable {
   }
 
   /**
+   * Set or clear this photo's caption (D69). A blank caption clears it — the server stores null
+   * either way, so both lists are patched in place rather than reloaded.
+   */
+  async function updateCaption(fileId: number, caption: string): Promise<void> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/files/${fileId}/caption`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ caption }),
+      },
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || "Unknown error");
+    }
+
+    const updated: AlbumFile = await response.json();
+
+    // Both arrays can hold the same photo (presentation mode filters one out of the other),
+    // so patch whichever copies exist instead of assuming a single home.
+    for (const list of [files.value, allFilesUnfiltered.value]) {
+      const file = list.find((f) => f.id === fileId);
+      if (file) file.caption = updated.caption ?? null;
+    }
+  }
+
+  /**
    * Add a tag to every file in an album. Returns how many files actually changed
    * (files that already had the tag are skipped by the backend).
    */
@@ -373,6 +405,7 @@ export function useFiles(): FilesComposable {
     deleteFile,
     addTag,
     removeTag,
+    updateCaption,
     addTagToAllFiles,
     removeTagFromAllFiles,
     reorderFiles,

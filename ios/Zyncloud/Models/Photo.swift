@@ -45,6 +45,7 @@ struct FileInfo: Codable, Identifiable {
         case captureUtcOffsetSeconds
         case gpsLatitude
         case gpsLongitude
+        case caption
     }
 
     /// When the shutter fired, as the server read it out of the file. An ISO-8601 instant, or
@@ -64,6 +65,14 @@ struct FileInfo: Codable, Identifiable {
     var gpsLatitude: Double?
 
     var gpsLongitude: Double?
+
+    /// The owner's caption for this photo (D69), or nil when it has none. Shown under the
+    /// thumbnail in the grid and over the picture in the full-screen view — the same two places
+    /// a public visitor sees it on the web.
+    ///
+    /// `var` for the same reason as ``tags``: saving a caption answers with the updated photo,
+    /// and writing that one field back beats reloading the whole album.
+    var caption: String?
 
     var processing: AssetProcessingStatus? {
         processingStatus.flatMap(AssetProcessingStatus.init(rawValue:))

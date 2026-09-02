@@ -407,6 +407,34 @@ class AlbumDetailViewModel: ViewModelProtocol {
         }
     }
 
+    /// Saves (or clears) this photo's caption (D69).
+    ///
+    /// The server answers with the updated photo, and only that one row is written back — the
+    /// caption changes no image, so there is nothing to reload and no processing to wait out.
+    func updateCaption(_ caption: String, on photo: Photo) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.updateCaption(id: photo.id, caption: caption) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(updated):
+                    if let index = self.photos.firstIndex(where: { $0.id == photo.id }) {
+                        self.photos[index].caption = updated.caption
+                    }
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
     // MARK: - Bulk Actions
 
     /// Rotates every picked still photo 90° left.

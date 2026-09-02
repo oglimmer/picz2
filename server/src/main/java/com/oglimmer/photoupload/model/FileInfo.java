@@ -31,6 +31,12 @@ public class FileInfo {
    */
   private Integer captureUtcOffsetSeconds;
 
+  /**
+   * The owner's caption for this asset, or null when there is none (D69). Public share responses
+   * carry it too — it is written for the visitors, not for the owner.
+   */
+  private String caption;
+
   private Integer rotation;
   private Integer displayOrder;
   private List<String> tags = new ArrayList<>();

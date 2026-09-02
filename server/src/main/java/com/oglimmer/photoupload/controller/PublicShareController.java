@@ -121,9 +121,16 @@ public class PublicShareController {
     model.addAttribute("coverImageToken", imageToken);
     model.addAttribute("coverImageType", file.getMimetype());
 
-    // Description for specific image
-    String description = file.getOriginalName() != null ? file.getOriginalName() : "Photo";
-    description += " from " + album.getName();
+    // Description for specific image. The owner's caption (D69) wins when there is one: it is
+    // written for readers, while the original name is usually a camera's IMG_1234.
+    String caption = file.getCaption();
+    String description;
+    if (caption != null && !caption.isBlank()) {
+      description = caption;
+    } else {
+      description = file.getOriginalName() != null ? file.getOriginalName() : "Photo";
+      description += " from " + album.getName();
+    }
     model.addAttribute("description", description);
 
     return "public-image";

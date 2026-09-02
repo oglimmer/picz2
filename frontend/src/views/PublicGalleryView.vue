@@ -204,6 +204,14 @@
                   <span class="play-icon">▶</span>
                 </div>
               </div>
+              <!-- The owner's caption (D69), read-only here. -->
+              <p
+                v-if="file.caption"
+                class="file-caption"
+                :title="file.caption"
+              >
+                {{ file.caption }}
+              </p>
             </div>
           </div>
         </div>
@@ -260,6 +268,14 @@
                 <span class="play-icon">▶</span>
               </div>
             </div>
+            <!-- The owner's caption (D69), read-only here. -->
+            <p
+              v-if="file.caption"
+              class="file-caption"
+              :title="file.caption"
+            >
+              {{ file.caption }}
+            </p>
           </div>
         </div>
       </section>

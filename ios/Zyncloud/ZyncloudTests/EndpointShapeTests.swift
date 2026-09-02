@@ -99,6 +99,46 @@ struct EndpointShapeTests {
         #expect(request?.body.isEmpty == true)
     }
 
+    // MARK: - Caption on one file
+
+    @Test func updateCaptionPutsTheTextAndReadsTheUpdatedPhotoBack() async {
+        let photoJSON = """
+        {"id":31,"originalName":"IMG_0001.HEIC","publicToken":"t","size":2048,
+         "uploadedAt":"2024-06-01T10:00:00Z","tags":[],"albumId":7,
+         "caption":"Sunrise over the fjord"}
+        """
+
+        var result: Result<Photo, Error>?
+        let request = await StubServer.captureOne(json: photoJSON) {
+            result = await awaiting { done in
+                api.updateCaption(id: 31, caption: "Sunrise over the fjord", completion: done)
+            }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/files/31/caption")
+        #expect(request?.headers["Content-Type"] == "application/json")
+        #expect(request?.json["caption"] as? String == "Sunrise over the fjord")
+        // The answer is the photo, not an ack: the caller writes the caption back from it.
+        #expect((try? result?.get())?.caption == "Sunrise over the fjord")
+    }
+
+    /// Clearing is the same call with an empty string — there is no separate delete endpoint.
+    @Test func updateCaptionSendsAnEmptyStringToClearIt() async {
+        let photoJSON = """
+        {"id":31,"originalName":"IMG_0001.HEIC","publicToken":"t","size":2048,
+         "uploadedAt":"2024-06-01T10:00:00Z","tags":[],"albumId":7}
+        """
+
+        var result: Result<Photo, Error>?
+        let request = await StubServer.captureOne(json: photoJSON) {
+            result = await awaiting { done in api.updateCaption(id: 31, caption: "", completion: done) }
+        }
+
+        #expect(request?.json["caption"] as? String == "")
+        #expect((try? result?.get())?.caption == nil)
+    }
+
     // MARK: - Tags on a whole album
 
     @Test func addTagToAllFilesPostsToTheAlbumsBulkEndpoint() async {

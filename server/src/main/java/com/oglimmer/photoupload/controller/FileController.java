@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.exception.ValidationException;
+import com.oglimmer.photoupload.model.CaptionRequest;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
 import com.oglimmer.photoupload.model.MessageResponse;
@@ -121,6 +122,16 @@ public class FileController {
         MessageResponse.builder().success(true).message("Files reordered successfully").build();
 
     return ResponseEntity.ok(response);
+  }
+
+  /**
+   * Set or clear the owner's caption on one asset (D69). Synchronous — nothing has to be
+   * re-rendered, so the updated asset comes straight back and the client can swap it in place.
+   */
+  @PutMapping("/{id}/caption")
+  public ResponseEntity<FileInfo> updateCaption(
+      @PathVariable Long id, @RequestBody CaptionRequest request) {
+    return ResponseEntity.ok(fileStorageService.updateCaption(id, request.getCaption()));
   }
 
   @PostMapping("/{id}/rotate")

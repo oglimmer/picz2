@@ -111,6 +111,17 @@ public class FileMetadata {
   @Column(name = "gps_source", length = 32)
   private GpsSource gpsSource;
 
+  /**
+   * Free text the album owner wrote about this asset (D69). Shown to public visitors in both the
+   * gallery overview and the zoomed view.
+   *
+   * <p>Owner-authored only — this is a caption, not a comment thread, so there is no author or
+   * timestamp to carry. Null means no caption; the API normalises a blank write to null so an empty
+   * string never reaches the column.
+   */
+  @Column(name = "caption", columnDefinition = "TEXT")
+  private String caption;
+
   @Column(name = "rotation", nullable = false)
   private Integer rotation = 0;
 

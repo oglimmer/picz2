@@ -71,6 +71,12 @@ public class FileStorageService {
 
   public static final String ALL_TAG = "all";
 
+  /**
+   * Cap on a caption (D69). Chosen for the layout, not the column: TEXT holds far more, but the
+   * caption is rendered under a gallery thumbnail.
+   */
+  private static final int MAX_CAPTION_LENGTH = 2000;
+
   private static final long ONE_KB = 1024L;
   private static final long ONE_MB = ONE_KB * ONE_KB; // 1_048_576
   private static final long ONE_GB = ONE_KB * ONE_MB; // 1_073_741_824
@@ -608,6 +614,36 @@ public class FileStorageService {
                     new ResourceNotFoundException(
                         "File not found with public token: " + publicToken));
     return convertToFileInfoOptimized(metadata);
+  }
+
+  /**
+   * Set (or clear) the owner's caption on one asset (D69).
+   *
+   * <p>Blank in means null stored, so "no caption" has exactly one representation in the column and
+   * every reader can test for null alone. Length is capped well under the TEXT limit: the caption
+   * is rendered under a thumbnail, and an unbounded one would break the gallery layout long before
+   * it troubled the database.
+   *
+   * @return the asset as the gallery should now show it
+   */
+  @Transactional
+  public FileInfo updateCaption(Long fileId, String caption) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata =
+        metadataRepository
+            .findByIdAndUserId(fileId, currentUser.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+
+    String normalized = caption == null || caption.isBlank() ? null : caption.strip();
+    if (normalized != null && normalized.length() > MAX_CAPTION_LENGTH) {
+      throw new ValidationException(
+          "Caption must be at most " + MAX_CAPTION_LENGTH + " characters");
+    }
+
+    metadata.setCaption(normalized);
+    metadataRepository.save(metadata);
+
+    return convertToFileInfo(metadata);
   }
 
   private void validateFile(MultipartFile file) {
