@@ -19,12 +19,13 @@ Backend runs as `api` and `worker` pods sharing the same JAR (different `SPRING_
 - **Adding a new background operation** = add to `JobType` enum → worker method on `FileProcessingService` → switch case in `JobDispatcher` → api enqueue method on `FileStorageService` → controller endpoint returning 202. Mirror `REGEN_THUMBNAILS` or `ROTATE_LEFT`.
 - **Retention is irreversible** (`RetentionService` deletes S3 originals + nulls `file_path`). If you change retention logic, set `retention.dryRun: true` for one nightly cycle and read the log first.
 - **All backwards-compatibility shims have been removed** (Phase 4e R3, 2026-04-30). Don't reintroduce them for hypothetical future flexibility.
+- **`hidden` is a privacy boundary, not a filter.** New uploads get the tag named by `users.new_asset_tag` (D70), which defaults to `hidden`. Anything carrying `hidden` must stay out of every public path: the share-token listing, the public single-image page and subscription mails all drop it. `/api/i/{token}` is deliberately NOT gated — the owner's own clients fetch pixels through it — so never hand a hidden asset's `publicToken` to an unauthenticated caller.
 - **Migrations** (Flyway, MariaDB) live in `server/src/main/resources/db/migration/`. Every entity field must match a migrated column or the app fails to start (`ddl-auto: validate`).
 
 ## Test caveats
 
-- The **server** suite is green (208 tests, 0 failures, as of 2026-08-23). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
-- The **iOS** suite is separate and also green (504 tests, 0 failures, as of 2026-08-30). It is `xcodebuild test`, not Maven — see `ios/Zyncloud/README.md` for the invocation and its two traps (`CODE_SIGNING_ALLOWED=NO` breaks the keychain tests; the `StubServer` suites are process-wide).
+- The **server** suite is green (269 tests, 0 failures, as of 2026-09-02). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
+- The **iOS** suite is separate and also green (536 tests, 0 failures, as of 2026-09-02). It is `xcodebuild test`, not Maven — see `ios/Zyncloud/README.md` for the invocation and its two traps (`CODE_SIGNING_ALLOWED=NO` breaks the keychain tests; the `StubServer` suites are process-wide).
 - Some IT classes (`ProcessingJobLeaseTest`, `*ProfileContextTest`) are gated by `-Drun.testcontainers=true` because Docker Desktop returns stub responses to docker-java. They run cleanly on a non-Desktop daemon.
 
 ## Single-test syntax

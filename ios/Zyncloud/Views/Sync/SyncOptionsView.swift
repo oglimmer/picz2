@@ -105,6 +105,10 @@ struct SyncOptionsView: View {
                 // Account-level gallery settings. These live on the user, not on this
                 // device, so they are the same values the web app edits from its account menu.
                 Section(header: Text("Gallery Settings")) {
+                    NavigationLink("New Photo Visibility") {
+                        NewPhotoVisibilityView()
+                    }
+
                     NavigationLink("Narration Languages") {
                         NarrationLanguagesView()
                     }

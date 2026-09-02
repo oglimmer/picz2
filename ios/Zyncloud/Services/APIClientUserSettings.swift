@@ -16,6 +16,25 @@ extension APIClient {
              body: SettingValueBody(value: name), completion: completion)
     }
 
+    // MARK: - New Photo Visibility
+
+    /// Which tag new uploads get for this account — `hidden` or `all` (D70).
+    func fetchNewAssetTag(completion: @escaping @Sendable (Result<NewAssetTag, Error>) -> Void) {
+        send(.get, "api/settings/new-asset-tag", expecting: NewAssetTagResponse.self) { result in
+            completion(result.map { NewAssetTag(rawValue: $0.tagName ?? "") ?? .hidden })
+        }
+    }
+
+    /// Change it.
+    ///
+    /// `confirmed` is always sent as true: the server refuses an unconfirmed switch to `all`, and
+    /// the only caller runs its own confirmation dialog first. It is a handshake with the server,
+    /// not a second piece of UI state.
+    func setNewAssetTag(_ tag: NewAssetTag, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.put, "api/settings/new-asset-tag",
+             body: NewAssetTagBody(tagName: tag.rawValue, confirmed: true), completion: completion)
+    }
+
     // MARK: - Tags
 
     func fetchTags(completion: @escaping @Sendable (Result<[Tag], Error>) -> Void) {
@@ -49,4 +68,10 @@ struct SettingValueBody: Encodable {
 /// The body of every endpoint that names a tag: create, rename, and put-on-file.
 struct TagNameBody: Encodable {
     let tagName: String
+}
+
+/// The body of `PUT /api/settings/new-asset-tag`.
+struct NewAssetTagBody: Encodable {
+    let tagName: String
+    let confirmed: Bool
 }

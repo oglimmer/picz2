@@ -9,6 +9,7 @@ import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.StorageBackend;
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -68,8 +69,6 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 @Slf4j
 public class FileStorageService {
-
-  public static final String ALL_TAG = "all";
 
   /**
    * Cap on a caption (D69). Chosen for the layout, not the column: TEXT holds far more, but the
@@ -367,12 +366,14 @@ public class FileStorageService {
     final String finalNewFilename = newFilename;
     final String finalContentType = contentType;
     final String finalStoredPath = storedPath;
-    // Commit the `all` tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
-    // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
-    // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
-    // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
-    // Provisioning first means this transaction's snapshot always contains the tag it references.
-    final Long allTagId = ensureAllTagExists(currentUser);
+    // Commit the new-asset tag BEFORE opening the insert transaction. Not a style choice: MariaDB
+    // runs REPEATABLE READ, so a transaction that starts first cannot see a tags row another
+    // request commits later — and the image_tags insert's foreign-key check on that unseen parent
+    // fails with 1020 "Record has changed since last read", taking the file_metadata row down with
+    // it. Provisioning first means this transaction's snapshot always contains the tag it
+    // references.
+    final String newAssetTag = currentUser.getNewAssetTag();
+    final Long newAssetTagId = ensureNewAssetTagExists(currentUser);
 
     FileInfo result =
         transactionTemplate.execute(
@@ -401,7 +402,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addAllTagToFile(saved, allTagId);
+              addNewAssetTagToFile(saved, newAssetTagId, newAssetTag);
               // Same TX as the metadata insert → either both visible or neither.
               jobEnqueueService.enqueue(saved.getId());
               return convertToFileInfoWithId(saved);
@@ -495,12 +496,14 @@ public class FileStorageService {
     final String finalContentType = contentType;
     final String finalNewFilename = newFilename;
     final String finalOriginalKey = originalKey;
-    // Commit the `all` tag BEFORE opening the insert transaction. Not a style choice: MariaDB runs
-    // REPEATABLE READ, so a transaction that starts first cannot see a tags row another request
-    // commits later — and the image_tags insert's foreign-key check on that unseen parent fails
-    // with 1020 "Record has changed since last read", taking the file_metadata row down with it.
-    // Provisioning first means this transaction's snapshot always contains the tag it references.
-    final Long allTagId = ensureAllTagExists(currentUser);
+    // Commit the new-asset tag BEFORE opening the insert transaction. Not a style choice: MariaDB
+    // runs REPEATABLE READ, so a transaction that starts first cannot see a tags row another
+    // request commits later — and the image_tags insert's foreign-key check on that unseen parent
+    // fails with 1020 "Record has changed since last read", taking the file_metadata row down with
+    // it. Provisioning first means this transaction's snapshot always contains the tag it
+    // references.
+    final String newAssetTag = currentUser.getNewAssetTag();
+    final Long newAssetTagId = ensureNewAssetTagExists(currentUser);
 
     FileInfo result =
         transactionTemplate.execute(
@@ -529,7 +532,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addAllTagToFile(saved, allTagId);
+              addNewAssetTagToFile(saved, newAssetTagId, newAssetTag);
               jobEnqueueService.enqueue(saved.getId(), JobType.PROCESS);
               return convertToFileInfo(saved);
             });
@@ -600,6 +603,7 @@ public class FileStorageService {
     return metadataRepository
         .findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(shareToken)
         .stream()
+        .filter(m -> !isHidden(m))
         .map(this::convertToFileInfoOptimized)
         .collect(Collectors.toList());
   }
@@ -613,7 +617,24 @@ public class FileStorageService {
                 () ->
                     new ResourceNotFoundException(
                         "File not found with public token: " + publicToken));
+    if (isHidden(metadata)) {
+      // Only the public share pages read a file by its token this way, so a hidden asset is simply
+      // not there. Note this does NOT gate `/api/i/{token}`: the owner's own gallery and the iOS
+      // app fetch their pixels through that same route, so blocking it would blank their grid.
+      // Withholding the token is the gate — the listing above never hands one out.
+      throw new ResourceNotFoundException("File not found with public token: " + publicToken);
+    }
     return convertToFileInfoOptimized(metadata);
+  }
+
+  /**
+   * True if this asset is in the holding pen (D70) and must stay out of everything a public visitor
+   * can reach. Reads the eagerly-fetched tag collection, so it costs nothing on the JOIN FETCH
+   * queries and one lazy load elsewhere.
+   */
+  private static boolean isHidden(FileMetadata metadata) {
+    return metadata.getImageTags().stream()
+        .anyMatch(it -> SystemTags.HIDDEN.equals(it.getTag().getName()));
   }
 
   /**
@@ -1019,8 +1040,8 @@ public class FileStorageService {
             .findByUserAndName(currentUser, tagName)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
 
-    // Enforce album's enabled-tags list (the ALL_TAG system tag is always allowed)
-    if (!ALL_TAG.equals(tagName)
+    // Enforce album's enabled-tags list (system tags are always allowed)
+    if (!SystemTags.isSystemTag(tagName)
         && !albumEnabledTagRepository.existsByAlbumIdAndTagId(
             metadata.getAlbum().getId(), tag.getId())) {
       throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
@@ -1081,8 +1102,8 @@ public class FileStorageService {
     Album album = requireOwnedAlbum(currentUser, albumId);
     Tag tag = resolveTagForBulkOperation(currentUser, tagName);
 
-    // Enforce album's enabled-tags list (the ALL_TAG system tag is always allowed)
-    if (!isSystemTag(tagName)
+    // Enforce album's enabled-tags list (system tags are always allowed)
+    if (!SystemTags.isSystemTag(tagName)
         && !albumEnabledTagRepository.existsByAlbumIdAndTagId(album.getId(), tag.getId())) {
       throw new ValidationException("Tag '" + tagName + "' is not enabled for this album");
     }
@@ -1188,14 +1209,10 @@ public class FileStorageService {
     if (existing.isPresent()) {
       return existing.get();
     }
-    if (!isSystemTag(tagName)) {
+    if (!SystemTags.isSystemTag(tagName)) {
       throw new ResourceNotFoundException("Tag", "name", tagName);
     }
     return tagRepository.getReferenceById(systemTagProvisioner.ensureTag(user, tagName));
-  }
-
-  private static boolean isSystemTag(String tagName) {
-    return ALL_TAG.equals(tagName);
   }
 
   @Transactional
@@ -1405,32 +1422,33 @@ public class FileStorageService {
   }
 
   /**
-   * Ensure the special "all" tag exists for the current user, and return its id. Creation runs in
-   * its own transaction (see {@link SystemTagProvisioner}) so that two concurrent uploads by a
-   * brand-new user cannot roll each other's file_metadata insert back.
+   * Ensure the user's configured new-asset tag exists, and return its id. Creation runs in its own
+   * transaction (see {@link SystemTagProvisioner}) so that two concurrent uploads by a brand-new
+   * user cannot roll each other's file_metadata insert back.
    */
-  private Long ensureAllTagExists(User user) {
-    return systemTagProvisioner.ensureTag(user, ALL_TAG);
+  private Long ensureNewAssetTagExists(User user) {
+    return systemTagProvisioner.ensureTag(user, user.getNewAssetTag());
   }
 
   /**
-   * Add the "all" tag to a file (without any checks or side effects). Every new asset carries it
-   * from the moment it is registered, so the `all` filter really means every photo and video — see
-   * D68. A user who does not want it on a given asset removes it like any other tag; nothing puts
-   * it back.
+   * Add the user's new-asset tag to a file (without any checks or side effects). Which tag that is
+   * is a per-user setting (D70): {@code hidden} keeps the asset out of every public listing until
+   * its owner has looked at it, {@code all} is the D68 behaviour of publishing on arrival. Either
+   * way it is an ordinary tag afterwards — removing it is a normal tag edit and nothing puts it
+   * back.
    */
-  private void addAllTagToFile(FileMetadata metadata, Long allTagId) {
+  private void addNewAssetTagToFile(FileMetadata metadata, Long tagId, String tagName) {
     // getReferenceById, not a fresh lookup: the row may have been committed by a concurrent
     // request after this transaction took its REPEATABLE READ snapshot, so a SELECT could miss it.
-    Tag allTag = tagRepository.getReferenceById(allTagId);
+    Tag tag = tagRepository.getReferenceById(tagId);
 
     // Check if the tag already exists for this file
-    if (imageTagRepository.findByFileMetadataIdAndTagId(metadata.getId(), allTagId).isEmpty()) {
+    if (imageTagRepository.findByFileMetadataIdAndTagId(metadata.getId(), tagId).isEmpty()) {
       ImageTag imageTag = new ImageTag();
       imageTag.setFileMetadata(metadata);
-      imageTag.setTag(allTag);
+      imageTag.setTag(tag);
       imageTagRepository.save(imageTag);
-      log.info("Added '{}' to file: {}", ALL_TAG, metadata.getStoredFilename());
+      log.info("Added '{}' to file: {}", tagName, metadata.getStoredFilename());
     }
   }
 

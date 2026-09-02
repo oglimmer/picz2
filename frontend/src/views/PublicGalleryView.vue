@@ -417,6 +417,8 @@ export default {
     // The owner's saved framing for the map filter, if they set one. Read-only here: a share-link
     // visitor can pan and zoom all they like, but nothing they do is persisted.
     const albumMapViewValue = computed(() => albumMapView(album.value))
+    // Never offered as a filter and never counted: an asset carrying it is dropped on arrival.
+    const HIDDEN_TAG = 'hidden'
     const allFilesUnfiltered = ref([])
     const loadingFiles = ref(false)
     const selectedTag = ref('')
@@ -720,7 +722,13 @@ export default {
         const data = await response.json()
 
         if (data.success) {
-          allFilesUnfiltered.value = data.files || []
+          // The server already strips `hidden` assets out of this endpoint (D70); this is the
+          // second lock on the same door. A tag name is one string compare per file, and the cost
+          // of the server-side filter ever regressing is somebody's private photos on a public
+          // page — so the client does not take the response's word for it.
+          allFilesUnfiltered.value = (data.files || []).filter(
+            file => !(file.tags || []).includes(HIDDEN_TAG)
+          )
         }
       } catch (err) {
         console.error('Error loading files:', err)

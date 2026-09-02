@@ -53,6 +53,17 @@ public class User {
   @Column(name = "default_album_id")
   private Long defaultAlbumId;
 
+  /**
+   * Name of the tag every newly registered asset of this user gets — {@code hidden} or {@code all}
+   * (D70). Stored as the tag name rather than a flag because that is exactly what the upload path
+   * needs: it provisions a system tag by name and attaches it.
+   *
+   * <p>Defaults to {@code hidden}, so a photo taken on the phone does not reach a published album's
+   * share link before its owner has looked at it.
+   */
+  @Column(name = "new_asset_tag", nullable = false, length = 20)
+  private String newAssetTag = SystemTags.HIDDEN;
+
   @Column(name = "email_verified", nullable = false)
   private boolean emailVerified = false;
 

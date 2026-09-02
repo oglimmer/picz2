@@ -294,6 +294,53 @@ struct EndpointShapeTests {
         #expect(request?.json["value"] as? String == "German")
     }
 
+    // MARK: - New photo visibility (D70)
+
+    @Test func fetchNewAssetTagGetsTheSettingsEndpoint() async {
+        let request = await StubServer.captureOne(json: "{\"success\":true,\"tagName\":\"all\"}") {
+            _ = await awaiting { done in api.fetchNewAssetTag(completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/settings/new-asset-tag")
+    }
+
+    @Test func newAssetTagDecodesToTheEnum() async {
+        var result: Result<NewAssetTag, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"tagName\":\"all\"}") {
+            result = await awaiting { done in api.fetchNewAssetTag(completion: done) }
+        }
+
+        #expect((try? result?.get()) == .all)
+    }
+
+    /// An unset or unrecognised value must read as `.hidden`. The screen shows the answer as a
+    /// promise about who can see the next photo, and the safe half of that promise is the one to
+    /// make when the server said something we do not understand.
+    @Test(arguments: ["null", "\"\"", "\"something-else\""])
+    func unknownNewAssetTagFallsBackToHidden(raw: String) async {
+        var result: Result<NewAssetTag, Error>?
+        _ = await StubServer.capture(json: "{\"success\":true,\"tagName\":\(raw)}") {
+            result = await awaiting { done in api.fetchNewAssetTag(completion: done) }
+        }
+
+        #expect((try? result?.get()) == .hidden)
+    }
+
+    /// `confirmed` always rides along: the server rejects an unconfirmed switch to `all`, and the
+    /// caller has already put the warning in front of the user.
+    @Test(arguments: [NewAssetTag.hidden, NewAssetTag.all])
+    func setNewAssetTagPutsTheNameAndTheConfirmation(tag: NewAssetTag) async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.setNewAssetTag(tag, completion: done) }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/settings/new-asset-tag")
+        #expect(request?.json["tagName"] as? String == tag.rawValue)
+        #expect(request?.json["confirmed"] as? Bool == true)
+    }
+
     // MARK: - Recordings
 
     @Test func fetchRecordingsGetsTheAlbumsRecordings() async {

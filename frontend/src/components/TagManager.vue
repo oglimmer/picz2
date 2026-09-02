@@ -128,7 +128,7 @@ const editingTagId = ref<number | null>(null)
 const editingTagName = ref('')
 const tagEditInput = ref<HTMLInputElement | null>(null)
 
-const SYSTEM_TAGS = new Set(['all'])
+const SYSTEM_TAGS = new Set(['all', 'hidden'])
 function isSystemTag(name: string): boolean {
   return SYSTEM_TAGS.has(name)
 }

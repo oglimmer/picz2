@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.repository.TagRepository;
@@ -28,7 +29,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  */
 class SystemTagProvisionerTest {
 
-  private static final String ALL_TAG = FileStorageService.ALL_TAG;
+  private static final String ALL_TAG = SystemTags.ALL;
 
   private TagRepository tagRepository;
   private UserRepository userRepository;

@@ -2,19 +2,60 @@ import Foundation
 
 /// A user-level tag, mirroring `TagInfo` on the server.
 ///
-/// `all` is a system tag the gallery relies on: the server puts it on every newly uploaded asset
-/// (D68). It is shown read-only rather than hidden — a tag that exists but cannot be renamed is
-/// less confusing than one that silently is not listed.
+/// Two names are system tags the gallery relies on, and the server puts one of them on every newly
+/// uploaded asset — which one is the account's ``NewAssetTag`` setting (D68, D70). Both are shown
+/// read-only rather than hidden: a tag that exists but cannot be renamed is less confusing than one
+/// that silently is not listed, and `hidden` in particular has to be visible here, because taking
+/// it off a photo is how the owner publishes that photo.
 struct Tag: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
     let createdAt: String?
 
-    private static let systemNames: Set<String> = ["all"]
+    private static let systemNames: Set<String> = ["all", "hidden"]
 
     var isSystem: Bool {
         Self.systemNames.contains(name)
     }
+}
+
+/// The tag every newly uploaded photo or video gets, an account-level setting (D70).
+///
+/// The raw values are the tag names themselves, because that is what the endpoint carries.
+enum NewAssetTag: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// The holding pen. The server keeps these assets out of every public listing, so a published
+    /// album shows nothing new until the owner has reviewed it and removed the tag.
+    case hidden
+
+    /// The older behaviour: visible on the share link within seconds of the upload, no review.
+    case all
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .hidden: "Keep new photos hidden"
+        case .all: "Publish new photos straight away"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .hidden:
+            "New uploads get the \"hidden\" tag. Nobody with your share link can see them. "
+                + "Open the photo in your gallery, remove \"hidden\", and only then does it go public."
+        case .all:
+            "New uploads get the \"all\" tag. In a published album they appear on the share link "
+                + "within seconds of the upload, with no review. Photos your phone uploads "
+                + "automatically are included."
+        }
+    }
+}
+
+/// Answer to `GET`/`PUT /api/settings/new-asset-tag`.
+struct NewAssetTagResponse: Codable {
+    let success: Bool
+    let tagName: String?
 }
 
 struct TagsListResponse: Codable {
