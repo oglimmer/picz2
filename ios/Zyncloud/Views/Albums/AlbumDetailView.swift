@@ -116,6 +116,10 @@ struct AlbumDetailView: View {
     /// True while the tag sheet for the picked photos is up.
     @State private var isBulkTagPresented = false
 
+    /// True while the visitor counts are up. A sheet for the same reason as the narration
+    /// screen: a `NavigationLink` inside a `Menu` never pushes.
+    @State private var isAnalyticsPresented = false
+
     /// True while the album's accepted-tag list is up. Opened from the album menu; the two tag
     /// sheets reach the same screen by pushing it instead.
     @State private var isAlbumTagsPresented = false
@@ -292,6 +296,9 @@ struct AlbumDetailView: View {
             }
             .sheet(isPresented: $isNarrationPresented) {
                 NarrationSetupView(album: album)
+            }
+            .sheet(isPresented: $isAnalyticsPresented) {
+                AlbumAnalyticsView(album: album)
             }
             .fullScreenCover(isPresented: $isPresentationPresented) {
                 PresentationView(album: album)
@@ -532,6 +539,14 @@ struct AlbumDetailView: View {
                 } label: {
                     Label("Share Link", systemImage: "square.and.arrow.up")
                 }
+            }
+
+            // Sits with publishing and Share because it counts what those two let in: an album
+            // that was never published has nothing to show here.
+            Button {
+                isAnalyticsPresented = true
+            } label: {
+                Label("Analytics", systemImage: "chart.bar")
             }
 
             Button(role: .destructive) {
