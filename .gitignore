@@ -108,3 +108,9 @@ gitleaks-report.json
 # file in the image. No leading slash on purpose — the APNs key used to be tracked under
 # server/src/main/resources, where the old root-only rule could not see it.
 AuthKey_*.p8
+
+# The native macOS app (Option B) is an experiment, not a decision. It is a near-copy of
+# ios/Zyncloud — only ~10 of its ~155 shared Swift files actually differ — so tracking it would
+# double the app in the history for a direction nobody has committed to yet. Delete this rule if
+# the native route is kept; see macos/Zyncloud/README.md.
+macos/
