@@ -25,6 +25,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
     /// A struct rather than seven individually-locked properties, so a reader that wants two of
     /// them cannot catch the pair mid-change and act on half an update.
     struct Snapshot: Sendable, Equatable {
+        var syncEnabled: Bool
         var wifiOnly: Bool
         var lastSyncDate: Date?
         var albumId: Int
@@ -35,7 +36,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
 
     private let snapshotLock = NSLock()
     private var storedSnapshot = Snapshot(
-        wifiOnly: true, lastSyncDate: nil, albumId: 1, selectedAlbumName: nil,
+        syncEnabled: true, wifiOnly: true, lastSyncDate: nil, albumId: 1, selectedAlbumName: nil,
         syncLastDays: 3, tusMaxUploadBytes: 0,
     )
 
@@ -52,6 +53,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
     private func refreshSnapshot() {
         snapshotLock.lock()
         storedSnapshot = Snapshot(
+            syncEnabled: syncEnabled,
             wifiOnly: wifiOnly,
             lastSyncDate: lastSyncDate,
             albumId: albumId,
@@ -60,6 +62,20 @@ final class Settings: ObservableObject, @unchecked Sendable {
             tusMaxUploadBytes: tusMaxUploadBytes,
         )
         snapshotLock.unlock()
+    }
+
+    /// Whether this phone syncs its camera roll at all. **Device-local, and only this device.**
+    ///
+    /// Not to be confused with the account-wide pause, which is the *absence of a target album*
+    /// on the server (see ``APIClient/clearTargetAlbum(completion:)``): that one stops every
+    /// device at once and is visible in the web app. This switch is the other half a user with
+    /// two phones needs — "back up from the new one, not the old one" — so it deliberately never
+    /// reaches the server, and turning it off here leaves the other devices uploading.
+    @Published var syncEnabled: Bool {
+        didSet {
+            defaults.set(syncEnabled, forKey: Keys.syncEnabled)
+            refreshSnapshot()
+        }
     }
 
     @Published var wifiOnly: Bool {
@@ -114,6 +130,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
     private let defaults: UserDefaults
 
     private enum Keys {
+        static let syncEnabled = "settings.syncEnabled"
         static let wifiOnly = "settings.wifiOnly"
         static let tusMaxUploadBytes = "settings.tusMaxUploadBytes"
         static let lastSyncDate = "settings.lastSyncDate"
@@ -126,6 +143,9 @@ final class Settings: ObservableObject, @unchecked Sendable {
     /// user's real preferences. Production uses ``shared``.
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        // Defaults to on: an install that has been given photo access and an album is asking
+        // to be backed up, and a `false` default would make that install do nothing at all.
+        syncEnabled = defaults.object(forKey: Keys.syncEnabled) as? Bool ?? true
         wifiOnly = defaults.object(forKey: Keys.wifiOnly) as? Bool ?? true
         lastSyncDate = defaults.object(forKey: Keys.lastSyncDate) as? Date
         albumId = defaults.object(forKey: Keys.albumId) as? Int ?? 1
@@ -136,6 +156,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
     }
 
     func clear() {
+        defaults.removeObject(forKey: Keys.syncEnabled)
         defaults.removeObject(forKey: Keys.wifiOnly)
         defaults.removeObject(forKey: Keys.lastSyncDate)
         defaults.removeObject(forKey: Keys.albumId)
@@ -144,6 +165,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
         defaults.removeObject(forKey: Keys.tusMaxUploadBytes)
 
         // Reset to default values
+        syncEnabled = true
         wifiOnly = true
         lastSyncDate = nil
         albumId = 1

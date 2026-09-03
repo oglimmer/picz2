@@ -118,6 +118,16 @@ final class SyncLogger: ObservableObject, @unchecked Sendable {
         addLog(isManual: false, success: true, message: "Network is usable — uploads resumed")
     }
 
+    /// The user switched this phone's syncing on or off. Worth an entry because the switch is
+    /// device-local and silent otherwise: months later, "why did this phone stop backing up?"
+    /// is answerable from the log instead of from a settings screen nobody remembers changing.
+    func logDeviceSyncSwitched(enabled: Bool) {
+        addLog(isManual: true, success: true,
+               message: enabled
+                   ? "Syncing turned on for this phone"
+                   : "Syncing turned off for this phone — other devices are unaffected")
+    }
+
     /// One sync run's progress, headed by what kicked it off.
     ///
     /// Takes the trigger rather than existing twice, once per trigger — see

@@ -240,12 +240,41 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
                     // Only start sync if an album has been selected
                     guard self.settings.snapshot.selectedAlbumName != nil else { return }
 
+                    // The target album is still read above even when this phone is switched
+                    // off: it costs one request and keeps the Sync Options screen honest about
+                    // where uploads *would* go. Only the scanning stops here.
+                    guard self.settings.snapshot.syncEnabled else {
+                        AppLog.sync.notice("Start skipped — syncing is off on this phone")
+                        return
+                    }
+
                     // Reconcile with server before scanning
                     self.reconcileWithServer {
                         self.scheduleInitialScan()
                     }
                 }
             }
+        }
+    }
+
+    /// Switch automatic syncing on this phone on or off.
+    ///
+    /// Device-local by design — see ``Settings/syncEnabled``. Turning it off also drops what is
+    /// waiting: the queue is the product of scans this phone will no longer be doing, so leaving
+    /// it to drain would keep uploading for minutes after the user switched the phone off, which
+    /// is exactly what they asked it to stop. Uploads already handed to `URLSession` are not
+    /// recalled — those bytes are in flight on a background session and cancelling them mid-file
+    /// buys nothing.
+    @MainActor
+    func setSyncEnabled(_ enabled: Bool) {
+        guard settings.syncEnabled != enabled else { return }
+        settings.syncEnabled = enabled
+        SyncLogger.shared.logDeviceSyncSwitched(enabled: enabled)
+
+        if enabled {
+            start()
+        } else {
+            clearQueue()
         }
     }
 
@@ -281,8 +310,10 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     }
 
     func handlePhotoLibraryDidChange() {
-        // Only sync if an album has been selected
-        guard settings.snapshot.selectedAlbumName != nil else { return }
+        // Only sync if an album has been selected, and only if this phone is switched on. This
+        // is the notification that makes sync feel automatic, so leaving it ungated would have
+        // a phone the user had switched off still uploading every new photo it took.
+        guard settings.snapshot.selectedAlbumName != nil, settings.snapshot.syncEnabled else { return }
 
         // New items may exist — schedule incremental scan
         scheduleIncrementalScan()
@@ -320,6 +351,16 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
     /// Manual and background used to be two copies of this function that differed only in the
     /// word "Manual"/"Background" — so a fix to one silently skipped the other.
     private func performSync(trigger: SyncTrigger, completion: @escaping @Sendable () -> Void) {
+        // Before the "Started" entry, deliberately. iOS keeps waking a background task on its
+        // own schedule, and a switched-off phone that wrote "Started" and "skipped" on every
+        // one of those would bury the entries that mean something under days of noise. The
+        // switch itself is logged once, when it is flipped.
+        guard settings.snapshot.syncEnabled else {
+            AppLog.sync.notice("\(trigger.label, privacy: .public) skipped — syncing is off on this phone")
+            completion()
+            return
+        }
+
         AppLog.sync.info("\(trigger.label, privacy: .public) started")
         SyncLogger.shared.logSync(trigger: trigger, success: true, message: "Started")
 

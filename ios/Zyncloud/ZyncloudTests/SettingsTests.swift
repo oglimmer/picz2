@@ -17,11 +17,21 @@ struct SettingsTests {
     @Test func freshInstallDefaults() {
         withScratchDefaults { defaults in
             let settings = Settings(defaults: defaults)
+            #expect(settings.syncEnabled)
             #expect(settings.wifiOnly)
             #expect(settings.albumId == 1)
             #expect(settings.syncLastDays == 3)
             #expect(settings.lastSyncDate == nil)
             #expect(settings.selectedAlbumName == nil)
+        }
+    }
+
+    /// The one default that must not flip to `false` by accident: a fresh install with it off
+    /// would look installed and backed up and never upload a byte.
+    @Test func syncEnabledRespectsAnExplicitFalse() {
+        withScratchDefaults { defaults in
+            defaults.set(false, forKey: "settings.syncEnabled")
+            #expect(!Settings(defaults: defaults).syncEnabled)
         }
     }
 
@@ -36,6 +46,7 @@ struct SettingsTests {
         withScratchDefaults { defaults in
             let date = Date(timeIntervalSince1970: 1_700_000_000)
             let settings = Settings(defaults: defaults)
+            settings.syncEnabled = false
             settings.wifiOnly = false
             settings.albumId = 42
             settings.syncLastDays = 30
@@ -43,6 +54,7 @@ struct SettingsTests {
             settings.lastSyncDate = date
 
             let reloaded = Settings(defaults: defaults)
+            #expect(!reloaded.syncEnabled)
             #expect(!reloaded.wifiOnly)
             #expect(reloaded.albumId == 42)
             #expect(reloaded.syncLastDays == 30)
@@ -56,6 +68,7 @@ struct SettingsTests {
     @Test func clearRestoresEveryDefault() {
         withScratchDefaults { defaults in
             let settings = Settings(defaults: defaults)
+            settings.syncEnabled = false
             settings.wifiOnly = false
             settings.albumId = 42
             settings.syncLastDays = 30
@@ -64,6 +77,9 @@ struct SettingsTests {
 
             settings.clear()
 
+            // Logging out and back in on a phone that had been switched off must not leave the
+            // next account switched off too — the switch is about this device, not this login.
+            #expect(settings.syncEnabled)
             #expect(settings.wifiOnly)
             #expect(settings.albumId == 1)
             #expect(settings.syncLastDays == 3)
