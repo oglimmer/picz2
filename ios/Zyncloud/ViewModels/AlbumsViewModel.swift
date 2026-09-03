@@ -252,6 +252,62 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
+    /// Copies an album and its photos into a new album, and puts the copy in the list.
+    ///
+    /// The server copies metadata only — the photos themselves are not re-uploaded — and always
+    /// hands back an unpublished copy, so the new card shows the PRIVATE badge even when the
+    /// source is public.
+    func duplicateAlbum(id: Int, completion: @escaping @Sendable @MainActor (Bool) -> Void = { _ in }) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            completion(false)
+            return
+        }
+
+        isLoading = true
+        alertState = nil
+
+        apiClient.duplicateAlbum(id: id) { [weak self] result in
+            guard let self else { return }
+
+            Task { @MainActor in
+                self.isLoading = false
+
+                switch result {
+                case let .success(album):
+                    self.albums.append(album)
+                    self.showSuccess(message: "Album '\(album.name)' created. The copy is not published.")
+                    completion(true)
+
+                case let .failure(error):
+                    self.handleError(error)
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    /// Asks before copying, and says what the copy will and will not carry.
+    func showDuplicateConfirmation(for album: Album, onConfirm: @escaping @Sendable @MainActor () -> Void) {
+        let photoCount = album.imageCount ?? 0
+        var message = photoCount > 0
+            ? "The copy gets the same \(photoCount) photo\(photoCount == 1 ? "" : "s") and the same tags."
+            : "The album is empty, so the copy starts empty too."
+        // Say it here, or the missing share link on the new card reads as a bug.
+        message += "\n\nThe copy is not published."
+
+        alertState = .confirmation(
+            title: "Duplicate '\(album.name)'?",
+            message: message,
+            confirmTitle: "Duplicate Album",
+            destructive: false,
+            confirmAction: onConfirm,
+        )
+    }
+
     func showDeleteConfirmation(for album: Album, onConfirm: @escaping @Sendable @MainActor () -> Void) {
         alertState = .confirmation(
             title: "Delete Album",

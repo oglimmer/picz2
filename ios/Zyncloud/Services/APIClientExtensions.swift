@@ -82,6 +82,22 @@ extension APIClient {
         send(.delete, "api/albums/\(id)", completion: completion)
     }
 
+    // MARK: - Duplicate Album
+
+    /// Copies an album, the metadata of every photo in it and its enabled tags into a new album.
+    ///
+    /// The bytes are not copied: the new rows point at the source album's storage keys, so this
+    /// costs no storage and returns as fast as any other write. Mirrors `duplicateAlbum` in the
+    /// web app's `useAlbums` composable.
+    ///
+    /// The copy always comes back unpublished, however public the source was, so a caller must
+    /// not promise a working share link for it.
+    func duplicateAlbum(id: Int, completion: @escaping @Sendable (Result<Album, Error>) -> Void) {
+        send(.post, "api/albums/\(id)/duplicate", expecting: AlbumResponse.self) { result in
+            completion(result.map(\.album))
+        }
+    }
+
     // MARK: - Fetch Files in Album
 
     func fetchFiles(albumId: Int, tag: String? = nil, completion: @escaping @Sendable (Result<FilesResponse, Error>) -> Void) {
