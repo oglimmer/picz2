@@ -67,17 +67,29 @@ class SyncOptionsViewModel: ViewModelProtocol {
                     case let .success(fetchedAlbums):
                         self.albums = fetchedAlbums
 
-                        // If server has a target album set, use that (priority)
-                        if case let .success(targetAlbumId) = targetResult, let targetId = targetAlbumId {
+                        switch targetResult {
+                        // The server has a target album — it wins over the local setting.
+                        case let .success(.some(targetId)):
                             self.selectedAlbum = fetchedAlbums.first { $0.id == targetId }
                             if let album = self.selectedAlbum {
                                 self.syncCoordinator.settings.albumId = album.id
                                 self.syncCoordinator.settings.selectedAlbumName = album.name
                             }
-                        }
-                        // Otherwise restore from local settings
-                        else if let savedAlbumName = self.syncCoordinator.settings.selectedAlbumName {
-                            self.selectedAlbum = fetchedAlbums.first { $0.name == savedAlbumName }
+
+                        // The server answered "no target album" — uploads are paused, from here
+                        // or from the web app. Clear the local selection so the picker shows
+                        // "Paused" instead of falling back to the last album: that fallback used
+                        // to fire the picker's `onChange`, which re-PUT the album and silently
+                        // resumed a sync the user had just paused in the web UI.
+                        case .success(.none):
+                            self.selectedAlbum = nil
+                            self.syncCoordinator.settings.selectedAlbumName = nil
+
+                        // Only a failed target-album call falls back to what this device knows.
+                        case .failure:
+                            if let savedAlbumName = self.syncCoordinator.settings.selectedAlbumName {
+                                self.selectedAlbum = fetchedAlbums.first { $0.name == savedAlbumName }
+                            }
                         }
 
                     case let .failure(error):
@@ -85,6 +97,21 @@ class SyncOptionsViewModel: ViewModelProtocol {
                     }
                 }
             }
+        }
+    }
+
+    /// The one entry point the picker writes to: an album resumes uploads into it, `nil` is the
+    /// "Paused" row.
+    ///
+    /// The picker is bound through an explicit `Binding` whose setter is this method, so it runs
+    /// only on a real tap. Binding `$viewModel.selectedAlbum` with an `onChange` instead made
+    /// every programmatic assignment — the one `fetchAlbums` does, the one ``pauseUploads()``
+    /// does — look like a user choice and fire a second server write.
+    func chooseAlbum(_ album: Album?) {
+        if let album {
+            selectAlbum(album)
+        } else {
+            pauseUploads()
         }
     }
 
@@ -119,11 +146,65 @@ class SyncOptionsViewModel: ViewModelProtocol {
         }
     }
 
+    /// Pause phone uploads, the same way the web app's "Pause uploads" does.
+    ///
+    /// Server first: the cleared target album is the shared switch, so a local-only pause would
+    /// be undone by the next ``SyncCoordinator/syncTargetAlbumFromServer``. Only once the server
+    /// has accepted it are the local selection and the pending queue dropped.
+    func pauseUploads() {
+        guard let apiClient else { return }
+
+        let previousAlbum = selectedAlbum
+        selectedAlbum = nil
+
+        apiClient.clearTargetAlbum { [weak self] result in
+            guard let self else { return }
+
+            Task { @MainActor in
+                switch result {
+                case .success:
+                    AppLog.sync.info("Phone uploads paused — target album cleared on the server")
+                    self.syncCoordinator.settings.selectedAlbumName = nil
+                    self.syncCoordinator.clearQueue()
+
+                case let .failure(error):
+                    AppLog.sync.error("Could not pause uploads: \(error.localizedDescription, privacy: .public)")
+                    // The server still holds the old album, so put the picker back on it rather
+                    // than showing a pause that is not in effect.
+                    self.selectedAlbum = previousAlbum
+                    self.alertState = AlertState(
+                        title: "Could Not Pause",
+                        message: "Uploads are still running. Please try again.",
+                    )
+                }
+            }
+        }
+    }
+
+    /// The device switch. Everything it does lives on ``SyncCoordinator/setSyncEnabled(_:)`` —
+    /// this only forwards, so the toggle and any other caller cannot drift apart.
+    var syncEnabled: Bool { syncCoordinator.settings.syncEnabled }
+
+    func setSyncEnabled(_ enabled: Bool) {
+        syncCoordinator.setSyncEnabled(enabled)
+    }
+
     func syncNow() {
         guard selectedAlbum != nil else {
             alertState = AlertState(
                 title: "No Album Selected",
                 message: "Please select a target album before syncing.",
+            )
+            return
+        }
+
+        // Without this the run would start, hit the switch inside `performSync` and stop, while
+        // the alert below said "Checking for new photos" — a sync that reports itself started
+        // and does nothing is worse than one that says why it will not.
+        guard syncEnabled else {
+            alertState = AlertState(
+                title: "Syncing Is Off",
+                message: "Syncing is turned off for this phone. Turn it on under Sync Settings first.",
             )
             return
         }

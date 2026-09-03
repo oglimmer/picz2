@@ -64,16 +64,38 @@ struct SyncOptionsView: View {
                 }
 
                 // Sync Settings Section
-                Section(header: Text("Sync Settings")) {
-                    Toggle("Wi‑Fi Only", isOn: $settings.wifiOnly)
+                Section(
+                    header: Text("Sync Settings"),
+                    footer: Text(settings.syncEnabled
+                        ? "\"Sync This Phone\" is for this device only. Your other devices keep uploading either way — to stop them all, set the target album below to \"Paused\"."
+                        : "This phone is not backing up its camera roll. Your other devices are unaffected."),
+                ) {
+                    // Routed through the view model rather than bound to `$settings.syncEnabled`:
+                    // flipping it has to clear the queue or restart sync, and a plain binding
+                    // would write the setting and leave the coordinator carrying on.
+                    Toggle("Sync This Phone", isOn: Binding(
+                        get: { settings.syncEnabled },
+                        set: { viewModel.setSyncEnabled($0) },
+                    ))
 
-                    Stepper(value: $settings.syncLastDays, in: 1 ... 365) {
-                        Text("Sync last \(settings.syncLastDays) days")
+                    // Both of these only describe a sync that is allowed to run, so they are
+                    // hidden rather than shown as live settings the switch above overrules.
+                    if settings.syncEnabled {
+                        Toggle("Wi‑Fi Only", isOn: $settings.wifiOnly)
+
+                        Stepper(value: $settings.syncLastDays, in: 1 ... 365) {
+                            Text("Sync last \(settings.syncLastDays) days")
+                        }
                     }
                 }
 
                 // Album Selection Section
-                Section(header: Text("Target Album")) {
+                Section(
+                    header: Text("Target Album"),
+                    footer: Text(viewModel.selectedAlbum == nil
+                        ? "Uploads are paused. Pick an album to start them again."
+                        : "New photos from this phone upload into this album. Pick \"Paused\" to stop."),
+                ) {
                     Button("Refresh Albums") {
                         viewModel.fetchAlbums()
                     }
@@ -89,14 +111,21 @@ struct SyncOptionsView: View {
                         Text("No albums found")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Album", selection: $viewModel.selectedAlbum) {
+                        // Bound through an explicit setter, not `$viewModel.selectedAlbum` with
+                        // an `onChange`: the setter runs on a tap only, so the assignments
+                        // `fetchAlbums()` and `pauseUploads()` make no longer read back as user
+                        // choices and write to the server a second time.
+                        Picker("Album", selection: Binding(
+                            get: { viewModel.selectedAlbum },
+                            set: { viewModel.chooseAlbum($0) },
+                        )) {
+                            // The pause switch is the *absence* of a target album — the same
+                            // cleared setting the web app's "Pause uploads" writes — so it
+                            // belongs in this picker as the nil row, not as a separate toggle.
+                            Text("Paused").tag(Album?.none)
+
                             ForEach(viewModel.albums) { album in
                                 Text(album.name).tag(album as Album?)
-                            }
-                        }
-                        .onChange(of: viewModel.selectedAlbum) { _, newAlbum in
-                            if let album = newAlbum {
-                                viewModel.selectAlbum(album)
                             }
                         }
                     }

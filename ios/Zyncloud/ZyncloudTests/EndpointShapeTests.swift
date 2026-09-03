@@ -341,6 +341,36 @@ struct EndpointShapeTests {
         #expect(request?.json["confirmed"] as? Bool == true)
     }
 
+    // MARK: - Pausing phone uploads
+
+    /// Pausing is a `DELETE` of the target album, the same request the web app's "Pause uploads"
+    /// sends. A `PUT` of some placeholder album id instead would keep uploading, into the wrong
+    /// album, while the screen said "Paused".
+    @Test func pausingUploadsDeletesTheTargetAlbum() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.clearTargetAlbum(completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/settings/target-album")
+        #expect(request?.body.isEmpty == true)
+    }
+
+    /// A refused pause must read as a failure: the caller puts the picker back on the old album
+    /// on one, and swallowing it would leave the screen claiming a pause the server never made.
+    @Test func arefusedPauseIsAfailure() async {
+        var result: Result<Void, Error>?
+        _ = await StubServer.capture(status: 500, json: "{\"success\":false,\"message\":\"Nope\"}") {
+            result = await awaiting { done in api.clearTargetAlbum(completion: done) }
+        }
+
+        guard case let .failure(error) = result else {
+            Issue.record("a 500 must not read as a successful pause")
+            return
+        }
+        #expect(error.localizedDescription.contains("Nope"))
+    }
+
     // MARK: - Recordings
 
     @Test func fetchRecordingsGetsTheAlbumsRecordings() async {

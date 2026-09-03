@@ -283,6 +283,15 @@ struct APIClient {
         send(.put, "api/settings/target-album",
              body: TargetAlbumBody(albumId: albumId), completion: completion)
     }
+
+    /// Pause phone uploads account-wide — the same `DELETE` the web app's "Pause uploads" sends.
+    ///
+    /// The server's target album is the single switch both clients read: with it cleared,
+    /// ``SyncCoordinator/syncTargetAlbumFromServer`` drops the local selection on its next run
+    /// and every upload endpoint refuses with "sync is paused".
+    func clearTargetAlbum(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.delete, "api/settings/target-album", completion: completion)
+    }
 }
 
 struct TargetAlbumResponse: Codable {
