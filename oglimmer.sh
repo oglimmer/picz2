@@ -273,19 +273,38 @@ bump_semver() {
     echo "$major.$minor.$patch"
 }
 
+# Decide whether a version keeps -SNAPSHOT. Release builds and non-main branches get
+# the bare version; main keeps -SNAPSHOT so a plain build leaves no dirty version files.
+effective_version() {
+    local v="$1" is_release="${2:-false}"
+    if [[ "$is_release" == true ]]; then
+        echo "$v"
+        return
+    fi
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    if [[ "$branch" == "main" || "$branch" == "master" ]]; then
+        echo "${v}-SNAPSHOT"
+    else
+        echo "$v"
+    fi
+}
+
 update_frontend_version() {
-    local v="$1"
+    local v="$1" is_release="${2:-false}"
     if [[ ! -f "$FRONTEND_DIR/package.json" ]]; then
         log_warning "frontend/package.json not found, skipping"
         return
     fi
-    log_info "Updating frontend/package.json to version $v"
+    local pkg_version
+    pkg_version=$(effective_version "$v" "$is_release")
+    log_info "Updating frontend/package.json to version $pkg_version"
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$v frontend/package.json package-lock.json"
+        echo -e "${YELLOW}[DRY-RUN]${RESET} sed version=$pkg_version frontend/package.json package-lock.json"
         return
     fi
-    sed_inplace "s/\"version\": \".*\"/\"version\": \"$v\"/" "$FRONTEND_DIR/package.json"
-    update_frontend_lock_version "$v"
+    sed_inplace "s/\"version\": \".*\"/\"version\": \"$pkg_version\"/" "$FRONTEND_DIR/package.json"
+    update_frontend_lock_version "$pkg_version"
 }
 
 # package-lock.json repeats the project version twice - at the top level and again in
@@ -308,17 +327,7 @@ update_backend_version() {
     fi
 
     local pom_version
-    if [[ "$is_release" == true ]]; then
-        pom_version="$v"
-    else
-        local branch
-        branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-        if [[ "$branch" == "main" || "$branch" == "master" ]]; then
-            pom_version="${v}-SNAPSHOT"
-        else
-            pom_version="$v"
-        fi
-    fi
+    pom_version=$(effective_version "$v" "$is_release")
 
     log_info "Updating server/pom.xml to version $pom_version"
     if [[ "$DRY_RUN" == true ]]; then
@@ -468,7 +477,7 @@ execute_build() {
     echo
 
     if [[ "$BUILD_FRONTEND" == true ]]; then
-        update_frontend_version "$version"
+        update_frontend_version "$version" "$RELEASE_FLAG"
         build_image "frontend" "frontend/Dockerfile-prod" "$version" "${FRONTEND_IMAGES[@]}"
     fi
 
@@ -546,7 +555,7 @@ execute_release() {
     else
         echo "$new_version" > "$VERSION_FILE"
     fi
-    update_frontend_version "$new_version"
+    update_frontend_version "$new_version" true
     update_backend_version "$new_version" true
     update_ios_version "$new_version"
 
