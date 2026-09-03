@@ -672,6 +672,52 @@ struct EndpointShapeTests {
         #expect(!album.isPublished)
     }
 
+    // MARK: - The album's visitor counts
+
+    @Test func readingAnalyticsGetsTheAlbumsAnalyticsPath() async {
+        let json = #"{"success":true,"analyticsPaused":false,"uniqueVisitors":7}"#
+
+        let request = await StubServer.captureOne(json: json) {
+            _ = await awaiting { done in api.fetchAlbumAnalytics(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "GET")
+        #expect(request?.path == "/api/albums/7/analytics")
+        #expect(request?.headers["Authorization"] == APIClient.stubbedAuthHeader)
+    }
+
+    /// Pausing is a query parameter on a PUT with no body, like the publish gate beside it.
+    /// A body here would be dropped and the counting would never stop.
+    @Test func pausingCountingPutsTheFlagInTheQuery() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.setAnalyticsPaused(albumId: 7, paused: true, completion: done) }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/albums/7/analytics/paused")
+        #expect(request?.query["paused"] == "true")
+        #expect(request?.body.isEmpty == true)
+    }
+
+    @Test func resumingCountingSendsFalse() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.setAnalyticsPaused(albumId: 7, paused: false, completion: done) }
+        }
+
+        #expect(request?.query["paused"] == "false")
+    }
+
+    /// The irreversible one, and it shares its path with the read. A wrong verb here would
+    /// delete every recorded event while the caller believed it was refreshing the screen.
+    @Test func resettingAnalyticsDeletesTheAnalyticsPath() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in api.resetAlbumAnalytics(albumId: 7, completion: done) }
+        }
+
+        #expect(request?.method == "DELETE")
+        #expect(request?.path == "/api/albums/7/analytics")
+    }
+
     // MARK: - Duplicating an album
 
     /// A POST with no body. The album to copy is the path, not a field — sending it in a body
