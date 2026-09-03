@@ -52,6 +52,11 @@ struct AlbumListView: View {
                                             sharingLink = ShareableLink(url: shareURL)
                                         }
                                     },
+                                    onDuplicate: {
+                                        viewModel.showDuplicateConfirmation(for: album) {
+                                            viewModel.duplicateAlbum(id: album.id)
+                                        }
+                                    },
                                     onDelete: {
                                         viewModel.showDeleteConfirmation(for: album) {
                                             viewModel.deleteAlbum(id: album.id) { _ in }
@@ -175,6 +180,11 @@ struct AlbumCardView: View {
 
     /// Raised to the list screen, which owns the share sheet.
     let onShare: () -> Void
+
+    /// Copies the album into a new one. Sits above Delete in the menu and carries no destructive
+    /// role: it adds an album, it never touches this one.
+    let onDuplicate: () -> Void
+
     let onDelete: () -> Void
 
     @State private var showingActions = false
@@ -273,6 +283,10 @@ struct AlbumCardView: View {
                 Button(action: onShare) {
                     Label("Share Link", systemImage: "square.and.arrow.up")
                 }
+            }
+
+            Button(action: onDuplicate) {
+                Label("Duplicate", systemImage: "plus.square.on.square")
             }
 
             Button(role: .destructive, action: onDelete) {

@@ -48,17 +48,26 @@ struct AlertState: Identifiable {
         AlertState(title: title, message: message)
     }
 
+    /// - Parameter destructive: whether the confirm button is drawn red. True for the asks that
+    ///   throw something away; false for the ones that only add — a red "Duplicate Album" reads
+    ///   as a warning the action does not deserve. A `ButtonRole` parameter would be the direct
+    ///   way to say this, but the callers are view models, and they do not import SwiftUI.
     static func confirmation(
         title: String,
         message: String,
         confirmTitle: String = "Confirm",
+        destructive: Bool = true,
         confirmAction: @escaping () -> Void,
         cancelTitle: String = "Cancel",
     ) -> AlertState {
         AlertState(
             title: title,
             message: message,
-            primaryButton: AlertButton(title: confirmTitle, role: .destructive, action: confirmAction),
+            primaryButton: AlertButton(
+                title: confirmTitle,
+                role: destructive ? .destructive : nil,
+                action: confirmAction,
+            ),
             secondaryButton: AlertButton(title: cancelTitle, role: .cancel, action: {}),
         )
     }

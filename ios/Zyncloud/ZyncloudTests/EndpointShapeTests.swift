@@ -672,6 +672,42 @@ struct EndpointShapeTests {
         #expect(!album.isPublished)
     }
 
+    // MARK: - Duplicating an album
+
+    /// A POST with no body. The album to copy is the path, not a field — sending it in a body
+    /// would be quietly ignored and every duplicate would copy the wrong album.
+    @Test func duplicatingAnAlbumPostsToTheDuplicateEndpoint() async {
+        let json = #"{"success":true,"album":{"id":8,"name":"Trip (Copy)","published":false}}"#
+
+        let request = await StubServer.captureOne(json: json) {
+            _ = await awaiting { done in api.duplicateAlbum(id: 7, completion: done) }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/albums/7/duplicate")
+        #expect(request?.body.isEmpty == true)
+        #expect(request?.headers["Authorization"] == APIClient.stubbedAuthHeader)
+    }
+
+    /// The new album is read off the answer, not guessed from the source. It is the copy's own
+    /// id the list needs, and the copy comes back unpublished however public the source was.
+    @Test func thecopyIsReadOffTheAnswer() async {
+        let json = #"{"success":true,"album":{"id":8,"name":"Trip (Copy)","published":false}}"#
+
+        var result: Result<Album, Error>?
+        _ = await StubServer.capture(json: json) {
+            result = await awaiting { done in api.duplicateAlbum(id: 7, completion: done) }
+        }
+
+        guard case let .success(album) = result else {
+            Issue.record("a 200 with an album must read as a successful duplicate")
+            return
+        }
+        #expect(album.id == 8)
+        #expect(album.name == "Trip (Copy)")
+        #expect(!album.isPublished)
+    }
+
     // MARK: - The album's saved map view
 
     @Test func savingAmapViewPutsTheFourDegreesToTheAlbum() async {
