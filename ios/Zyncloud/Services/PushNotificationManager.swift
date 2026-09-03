@@ -88,8 +88,8 @@ final class PushNotificationManager: NSObject, ObservableObject {
     }
 
     private func sendTokenToBackend(token: String, email: String) {
-        let deviceModel = UIDevice.current.model
-        let osVersion = UIDevice.current.systemVersion
+        let deviceModel = DeviceIdentity.model
+        let osVersion = DeviceIdentity.osVersion
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
 
         let body = DeviceTokenBody(
