@@ -1,13 +1,11 @@
 import Combine
 import SwiftUI
-import UIKit
 
 struct SyncOptionsView: View {
     @StateObject private var viewModel = SyncOptionsViewModel()
     /// Photo access can be changed in iOS Settings while the app sits in the background, so the
     /// status is re-read on every return to `.active` as well as on first appearance.
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.openURL) private var openURL
     /// Observed directly, not reached through `sync.settings` (§5.5).
     ///
     /// `Settings` is an `ObservableObject` held inside another one. Mutating a property of the
@@ -53,11 +51,13 @@ struct SyncOptionsView: View {
                             Button("Request Access") {
                                 viewModel.requestPhotoAccess()
                             }
-                        } else if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                        } else {
                             // Denied, restricted and limited cannot be re-prompted in-app; the
-                            // only way out is the system settings page for this app.
+                            // only way out is the system settings page for this app. The URL for
+                            // that page differs between iOS and Mac Catalyst — see
+                            // `PhotoAccessSettings`.
                             Button("Open Settings") {
-                                openURL(settingsURL)
+                                PhotoAccessSettings.open()
                             }
                         }
                     }
