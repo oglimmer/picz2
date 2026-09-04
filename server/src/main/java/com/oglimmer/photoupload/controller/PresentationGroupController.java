@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.model.MessageResponse;
+import com.oglimmer.photoupload.model.PresentationGroupEndRequest;
 import com.oglimmer.photoupload.model.PresentationGroupInfo;
 import com.oglimmer.photoupload.model.PresentationGroupRequest;
 import com.oglimmer.photoupload.model.PresentationGroupResponse;
@@ -84,6 +85,24 @@ public class PresentationGroupController {
         PresentationGroupResponse.builder()
             .success(true)
             .message("Group updated successfully")
+            .group(group)
+            .build());
+  }
+
+  /**
+   * Moves or clears the image a group stops at. Separate from the update above so a client that
+   * knows nothing about ends cannot clear one by PUTting a group body without the field.
+   */
+  @PutMapping("/presentation-groups/{id}/end")
+  public ResponseEntity<PresentationGroupResponse> setGroupEnd(
+      @PathVariable Long id, @RequestBody PresentationGroupEndRequest request) {
+    PresentationGroupInfo group =
+        presentationGroupService.setGroupEnd(id, request == null ? null : request.getEndFileId());
+
+    return ResponseEntity.ok(
+        PresentationGroupResponse.builder()
+            .success(true)
+            .message("Group end updated successfully")
             .group(group)
             .build());
   }

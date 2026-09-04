@@ -182,14 +182,39 @@
         class="group-start-badge"
         title="A group starts at this photo"
       >Group start</span>
-      <button
-        v-else-if="canStartGroup"
-        class="start-group-btn"
-        title="Start a new group at this photo"
-        @click.stop="$emit('start-group', file.id)"
+      <span
+        v-if="groupEnd"
+        class="group-end-badge"
+        title="The group stops after this photo"
+      >Group end</span>
+      <span
+        v-if="groupEnd"
+        class="group-end-edge"
+        aria-hidden="true"
+      />
+      <div
+        v-if="(canStartGroup && !groupStart) || canEndGroup"
+        class="group-marker-actions"
       >
-        Start group
-      </button>
+        <button
+          v-if="canStartGroup && !groupStart"
+          class="start-group-btn"
+          title="Start a new group at this photo"
+          @click.stop="$emit('start-group', file.id)"
+        >
+          Start group
+        </button>
+        <button
+          v-if="canEndGroup"
+          class="start-group-btn"
+          :title="groupEnd
+            ? 'Let the group run on to the next one again'
+            : 'Stop the group after this photo'"
+          @click.stop="$emit('end-group', file.id)"
+        >
+          {{ groupEnd ? 'Reopen group' : 'End group here' }}
+        </button>
+      </div>
     </div>
     <!-- The owner's caption (D69). Outside `file-info` on purpose: that block is owner-only
          chrome, while the caption is written for the readers and has to survive presentation
@@ -326,6 +351,10 @@ interface Props {
   canStartGroup?: boolean
   /** This photo is already the anchor of a group — show a marker instead of the button. */
   groupStart?: boolean
+  /** This photo sits inside a group, so it can be made that group's last photo. */
+  canEndGroup?: boolean
+  /** This photo is already where its group stops — the button reopens the group instead. */
+  groupEnd?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -342,7 +371,9 @@ const props = withDefaults(defineProps<Props>(), {
   selectVariant: 'delete',
   moveTarget: false,
   canStartGroup: false,
-  groupStart: false
+  groupStart: false,
+  canEndGroup: false,
+  groupEnd: false
 })
 
 const emit = defineEmits<{
@@ -356,6 +387,7 @@ const emit = defineEmits<{
   'toggle-select': [fileId: number, shiftKey?: boolean]
   'move-here': [fileId: number]
   'start-group': [fileId: number]
+  'end-group': [fileId: number]
   'drag-start': [event: DragEvent]
   'drag-over': [event: DragEvent]
   'drag-enter': [event: DragEvent]

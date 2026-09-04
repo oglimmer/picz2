@@ -28,6 +28,7 @@ struct PresentationGalleryTests {
         id: Int,
         tag: String = "beach",
         startFileId: Int,
+        endFileId: Int? = nil,
         label: String = "Chapter",
         text: String? = nil,
     ) -> PresentationGroup {
@@ -36,6 +37,7 @@ struct PresentationGalleryTests {
             albumId: 7,
             tag: tag,
             startFileId: startFileId,
+            endFileId: endFileId,
             label: label,
             text: text,
         )
@@ -142,6 +144,144 @@ struct PresentationGalleryTests {
         #expect(sections.count == 1)
         #expect(sections[0].group == nil)
         #expect(sections[0].photos.map(\.id) == [1, 2])
+    }
+
+    // MARK: - Sections that end
+
+    /// The point of an end marker: the chapter stops without a new one starting, and what follows
+    /// is read with no heading at all.
+    @Test func aGroupWithAnEndStopsThereAndLeavesAnUnheadedRun() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3), photo(id: 4)]
+        let groups = [group(id: 10, startFileId: 1, endFileId: 2, label: "Morning")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections.count == 2)
+        #expect(sections[0].group?.label == "Morning")
+        #expect(sections[0].photos.map(\.id) == [1, 2])
+        #expect(sections[1].group == nil)
+        #expect(sections[1].photos.map(\.id) == [3, 4])
+    }
+
+    /// The smallest chapter there is: one photo, which both starts and ends it.
+    @Test func aGroupCanCoverASinglePhoto() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3)]
+        let groups = [group(id: 10, startFileId: 2, endFileId: 2, label: "Just this")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections.count == 3)
+        #expect(sections[0].group == nil)
+        #expect(sections[0].photos.map(\.id) == [1])
+        #expect(sections[1].group?.label == "Just this")
+        #expect(sections[1].photos.map(\.id) == [2])
+        #expect(sections[2].group == nil)
+        #expect(sections[2].photos.map(\.id) == [3])
+    }
+
+    /// A chapter ending on the last photo leaves nothing behind it — no empty trailing section.
+    @Test func aGroupEndingOnTheLastPhotoLeavesNoEmptyTrailingSection() {
+        let photos = [photo(id: 1), photo(id: 2)]
+        let groups = [group(id: 10, startFileId: 1, endFileId: 2, label: "All of it")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections.count == 1)
+        #expect(sections[0].group?.label == "All of it")
+        #expect(sections[0].photos.map(\.id) == [1, 2])
+    }
+
+    /// Reordering can put an end in front of its own start. The walk never reaches it, so the
+    /// chapter simply stays open rather than collapsing or swallowing the album.
+    @Test func anEndSittingBeforeItsOwnStartIsIgnored() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3)]
+        let groups = [group(id: 10, startFileId: 2, endFileId: 1, label: "Drifted")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections.count == 2)
+        #expect(sections[0].group == nil)
+        #expect(sections[0].photos.map(\.id) == [1])
+        #expect(sections[1].group?.label == "Drifted")
+        #expect(sections[1].photos.map(\.id) == [2, 3])
+    }
+
+    /// An end belonging to a chapter that is not the open one must not close the open one.
+    @Test func anEndFromAnotherGroupDoesNotCloseTheOpenOne() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3), photo(id: 4)]
+        let groups = [
+            group(id: 10, startFileId: 1, endFileId: 4, label: "First"),
+            group(id: 11, startFileId: 3, label: "Second"),
+        ]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        // "First" is closed by "Second" starting, so its own end at photo 4 is never reached and
+        // does not cut "Second" short.
+        #expect(sections.count == 2)
+        #expect(sections[0].group?.label == "First")
+        #expect(sections[0].photos.map(\.id) == [1, 2])
+        #expect(sections[1].group?.label == "Second")
+        #expect(sections[1].photos.map(\.id) == [3, 4])
+    }
+
+    /// Several unheaded runs can exist once chapters end, so their ids have to differ — two
+    /// sections sharing one makes `ForEach` drop a section.
+    @Test func severalUnheadedRunsGetDistinctIDs() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3), photo(id: 4)]
+        let groups = [group(id: 10, startFileId: 2, endFileId: 2, label: "Middle")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(Set(sections.map(\.id)).count == sections.count)
+    }
+
+    /// Only a chapter that stopped on its own end photo draws a closing rule. One cut off by the
+    /// next chapter starting is already announced by that chapter's heading.
+    @Test func onlyASelfClosedSectionIsMarkedClosed() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3), photo(id: 4)]
+        let groups = [
+            group(id: 10, startFileId: 1, label: "Cut off by the next one"),
+            group(id: 11, startFileId: 3, endFileId: 3, label: "Closes itself"),
+        ]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections.count == 3)
+        #expect(sections[0].group?.label == "Cut off by the next one")
+        #expect(sections[0].isClosed == false)
+        #expect(sections[1].group?.label == "Closes itself")
+        #expect(sections[1].isClosed)
+        // The run left behind has no chapter to close, so it is not marked either.
+        #expect(sections[2].group == nil)
+        #expect(sections[2].isClosed == false)
+    }
+
+    /// An open chapter running to the end of the album is not closed — nothing stopped it.
+    @Test func aChapterRunningToTheEndIsNotMarkedClosed() {
+        let photos = [photo(id: 1), photo(id: 2)]
+        let groups = [group(id: 10, startFileId: 1, label: "Open")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        #expect(sections[0].isClosed == false)
+    }
+
+    /// Chapter markers over a full-screen photo count within the chapter, so an end has to shrink
+    /// the total as well as the run.
+    @Test func chapterPositionsRespectAnEnd() {
+        let photos = [photo(id: 1), photo(id: 2), photo(id: 3)]
+        let groups = [group(id: 10, startFileId: 1, endFileId: 2, label: "Short")]
+
+        let sections = PresentationGallery.sections(from: photos, groups: groups, tag: "beach")
+
+        let second = PresentationGallery.chapter(in: sections, forPhotoID: 2)
+        #expect(second?.label == "Short")
+        #expect(second?.position == 2)
+        #expect(second?.total == 2)
+
+        // Photo 3 fell out of the chapter, so it gets no marker at all.
+        #expect(PresentationGallery.chapter(in: sections, forPhotoID: 3) == nil)
     }
 
     // MARK: - Filtering
@@ -286,17 +426,16 @@ struct PresentationGalleryTests {
 
     // MARK: - Section identity
 
-    /// The unheaded lead run needs an id that no group can collide with — server ids are
-    /// positive, so a negative one is safe.
-    @Test func theLeadSectionsIdCannotCollideWithAGroupId() {
+    /// An unheaded run needs an id no group can collide with — server ids are positive, so a
+    /// negative one is safe.
+    @Test func anUnheadedSectionsIdCannotCollideWithAGroupId() {
         let sections = PresentationGallery.sections(
             from: [photo(id: 1), photo(id: 2)],
             groups: [group(id: 10, startFileId: 2)],
             tag: "beach",
         )
 
-        #expect(sections[0].id == PresentationSection.leadID)
+        #expect(sections[0].id < 0)
         #expect(sections[1].id == 10)
-        #expect(PresentationSection.leadID < 0)
     }
 }

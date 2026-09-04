@@ -1211,6 +1211,11 @@ body.landing-page .app-footer { display: none; }
 .presentation-section + .presentation-section {
   border-top: 1px solid var(--c-border);
 }
+/* A closed group already draws its own closing rule, so the divider under it would be a second
+   line saying the same thing one row lower. */
+.presentation-section--closed + .presentation-section {
+  border-top: none;
+}
 /* Photos ahead of the first group need the grid's usual top padding back. */
 .presentation-section .presentation-gallery { padding-top: var(--sp-2); }
 .presentation-section--lead .presentation-gallery { padding-top: var(--sp-5); }
@@ -3584,13 +3589,22 @@ body.landing-dark { background: #0B1D2E; }
 }
 .move-here-btn:hover { background: rgba(65,110,150,.95); }
 
-/* Presentation groups: "start a group here" sits on the photo, kept quiet until hover
-   so it doesn't compete with the photos in an otherwise chrome-free presentation. */
-.start-group-btn {
+/* Presentation groups: the "start a group here" / "end group here" controls sit on the photo,
+   kept quiet until hover so they don't compete with the photos in an otherwise chrome-free
+   presentation. A photo inside a group can show both, hence the row rather than one button. */
+.group-marker-actions {
   position: absolute;
   bottom: var(--sp-2);
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-1);
+  max-width: calc(100% - var(--sp-4));
+}
+
+.start-group-btn {
   padding: 5px var(--sp-3);
   background: rgba(255,255,255,.92);
   color: var(--c-accent);
@@ -3625,7 +3639,41 @@ body.landing-dark { background: #0B1D2E; }
   pointer-events: none;
 }
 
-/* Touch devices get no hover, so keep the button permanently visible there. */
+/* Where a group stops. Sits opposite the start badge so a one-photo group, which carries both,
+   still reads at a glance — and it is the start badge inverted rather than a second colour:
+   filled accent opens a group, outlined accent closes it. */
+.group-end-badge {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  padding: 2px var(--sp-2);
+  background: rgba(255,255,255,.92);
+  color: var(--c-accent);
+  font-size: .6875rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  border: 1.5px solid var(--c-accent);
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+/* The wall of the group, drawn on the photo it stops at: the section's closing rule, foreshadowed
+   on the last tile so the boundary is visible in the grid and not only underneath it. */
+.group-end-edge {
+  position: absolute;
+  top: var(--sp-2);
+  right: 0;
+  bottom: var(--sp-2);
+  width: 3px;
+  border-radius: var(--r-full);
+  background: var(--c-accent);
+  opacity: .75;
+  pointer-events: none;
+}
+
+/* Touch devices get no hover, so keep the buttons permanently visible there. */
 @media (hover: none) {
   .start-group-btn { opacity: 1; }
 }

@@ -2,19 +2,32 @@ import Foundation
 
 /// One rendered block of a presentation: a heading and the photos underneath it.
 struct PresentationSection: Identifiable {
-    /// nil for the photos that come before the first group marker. Those genuinely belong to no
-    /// group, so they are shown without a heading rather than under an invented one.
+    /// nil for the photos that come before the first group marker, and for the run left behind by
+    /// a chapter that ended. Those genuinely belong to no chapter, so they are shown without a
+    /// heading rather than under an invented one.
     let group: PresentationGroup?
 
     let photos: [Photo]
 
-    /// Group id, or ``leadID`` for the headingless run at the top. Ids from the server are
-    /// positive, so the two can never collide.
+    /// True when the chapter closed itself on its own end photo rather than being cut off by the
+    /// next chapter starting. Only a self-closed section draws a closing rule: one that merely ran
+    /// into the next heading is already announced by that heading, and a second marker there would
+    /// read as two boundaries where there is one.
+    var isClosed: Bool = false
+
+    /// The group's id, or — for a headingless run — the negated id of its first photo.
+    ///
+    /// A single constant would do while the only headingless run was the one at the top, but a
+    /// chapter that ends leaves another one behind it, and two sections sharing an id make
+    /// `ForEach` drop one. Server ids are positive, so negating keeps the two spaces apart.
     var id: Int {
-        group?.id ?? Self.leadID
+        if let group { return group.id }
+        guard let first = photos.first else { return Self.emptyLeadID }
+        return -first.id
     }
 
-    static let leadID = -1
+    /// Stand-in id for a headingless run with no photos in it — which the walk never builds.
+    static let emptyLeadID = -1
 }
 
 /// What the chapter marker over a full-screen photo says: which section it sits in, and where in
@@ -156,7 +169,11 @@ enum PresentationGallery {
     }
 
     /// Breaks the tag-filtered list into sections by walking it and handing every photo to the
-    /// last anchor it passed.
+    /// last anchor it passed, until that group's own end photo closes it.
+    ///
+    /// A closed group leaves a headingless run behind it, so — unlike before ends existed — there
+    /// can be several of those in one presentation. An end that is not in the list, or that has
+    /// drifted in front of its own start, is never reached, so the group simply stays open.
     ///
     /// - Parameter photos: already filtered to `tag`, in the order they are to be read.
     static func sections(
@@ -192,6 +209,17 @@ enum PresentationGallery {
                 openPhotos = []
             }
             openPhotos.append(photo)
+
+            // A chapter that names this photo as its end closes here, and what follows falls into
+            // a headingless run. Only the open group's own end counts, so an end belonging to some
+            // other group is walked straight past.
+            if openGroup?.endFileId == photo.id {
+                sections.append(
+                    PresentationSection(group: openGroup, photos: openPhotos, isClosed: true),
+                )
+                openGroup = nil
+                openPhotos = []
+            }
         }
 
         if openGroup != nil || !openPhotos.isEmpty {

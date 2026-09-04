@@ -26,16 +26,22 @@ export interface PresentationGroupsComposable {
     tag: string,
     startFileId: number,
     payload: GroupPayload,
+    endFileId?: number | null,
   ) => Promise<PresentationGroup>;
   updateGroup: (
     groupId: number,
     payload: GroupPayload,
   ) => Promise<PresentationGroup>;
   deleteGroup: (groupId: number) => Promise<void>;
+  setGroupEnd: (
+    groupId: number,
+    endFileId: number | null,
+  ) => Promise<PresentationGroup>;
   groupStartingAt: (
     fileId: number,
     tag: string,
   ) => PresentationGroup | undefined;
+  groupEndingAt: (fileId: number, tag: string) => PresentationGroup | undefined;
   buildSections: (files: AlbumFile[], tag: string) => PresentationSection[];
   groupContextFor: (
     sections: PresentationSection[],
@@ -50,6 +56,11 @@ export interface PresentationGroupsComposable {
  * walking the tag-filtered file list in its existing display order. That means reordering images
  * reshuffles the sections with no extra bookkeeping, and a group whose anchor is missing from the
  * current list (untagged, deleted, filtered out) simply doesn't render.
+ *
+ * A group may also carry an end marker (`endFileId`) — the last image that still belongs to it.
+ * That is how a section stops without the next one starting: the images after it fall back into a
+ * headingless run. An end that is missing from the list, or that has drifted in front of its own
+ * start, is never reached by the walk, so the group just stays open-ended.
  */
 export function usePresentationGroups(): PresentationGroupsComposable {
   const { apiUrl, fetchWithAuth } = useApi();
@@ -103,6 +114,7 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     tag: string,
     startFileId: number,
     payload: GroupPayload,
+    endFileId: number | null = null,
   ): Promise<PresentationGroup> {
     const response = await fetchWithAuth(
       `${apiUrl}/api/albums/${albumId}/presentation-groups`,
@@ -112,6 +124,7 @@ export function usePresentationGroups(): PresentationGroupsComposable {
         body: JSON.stringify({
           tag,
           startFileId,
+          endFileId,
           label: payload.label,
           text: payload.text ?? null,
         }),
@@ -169,12 +182,47 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     groups.value = groups.value.filter((g) => g.id !== groupId);
   }
 
+  /**
+   * Moves or clears the image a group stops at. Its own endpoint rather than a field on the
+   * update body, so a client that never sends the field cannot silently wipe an end marker.
+   */
+  async function setGroupEnd(
+    groupId: number,
+    endFileId: number | null,
+  ): Promise<PresentationGroup> {
+    const response = await fetchWithAuth(
+      `${apiUrl}/api/presentation-groups/${groupId}/end`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endFileId }),
+      },
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Unknown error");
+    }
+
+    groups.value = groups.value.map((g) => (g.id === groupId ? data.group : g));
+    return data.group;
+  }
+
   function groupStartingAt(
     fileId: number,
     tag: string,
   ): PresentationGroup | undefined {
     if (!tag) return undefined;
     return groups.value.find((g) => g.tag === tag && g.startFileId === fileId);
+  }
+
+  function groupEndingAt(
+    fileId: number,
+    tag: string,
+  ): PresentationGroup | undefined {
+    if (!tag) return undefined;
+    return groups.value.find((g) => g.tag === tag && g.endFileId === fileId);
   }
 
   function buildSections(
@@ -184,7 +232,7 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     const tagGroups = tag ? groups.value.filter((g) => g.tag === tag) : [];
 
     if (tagGroups.length === 0) {
-      return files.length > 0 ? [{ group: null, files }] : [];
+      return files.length > 0 ? [{ group: null, files, closed: false }] : [];
     }
 
     const byStartFile = new Map<number, PresentationGroup>(
@@ -192,7 +240,7 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     );
 
     const sections: PresentationSection[] = [];
-    let current: PresentationSection = { group: null, files: [] };
+    let current: PresentationSection = { group: null, files: [], closed: false };
 
     for (const file of files) {
       const starting = byStartFile.get(file.id);
@@ -201,9 +249,18 @@ export function usePresentationGroups(): PresentationGroupsComposable {
         if (current.group || current.files.length > 0) {
           sections.push(current);
         }
-        current = { group: starting, files: [] };
+        current = { group: starting, files: [], closed: false };
       }
       current.files.push(file);
+
+      // A group that names this image as its end closes here, and what follows falls back into a
+      // headingless run. Only the open group's own end counts, so an end belonging to some other
+      // group — or one sitting in front of its own start — is simply never reached.
+      if (current.group && current.group.endFileId === file.id) {
+        current.closed = true;
+        sections.push(current);
+        current = { group: null, files: [], closed: false };
+      }
     }
 
     if (current.group || current.files.length > 0) {
@@ -249,7 +306,9 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     createGroup,
     updateGroup,
     deleteGroup,
+    setGroupEnd,
     groupStartingAt,
+    groupEndingAt,
     buildSections,
     groupContextFor,
   };

@@ -239,10 +239,13 @@
       class="presentation-sections"
     >
       <section
-        v-for="section in presentationSections"
-        :key="section.group ? `group-${section.group.id}` : 'lead'"
+        v-for="(section, sectionIndex) in presentationSections"
+        :key="section.group ? `group-${section.group.id}` : `lead-${sectionIndex}`"
         class="presentation-section"
-        :class="{ 'presentation-section--lead': !section.group }"
+        :class="{
+          'presentation-section--lead': !section.group,
+          'presentation-section--closed': section.closed
+        }"
       >
         <PresentationGroupHeader
           v-if="section.group"
@@ -278,6 +281,10 @@
             </p>
           </div>
         </div>
+        <PresentationGroupEndRule
+          v-if="section.closed && section.group"
+          :label="section.group.label"
+        />
       </section>
     </div>
 
@@ -378,6 +385,7 @@ import LazyImage from '../components/LazyImage.vue'
 import CookieConsent from '../components/CookieConsent.vue'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
+import PresentationGroupEndRule from '../components/PresentationGroupEndRule.vue'
 import PhotoMap from '../components/PhotoMap.vue'
 import { useCapabilities } from '../composables/useCapabilities'
 
@@ -389,6 +397,7 @@ export default {
     CookieConsent,
     SubscriptionDialog,
     PresentationGroupHeader,
+    PresentationGroupEndRule,
     PhotoMap
   },
   props: {

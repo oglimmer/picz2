@@ -116,6 +116,13 @@ final class PresentationViewModel: ViewModelProtocol {
         return groups.first { $0.tag == selectedTag && $0.startFileId == photoID }
     }
 
+    /// The chapter that stops at this photo, if one does. Decides between offering "end the
+    /// chapter here" and offering to reopen it.
+    func groupEnding(at photoID: Int) -> PresentationGroup? {
+        guard let selectedTag else { return nil }
+        return groups.first { $0.tag == selectedTag && $0.endFileId == photoID }
+    }
+
     /// The photos of the current selection in reading order, flattened back out of the sections.
     /// This is what the full-screen pager walks, so it cannot drift from what the grid shows.
     var orderedPhotos: [Photo] {
@@ -213,10 +220,15 @@ final class PresentationViewModel: ViewModelProtocol {
 
     // MARK: - Writing chapters
 
-    /// Starts a chapter at `photo`, running from it until the next one begins.
+    /// Starts a chapter at `photo`, running from it until the next one begins — or, when the
+    /// caller names an `endingAt` photo, stopping there.
     ///
     /// - Returns: true when it was stored, so the form knows whether to close.
-    func createGroup(startingAt photo: Photo, draft: PresentationGroupDraft) async -> Bool {
+    func createGroup(
+        startingAt photo: Photo,
+        endingAt endPhoto: Photo? = nil,
+        draft: PresentationGroupDraft,
+    ) async -> Bool {
         guard let apiClient, let selectedTag else { return false }
         guard !isSavingGroup else { return false }
 
@@ -228,6 +240,7 @@ final class PresentationViewModel: ViewModelProtocol {
                 albumId: album.id,
                 tag: selectedTag,
                 startFileId: photo.id,
+                endFileId: endPhoto?.id,
                 draft: draft,
             ) { continuation.resume(returning: $0) }
         }
@@ -254,6 +267,35 @@ final class PresentationViewModel: ViewModelProtocol {
 
         let result: Result<PresentationGroup, Error> = await withCheckedContinuation { continuation in
             apiClient.updatePresentationGroup(id: group.id, draft: draft) {
+                continuation.resume(returning: $0)
+            }
+        }
+
+        switch result {
+        case let .success(updated):
+            groups = groups.map { $0.id == updated.id ? updated : $0 }
+            rebuildSections()
+            return true
+        case let .failure(error):
+            handleError(error)
+            return false
+        }
+    }
+
+    /// Moves or clears where a chapter stops. Passing nil for `photo` reopens it, so it runs on
+    /// until the next chapter starts again.
+    ///
+    /// - Returns: true when it was stored.
+    @discardableResult
+    func setGroupEnd(_ group: PresentationGroup, at photo: Photo?) async -> Bool {
+        guard let apiClient else { return false }
+        guard !isSavingGroup else { return false }
+
+        isSavingGroup = true
+        defer { isSavingGroup = false }
+
+        let result: Result<PresentationGroup, Error> = await withCheckedContinuation { continuation in
+            apiClient.setPresentationGroupEnd(id: group.id, endFileId: photo?.id) {
                 continuation.resume(returning: $0)
             }
         }
