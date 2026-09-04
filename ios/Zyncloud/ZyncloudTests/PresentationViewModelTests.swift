@@ -60,8 +60,22 @@ struct PresentationViewModelTests {
         return file
     }
 
-    private func group(_ id: Int, tag: String, startsAt fileId: Int, label: String = "Chapter") -> PresentationGroup {
-        PresentationGroup(id: id, albumId: 7, tag: tag, startFileId: fileId, label: label, text: nil)
+    private func group(
+        _ id: Int,
+        tag: String,
+        startsAt fileId: Int,
+        endsAt endFileId: Int? = nil,
+        label: String = "Chapter",
+    ) -> PresentationGroup {
+        PresentationGroup(
+            id: id,
+            albumId: 7,
+            tag: tag,
+            startFileId: fileId,
+            endFileId: endFileId,
+            label: label,
+            text: nil,
+        )
     }
 
     private func recording(_ id: Int, tag: String?, language: NarrationLanguage) -> RecordingInfo {

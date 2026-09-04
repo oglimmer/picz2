@@ -13,6 +13,7 @@ public interface PresentationGroupMapper {
   @Mapping(target = "albumId", source = "album.id")
   @Mapping(target = "tag", source = "tag.name")
   @Mapping(target = "startFileId", source = "startFile.id")
+  @Mapping(target = "endFileId", source = "endFile.id")
   @Mapping(target = "text", source = "bodyText")
   PresentationGroupInfo groupToGroupInfo(PresentationGroup group);
 

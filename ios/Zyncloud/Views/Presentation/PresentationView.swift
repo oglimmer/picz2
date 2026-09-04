@@ -239,11 +239,22 @@ struct PresentationView: View {
                                 PresentationTile(
                                     photo: photo,
                                     viewModel: viewModel,
+                                    // The chapter this photo is being read under, which is the one
+                                    // an "end it here" would end. Derived from the section rather
+                                    // than looked up, because that is what the walk decided.
+                                    enclosingGroup: section.group,
                                     onStartGroup: { editingGroup = .new(anchor: photo) },
                                     onEditGroup: { editingGroup = .existing($0) },
                                     onRemoveGroup: { pendingGroupDelete = $0 },
+                                    onSetGroupEnd: { group, endPhoto in
+                                        Task { await viewModel.setGroupEnd(group, at: endPhoto) }
+                                    },
                                 )
                             }
+                        }
+
+                        if section.isClosed, let group = section.group {
+                            PresentationSectionEndRule(label: group.label)
                         }
                     }
                 }
@@ -404,28 +415,87 @@ struct PresentationSectionHeader: View {
     }
 }
 
+/// The closing line of a chapter that stopped on its own end photo.
+///
+/// Deliberately ``PresentationSectionHeader``'s own accent rule laid on its side: the heading opens
+/// a chapter with a vertical 3pt bar, and this closes it with the same bar running the other way,
+/// fading out into a full stop. Only drawn for a chapter that closed itself — one that merely ran
+/// into the next heading is already announced by that heading.
+struct PresentationSectionEndRule: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // The heading's bar, same width and opacity, so the pair reads as one bracket.
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.accentColor.opacity(0.75))
+                .frame(width: 3, height: 14)
+
+            Text("End of “\(label)”")
+                .font(.caption2.weight(.semibold))
+                .kerning(1.2)
+                .textCase(.uppercase)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            LinearGradient(
+                colors: [Color.accentColor.opacity(0.6), Color.accentColor.opacity(0.17)],
+                startPoint: .leading,
+                endPoint: .trailing,
+            )
+            .frame(height: 2)
+            .clipShape(Capsule())
+
+            // The full stop the line trails into. Pulled back off the row spacing: at the full
+            // gap it reads as a stray dot rather than as the end of the line.
+            Circle()
+                .fill(Color.accentColor.opacity(0.55))
+                .frame(width: 5, height: 5)
+                .padding(.leading, -6)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("End of the chapter \(label).")
+    }
+}
+
 // MARK: - Tile
 
 /// One photo in the presentation grid.
 ///
 /// Deliberately not ``PhotoThumbnailView``: that one carries tagging, rotating and deleting, none
-/// of which belong in a presentation. A tap opens the pager at this photo; the only thing that
-/// can be *changed* from here is where a chapter starts, and that is behind a long press.
+/// of which belong in a presentation. A tap opens the pager at this photo; the only things that
+/// can be *changed* from here are where a chapter starts and where it stops, both behind a long
+/// press.
 struct PresentationTile: View {
     let photo: Photo
 
     @ObservedObject var viewModel: PresentationViewModel
+
+    /// The chapter this photo is currently read under, or nil for a headingless run. Only a photo
+    /// inside a chapter can be made that chapter's last one.
+    var enclosingGroup: PresentationGroup?
 
     /// Raised to the screen, which owns the form and the confirmation.
     var onStartGroup: () -> Void = {}
     var onEditGroup: (PresentationGroup) -> Void = { _ in }
     var onRemoveGroup: (PresentationGroup) -> Void = { _ in }
 
+    /// Moves the chapter's end to this photo, or clears it when the photo passed is nil.
+    var onSetGroupEnd: (PresentationGroup, Photo?) -> Void = { _, _ in }
+
     @State private var isOpen = false
 
     /// The chapter that starts here, if this photo anchors one.
     private var anchoredGroup: PresentationGroup? {
         viewModel.groupStarting(at: photo.id)
+    }
+
+    /// The chapter that stops here, if this photo is one's last.
+    private var closingGroup: PresentationGroup? {
+        viewModel.groupEnding(at: photo.id)
     }
 
     var body: some View {
@@ -458,6 +528,10 @@ struct PresentationTile: View {
             if anchoredGroup != nil {
                 chapterStartBadge
             }
+
+            if closingGroup != nil {
+                chapterEndBadge
+            }
         }
         .aspectRatio(1.0, contentMode: .fit)
         .clipped()
@@ -484,6 +558,24 @@ struct PresentationTile: View {
                         onStartGroup()
                     } label: {
                         Label("Start a Chapter Here", systemImage: "text.insert")
+                    }
+                }
+
+                // Ending is offered on any photo inside a chapter, the anchor included — a
+                // chapter of exactly one photo starts and stops on the same one.
+                if let enclosingGroup {
+                    if closingGroup != nil {
+                        Button {
+                            onSetGroupEnd(enclosingGroup, nil)
+                        } label: {
+                            Label("Reopen Chapter", systemImage: "arrow.turn.down.right")
+                        }
+                    } else {
+                        Button {
+                            onSetGroupEnd(enclosingGroup, photo)
+                        } label: {
+                            Label("End Chapter Here", systemImage: "text.append")
+                        }
                     }
                 }
             }
@@ -519,9 +611,44 @@ struct PresentationTile: View {
         .padding(4)
     }
 
+    /// Says a chapter stops here. Opposite corner from the start badge, so a one-photo chapter —
+    /// which carries both — still reads at a glance, and the start badge inverted rather than a
+    /// second colour: filled accent opens a chapter, outlined accent closes it.
+    ///
+    /// The bar down the trailing edge is the section's closing rule foreshadowed on the last tile,
+    /// so the boundary is visible in the grid and not only underneath it.
+    private var chapterEndBadge: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            VStack(spacing: 0) {
+                Image(systemName: "text.append")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(.accentColor)
+                    .padding(4)
+                    .background(Color.white.opacity(0.92), in: Circle())
+                    .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 1.5))
+                    .padding(4)
+
+                Spacer(minLength: 0)
+            }
+
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.accentColor.opacity(0.75))
+                .frame(width: 3)
+                .padding(.vertical, 4)
+        }
+    }
+
     private var accessibilityLabel: String {
         let name = photo.filename ?? photo.originalName
-        guard let anchoredGroup else { return name }
-        return "\(name). Starts the chapter \(anchoredGroup.label)."
+        var parts = [name]
+        if let anchoredGroup {
+            parts.append("Starts the chapter \(anchoredGroup.label).")
+        }
+        if let closingGroup {
+            parts.append("Ends the chapter \(closingGroup.label).")
+        }
+        return parts.joined(separator: ". ")
     }
 }

@@ -33,7 +33,7 @@
               v-if="mode === 'create'"
               class="grpdlg-lede"
             >
-              The group starts at this photo and runs until the next group begins.
+              The group starts at this photo. It runs until the next group begins — or until you mark an end photo with “End group here”.
             </p>
 
             <div class="grpdlg-field">

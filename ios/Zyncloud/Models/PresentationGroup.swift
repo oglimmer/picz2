@@ -3,14 +3,16 @@ import Foundation
 /// A labelled section marker inside one album's presentation of one tag.
 ///
 /// A group is an **anchor**, not a membership list: it names the photo it starts at
-/// (``startFileId``) and owns that photo plus every following one until the next anchor. Sections
-/// are therefore derived by walking the tag-filtered list in its display order — which is why
-/// reordering an album reshuffles its sections for free, and why a group whose anchor is not in
-/// the current list (deleted, untagged, filtered out) simply stops rendering.
+/// (``startFileId``) and owns that photo plus every following one up to ``endFileId`` inclusive,
+/// or, when there is no end, until the next anchor. Sections are therefore derived by walking the
+/// tag-filtered list in its display order — which is why reordering an album reshuffles its
+/// sections for free, and why a group whose anchor is not in the current list (deleted, untagged,
+/// filtered out) simply stops rendering.
 ///
 /// Mirrors `PresentationGroupInfo` on the server and `PresentationGroup` in the web app. The tag
 /// and the anchor are fixed once created — the server ignores both on update, so moving a chapter
-/// is delete plus create.
+/// is delete plus create. The end has its own endpoint rather than riding along on update, so a
+/// body without the field can never wipe one.
 struct PresentationGroup: Codable, Identifiable, Hashable {
     let id: Int
     let albumId: Int
@@ -19,6 +21,10 @@ struct PresentationGroup: Codable, Identifiable, Hashable {
     let tag: String
 
     let startFileId: Int
+
+    /// Last photo that still belongs to the chapter, or nil for "run on until the next one
+    /// starts". This is how a chapter ends without a new one beginning.
+    let endFileId: Int?
 
     /// The heading. Required by the server, so it is not optional here.
     let label: String

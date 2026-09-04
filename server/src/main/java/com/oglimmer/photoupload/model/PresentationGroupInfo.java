@@ -20,6 +20,10 @@ public class PresentationGroupInfo {
   private String tag;
 
   private Long startFileId;
+
+  /** Last image in the group, or null for "runs until the next group starts". */
+  private Long endFileId;
+
   private String label;
   private String text;
   private Instant createdAt;

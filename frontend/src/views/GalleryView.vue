@@ -835,11 +835,16 @@
       v-else-if="presentationMode"
       class="presentation-sections"
     >
+      <!-- A group that ends leaves a headingless run behind it, so there can be several of
+           those in one presentation — the key carries the position for that reason. -->
       <section
-        v-for="section in presentationSections"
-        :key="section.group ? `group-${section.group.id}` : 'lead'"
+        v-for="(section, sectionIndex) in presentationSections"
+        :key="section.group ? `group-${section.group.id}` : `lead-${sectionIndex}`"
         class="presentation-section"
-        :class="{ 'presentation-section--lead': !section.group }"
+        :class="{
+          'presentation-section--lead': !section.group,
+          'presentation-section--closed': section.closed
+        }"
       >
         <PresentationGroupHeader
           v-if="section.group"
@@ -858,10 +863,17 @@
             :show-drag-handle="false"
             :can-start-group="canManageGroups"
             :group-start="Boolean(groupStartingAt(file.id, selectedTag))"
+            :can-end-group="canManageGroups && Boolean(section.group)"
+            :group-end="Boolean(section.group) && section.group.endFileId === file.id"
             @click="openLightbox"
             @start-group="openCreateGroupDialog"
+            @end-group="handleToggleGroupEnd(section.group, $event)"
           />
         </div>
+        <PresentationGroupEndRule
+          v-if="section.closed && section.group"
+          :label="section.group.label"
+        />
       </section>
     </div>
 
@@ -1073,6 +1085,7 @@ import EditableTitle from '../components/EditableTitle.vue'
 import BulkTagBar from '../components/BulkTagBar.vue'
 import PresentationGroupHeader from '../components/PresentationGroupHeader.vue'
 import PresentationGroupDialog from '../components/PresentationGroupDialog.vue'
+import PresentationGroupEndRule from '../components/PresentationGroupEndRule.vue'
 import PhotoMap from '../components/PhotoMap.vue'
 import AccountMenu from '../components/AccountMenu.vue'
 import MenuButton from '../components/MenuButton.vue'
@@ -1087,6 +1100,7 @@ export default {
     BulkTagBar,
     PresentationGroupHeader,
     PresentationGroupDialog,
+    PresentationGroupEndRule,
     PhotoMap,
     AccountMenu,
     MenuButton
@@ -1164,6 +1178,7 @@ export default {
       createGroup,
       updateGroup,
       deleteGroup,
+      setGroupEnd,
       groupStartingAt,
       buildSections,
       groupContextFor
@@ -1444,6 +1459,24 @@ export default {
         success('Group removed.')
       } catch (err) {
         error('Could not remove group: ' + err.message)
+      }
+    }
+
+    // Ending a group is a toggle on the photo: clicking the photo that already ends it reopens the
+    // group, so it runs on to the next one again.
+    async function handleToggleGroupEnd(group, fileId) {
+      if (!group) return
+
+      const reopening = group.endFileId === fileId
+      try {
+        await setGroupEnd(group.id, reopening ? null : fileId)
+        success(
+          reopening
+            ? `"${group.label}" runs on until the next group again.`
+            : `"${group.label}" ends at this photo.`
+        )
+      } catch (err) {
+        error('Could not change the group end: ' + err.message)
       }
     }
 
@@ -2723,6 +2756,7 @@ export default {
       openEditGroupDialog,
       handleSaveGroup,
       handleDeleteGroup,
+      handleToggleGroupEnd,
       selectedFileIds,
       selectedRotatableFiles,
       bulkActionBusy,

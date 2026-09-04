@@ -29,9 +29,13 @@ import org.springframework.transaction.annotation.Transactional;
  * Presentation image groups — per (album, tag) section markers shown in presentation mode.
  *
  * <p>A group is anchored to one image; the client renders it as a heading in front of that image
- * and every following image until the next anchor. Nothing here touches ordering: groups inherit
- * the album's existing {@code display_order}, so reordering images reshuffles the sections for
- * free.
+ * and every following image until the group's end image (inclusive) or, when no end is set, until
+ * the next anchor. Nothing here touches ordering: groups inherit the album's existing {@code
+ * display_order}, so reordering images reshuffles the sections for free.
+ *
+ * <p>Because order lives in the images and not here, an end that has drifted in front of its own
+ * start is not an error the server can see — the clients simply ignore an end they never reach,
+ * and the group stays open-ended.
  */
 @Profile(Profiles.API)
 @Service
@@ -122,6 +126,7 @@ public class PresentationGroupService {
     group.setAlbum(album);
     group.setTag(tag);
     group.setStartFile(startFile);
+    group.setEndFile(resolveEndFile(album, request.getEndFileId()));
     group.setLabel(label);
     group.setBodyText(text);
 
@@ -137,7 +142,10 @@ public class PresentationGroupService {
     return presentationGroupMapper.groupToGroupInfo(group);
   }
 
-  /** Only label and text are editable — moving a group means deleting it and creating a new one. */
+  /**
+   * Only label and text are editable — moving a group means deleting it and creating a new one, and
+   * the end marker has {@link #setGroupEnd} to itself.
+   */
   @Transactional
   public PresentationGroupInfo updateGroup(Long groupId, PresentationGroupRequest request) {
     User currentUser = userContext.getCurrentUser();
@@ -153,6 +161,49 @@ public class PresentationGroupService {
     group = presentationGroupRepository.save(group);
 
     return presentationGroupMapper.groupToGroupInfo(group);
+  }
+
+  /**
+   * Moves or clears the image a group stops at. A null {@code endFileId} reopens the group, so it
+   * runs on until the next one starts again.
+   */
+  @Transactional
+  public PresentationGroupInfo setGroupEnd(Long groupId, Long endFileId) {
+    User currentUser = userContext.getCurrentUser();
+    PresentationGroup group =
+        presentationGroupRepository
+            .findByIdAndUserId(groupId, currentUser.getId())
+            .orElseThrow(
+                () -> new ResourceNotFoundException("Group not found with id: " + groupId));
+
+    group.setEndFile(resolveEndFile(group.getAlbum(), endFileId));
+    group = presentationGroupRepository.save(group);
+
+    log.info("Set end of presentation group {} to file {}", groupId, endFileId);
+
+    return presentationGroupMapper.groupToGroupInfo(group);
+  }
+
+  /**
+   * The end image, checked to live in the same album. Position is deliberately not checked: display
+   * order can change under the group at any time, so "after the start" is not a durable invariant.
+   */
+  private FileMetadata resolveEndFile(Album album, Long endFileId) {
+    if (endFileId == null) {
+      return null;
+    }
+
+    FileMetadata endFile =
+        fileMetadataRepository
+            .findById(endFileId)
+            .orElseThrow(
+                () -> new ResourceNotFoundException("File not found with id: " + endFileId));
+
+    if (endFile.getAlbum() == null || !endFile.getAlbum().getId().equals(album.getId())) {
+      throw new ValidationException("End image does not belong to album " + album.getId());
+    }
+
+    return endFile;
   }
 
   @Transactional

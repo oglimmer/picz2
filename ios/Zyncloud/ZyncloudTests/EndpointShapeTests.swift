@@ -599,6 +599,68 @@ struct EndpointShapeTests {
         #expect(request?.json["text"] == nil)
     }
 
+    /// A chapter can be born already bounded, so the end rides along on create.
+    @Test func creatingAgroupCanCarryAnEnd() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.createPresentationGroup(
+                    albumId: 7,
+                    tag: "beach",
+                    startFileId: 31,
+                    endFileId: 33,
+                    draft: PresentationGroupDraft(label: "Morning", text: nil),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect(request?.json["startFileId"] as? Int == 31)
+        #expect(request?.json["endFileId"] as? Int == 33)
+    }
+
+    /// Plain create leaves the end out, so the chapter runs on until the next one starts.
+    @Test func creatingAgroupWithoutAnEndSendsNoEndKey() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.createPresentationGroup(
+                    albumId: 7,
+                    tag: "beach",
+                    startFileId: 31,
+                    draft: PresentationGroupDraft(label: "Morning", text: nil),
+                    completion: done,
+                )
+            }
+        }
+
+        #expect(request?.json["endFileId"] == nil)
+    }
+
+    /// Moving the end has its own path. If it ever folded into the plain update above — which
+    /// deliberately sends no end — every edit of the words would clear the end marker.
+    @Test func settingAgroupEndPutsToTheEndPath() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.setPresentationGroupEnd(id: 10, endFileId: 33, completion: done)
+            }
+        }
+
+        #expect(request?.method == "PUT")
+        #expect(request?.path == "/api/presentation-groups/10/end")
+        #expect(request?.json["endFileId"] as? Int == 33)
+    }
+
+    /// Clearing the end reopens the chapter, and the server reads that from an absent key.
+    @Test func clearingAgroupEndSendsNoEndKey() async {
+        let request = await StubServer.captureOne(json: groupJSON) {
+            _ = await awaiting { done in
+                api.setPresentationGroupEnd(id: 10, endFileId: nil, completion: done)
+            }
+        }
+
+        #expect(request?.path == "/api/presentation-groups/10/end")
+        #expect(request?.json["endFileId"] == nil)
+    }
+
     @Test func deletingAgroupDeletesTheIdsPath() async {
         let request = await StubServer.captureOne {
             _ = await awaiting { done in api.deletePresentationGroup(id: 10, completion: done) }

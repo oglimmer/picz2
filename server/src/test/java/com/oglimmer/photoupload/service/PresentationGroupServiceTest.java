@@ -50,6 +50,7 @@ class PresentationGroupServiceTest {
   private Album album;
   private Tag tag;
   private FileMetadata file;
+  private FileMetadata endFile;
 
   @BeforeEach
   void setUp() {
@@ -69,10 +70,28 @@ class PresentationGroupServiceTest {
     file = new FileMetadata();
     file.setId(30L);
     file.setAlbum(album);
+
+    endFile = new FileMetadata();
+    endFile.setId(31L);
+    endFile.setAlbum(album);
   }
 
   private PresentationGroupRequest request(String label, String text) {
-    return new PresentationGroupRequest("rome", 30L, label, text);
+    return new PresentationGroupRequest("rome", 30L, null, label, text);
+  }
+
+  private PresentationGroupRequest requestEndingAt(Long endFileId, String label) {
+    return new PresentationGroupRequest("rome", 30L, endFileId, label, null);
+  }
+
+  private PresentationGroup existingGroup() {
+    PresentationGroup existing = new PresentationGroup();
+    existing.setId(99L);
+    existing.setAlbum(album);
+    existing.setTag(tag);
+    existing.setStartFile(file);
+    existing.setLabel("Arrival");
+    return existing;
   }
 
   private void stubHappyPathLookups() {
@@ -195,6 +214,139 @@ class PresentationGroupServiceTest {
     // The anchor never moves on update — that would need delete + create.
     assertEquals(file, existing.getStartFile());
     assertEquals(tag, existing.getTag());
+  }
+
+  /** A group that is born bounded — the one-shot way to cover exactly the photos wanted. */
+  @Test
+  void createGroupStoresAnEndWhenOneIsGiven() {
+    stubHappyPathLookups();
+    when(fileMetadataRepository.findById(31L)).thenReturn(Optional.of(endFile));
+    when(presentationGroupRepository.existsByAlbumIdAndTagIdAndStartFileId(10L, 20L, 30L))
+        .thenReturn(false);
+    when(presentationGroupRepository.save(any(PresentationGroup.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(presentationGroupMapper.groupToGroupInfo(any()))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.createGroup(10L, requestEndingAt(31L, "Arrival"));
+
+    ArgumentCaptor<PresentationGroup> captor = ArgumentCaptor.forClass(PresentationGroup.class);
+    verify(presentationGroupRepository).save(captor.capture());
+    assertEquals(endFile, captor.getValue().getEndFile());
+  }
+
+  /** No end given means the old behaviour: the group runs on until the next one starts. */
+  @Test
+  void createGroupLeavesTheEndUnsetWhenNoneIsGiven() {
+    stubHappyPathLookups();
+    when(presentationGroupRepository.existsByAlbumIdAndTagIdAndStartFileId(10L, 20L, 30L))
+        .thenReturn(false);
+    when(presentationGroupRepository.save(any(PresentationGroup.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(presentationGroupMapper.groupToGroupInfo(any()))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.createGroup(10L, request("Arrival", null));
+
+    ArgumentCaptor<PresentationGroup> captor = ArgumentCaptor.forClass(PresentationGroup.class);
+    verify(presentationGroupRepository).save(captor.capture());
+    assertNull(captor.getValue().getEndFile());
+  }
+
+  @Test
+  void createGroupRejectsAnEndFromAnotherAlbum() {
+    stubHappyPathLookups();
+    Album otherAlbum = new Album();
+    otherAlbum.setId(11L);
+    endFile.setAlbum(otherAlbum);
+    when(fileMetadataRepository.findById(31L)).thenReturn(Optional.of(endFile));
+    when(presentationGroupRepository.existsByAlbumIdAndTagIdAndStartFileId(10L, 20L, 30L))
+        .thenReturn(false);
+
+    ValidationException ex =
+        assertThrows(
+            ValidationException.class,
+            () -> presentationGroupService.createGroup(10L, requestEndingAt(31L, "Arrival")));
+    assertTrue(ex.getMessage().contains("End image does not belong to album"));
+    verify(presentationGroupRepository, never()).save(any());
+  }
+
+  @Test
+  void setGroupEndStoresTheEndImage() {
+    PresentationGroup existing = existingGroup();
+
+    when(userContext.getCurrentUser()).thenReturn(testUser);
+    when(presentationGroupRepository.findByIdAndUserId(99L, 1L)).thenReturn(Optional.of(existing));
+    when(fileMetadataRepository.findById(31L)).thenReturn(Optional.of(endFile));
+    when(presentationGroupRepository.save(existing)).thenReturn(existing);
+    when(presentationGroupMapper.groupToGroupInfo(existing))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.setGroupEnd(99L, 31L);
+
+    assertEquals(endFile, existing.getEndFile());
+  }
+
+  /** Clearing reopens the group, so it runs on until the next one starts again. */
+  @Test
+  void setGroupEndWithNullClearsTheEnd() {
+    PresentationGroup existing = existingGroup();
+    existing.setEndFile(endFile);
+
+    when(userContext.getCurrentUser()).thenReturn(testUser);
+    when(presentationGroupRepository.findByIdAndUserId(99L, 1L)).thenReturn(Optional.of(existing));
+    when(presentationGroupRepository.save(existing)).thenReturn(existing);
+    when(presentationGroupMapper.groupToGroupInfo(existing))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.setGroupEnd(99L, null);
+
+    assertNull(existing.getEndFile());
+    verify(fileMetadataRepository, never()).findById(any());
+  }
+
+  /** A one-photo group is legal: the same image both starts and ends it. */
+  @Test
+  void setGroupEndAcceptsTheStartImageItself() {
+    PresentationGroup existing = existingGroup();
+
+    when(userContext.getCurrentUser()).thenReturn(testUser);
+    when(presentationGroupRepository.findByIdAndUserId(99L, 1L)).thenReturn(Optional.of(existing));
+    when(fileMetadataRepository.findById(30L)).thenReturn(Optional.of(file));
+    when(presentationGroupRepository.save(existing)).thenReturn(existing);
+    when(presentationGroupMapper.groupToGroupInfo(existing))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.setGroupEnd(99L, 30L);
+
+    assertEquals(file, existing.getEndFile());
+  }
+
+  @Test
+  void setGroupEndRejectsGroupOwnedBySomeoneElse() {
+    when(userContext.getCurrentUser()).thenReturn(testUser);
+    when(presentationGroupRepository.findByIdAndUserId(99L, 1L)).thenReturn(Optional.empty());
+
+    assertThrows(
+        ResourceNotFoundException.class, () -> presentationGroupService.setGroupEnd(99L, 31L));
+    verify(presentationGroupRepository, never()).save(any());
+  }
+
+  /** Plain update never touches the end — that is why the end has its own endpoint. */
+  @Test
+  void updateGroupLeavesTheEndAlone() {
+    PresentationGroup existing = existingGroup();
+    existing.setEndFile(endFile);
+
+    when(userContext.getCurrentUser()).thenReturn(testUser);
+    when(presentationGroupRepository.findByIdAndUserId(99L, 1L)).thenReturn(Optional.of(existing));
+    when(presentationGroupRepository.save(existing)).thenReturn(existing);
+    when(presentationGroupMapper.groupToGroupInfo(existing))
+        .thenReturn(PresentationGroupInfo.builder().id(99L).build());
+
+    presentationGroupService.updateGroup(99L, request("New", null));
+
+    assertEquals(endFile, existing.getEndFile());
   }
 
   @Test

@@ -143,12 +143,15 @@ export interface Tag {
 }
 
 // Presentation image group — a per-(album, tag) section marker anchored to one image.
-// The group owns that image and every following one until the next group starts.
+// The group owns that image and every following one up to `endFileId` inclusive, or, when no end
+// is set, until the next group starts.
 export interface PresentationGroup {
   id: number;
   albumId: number;
   tag: string;
   startFileId: number;
+  // Last image in the group. Null/absent means "run on until the next group starts".
+  endFileId?: number | null;
   label: string;
   text?: string | null;
   createdAt?: string;
@@ -156,10 +159,14 @@ export interface PresentationGroup {
 }
 
 // One rendered block of the presentation grid. `group` is null for images that come
-// before the first group marker.
+// before the first group marker, and for the run left behind by a group that ended.
 export interface PresentationSection {
   group: PresentationGroup | null;
   files: AlbumFile[];
+  // True when the group closed itself on its own end image rather than being cut off by the next
+  // group starting. Only a self-closed section gets a closing rule drawn under it — a section that
+  // ends because the next one begins already says so with the next heading.
+  closed: boolean;
 }
 
 export interface ImageTiming {
