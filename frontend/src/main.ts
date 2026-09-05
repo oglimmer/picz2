@@ -12,8 +12,8 @@ function mount(): void {
 
 /**
  * A public share link renders for people who have no account here, so it must not sit behind a
- * credential check. `initAuth()` replays whatever `authEmail`/`authPassword` happen to be in
- * localStorage against `/api/auth/check`, and on this route the answer changes nothing that is
+ * credential check. `initAuth()` checks whatever session token happens to be in localStorage
+ * against `/api/auth/check`, and on this route the answer changes nothing that is
  * on screen — the album, its photos and the map are all served from `permitAll` endpoints.
  *
  * <p>So mount straight away here and let the check settle in the background. Protected routes

@@ -1,5 +1,5 @@
 import { ref, type Ref } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
 import type {
   StorageBackend,
   StorageBackendInput,
@@ -29,35 +29,20 @@ export interface StorageBackendsComposable {
  * the album picker can render one list without special-casing the default.
  */
 export function useStorageBackends(): StorageBackendsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
 
   const backends = ref<StorageBackend[]>([]);
   const loading = ref<boolean>(false);
   const error = ref<string | null>(null);
 
-  /** The server's error body carries the useful sentence; the status code does not. */
-  async function messageFrom(response: Response): Promise<string> {
-    try {
-      const body = await response.json();
-      return body?.message || body?.error || `Request failed (${response.status})`;
-    } catch {
-      return `Request failed (${response.status})`;
-    }
-  }
-
   async function loadBackends(): Promise<void> {
     loading.value = true;
     error.value = null;
     try {
-      const response = await fetchWithAuth(`${apiUrl}/api/storage-backends`);
-      if (!response.ok) {
-        throw new Error(await messageFrom(response));
-      }
-      backends.value = await response.json();
+      backends.value = await requestJson<StorageBackend[]>(`${apiUrl}/api/storage-backends`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       error.value = `Could not load storage: ${message}`;
-      console.error("Error loading storage backends:", err);
     } finally {
       loading.value = false;
     }
@@ -66,15 +51,10 @@ export function useStorageBackends(): StorageBackendsComposable {
   async function createBackend(
     input: StorageBackendInput,
   ): Promise<StorageBackend> {
-    const response = await fetchWithAuth(`${apiUrl}/api/storage-backends`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    if (!response.ok) {
-      throw new Error(await messageFrom(response));
-    }
-    const created: StorageBackend = await response.json();
+    const created = await requestJson<StorageBackend>(
+      `${apiUrl}/api/storage-backends`,
+      jsonBody("POST", input),
+    );
     backends.value.push(created);
     return created;
   }
@@ -83,18 +63,10 @@ export function useStorageBackends(): StorageBackendsComposable {
     id: number,
     input: StorageBackendInput,
   ): Promise<StorageBackend> {
-    const response = await fetchWithAuth(
+    const saved = await requestJson<StorageBackend>(
       `${apiUrl}/api/storage-backends/${id}`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      },
+      jsonBody("PUT", input),
     );
-    if (!response.ok) {
-      throw new Error(await messageFrom(response));
-    }
-    const saved: StorageBackend = await response.json();
     const index = backends.value.findIndex((b) => b.id === id);
     if (index >= 0) {
       backends.value[index] = saved;
@@ -103,13 +75,7 @@ export function useStorageBackends(): StorageBackendsComposable {
   }
 
   async function deleteBackend(id: number): Promise<void> {
-    const response = await fetchWithAuth(
-      `${apiUrl}/api/storage-backends/${id}`,
-      { method: "DELETE" },
-    );
-    if (!response.ok) {
-      throw new Error(await messageFrom(response));
-    }
+    await requestJson(`${apiUrl}/api/storage-backends/${id}`, { method: "DELETE" });
     backends.value = backends.value.filter((b) => b.id !== id);
   }
 
@@ -124,15 +90,13 @@ export function useStorageBackends(): StorageBackendsComposable {
     const url = id
       ? `${apiUrl}/api/storage-backends/${id}/test`
       : `${apiUrl}/api/storage-backends/test`;
-    const response = await fetchWithAuth(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    if (!response.ok) {
-      return { ok: false, failedStep: "connect", message: await messageFrom(response) };
+    // Not requestJson: a refused request is itself an answer here, not an exception.
+    try {
+      return await requestJson<StorageBackendTestResult>(url, jsonBody("POST", input));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return { ok: false, failedStep: "connect", message };
     }
-    return await response.json();
   }
 
   return {

@@ -1,5 +1,6 @@
 import { ref, type Ref } from "vue";
 import { useApi } from "./useApi";
+import { readCookie, writeCookie } from "../utils/cookies";
 
 export interface AnalyticsStats {
   analyticsPaused: boolean;
@@ -36,7 +37,7 @@ const COOKIE_MAX_AGE_DAYS = 90; // 3 months
  * - With consent: events logged with persistent visitor_id cookie for returning visitor tracking
  */
 export function useAnalytics(): AnalyticsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
   const visitorId = ref<string>("");
   const hasConsent = ref<boolean>(false);
 
@@ -47,14 +48,7 @@ export function useAnalytics(): AnalyticsComposable {
    * Check if user has given consent for analytics cookies
    */
   function checkConsentStatus(): boolean {
-    const cookies = document.cookie.split(";");
-    for (const cookie of cookies) {
-      const [name, value] = cookie.trim().split("=");
-      if (name === CONSENT_COOKIE) {
-        return value === "accepted";
-      }
-    }
-    return false;
+    return readCookie(CONSENT_COOKIE) === "accepted";
   }
 
   /**
@@ -78,13 +72,10 @@ export function useAnalytics(): AnalyticsComposable {
    */
   function setVisitorIdCookie(): void {
     // Try to get existing cookie first
-    const cookies = document.cookie.split(";");
-    for (const cookie of cookies) {
-      const [name, value] = cookie.trim().split("=");
-      if (name === VISITOR_ID_COOKIE) {
-        visitorId.value = value;
-        return;
-      }
+    const existing = readCookie(VISITOR_ID_COOKIE);
+    if (existing) {
+      visitorId.value = existing;
+      return;
     }
 
     // Generate new visitor ID
@@ -92,9 +83,7 @@ export function useAnalytics(): AnalyticsComposable {
     visitorId.value = newVisitorId;
 
     // Set cookie with 3-month expiration
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + COOKIE_MAX_AGE_DAYS);
-    document.cookie = `${VISITOR_ID_COOKIE}=${newVisitorId}; expires=${expiryDate.toUTCString()}; path=/; SameSite=Lax; Secure`;
+    writeCookie(VISITOR_ID_COOKIE, newVisitorId, COOKIE_MAX_AGE_DAYS);
   }
 
   /**
@@ -103,7 +92,7 @@ export function useAnalytics(): AnalyticsComposable {
   function removeVisitorIdCookie(): void {
     visitorId.value = "";
     // Set cookie to expire immediately
-    document.cookie = `${VISITOR_ID_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax; Secure`;
+    writeCookie(VISITOR_ID_COOKIE, "", -1);
   }
 
   /**
@@ -119,54 +108,28 @@ export function useAnalytics(): AnalyticsComposable {
    * Get analytics statistics for an album
    */
   async function getAlbumStatistics(albumId: number): Promise<AnalyticsStats> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId}/analytics`
-      );
-      const data = await response.json();
-
-      if (data.success) {
-        return {
-          analyticsPaused: data.analyticsPaused || false,
-          totalEvents: data.totalEvents || 0,
-          uniqueVisitors: data.uniqueVisitors || 0,
-          pageViews: data.pageViews || 0,
-          filterChanges: data.filterChanges || 0,
-          audioPlays: data.audioPlays || 0,
-          filterTagCounts: data.filterTagCounts || {},
-        };
-      } else {
-        throw new Error(data.message || "Failed to fetch analytics");
-      }
-    } catch (err) {
-      console.error("Error fetching album statistics:", err);
-      throw err;
-    }
-  }
-
-  /** The server's error body carries the useful sentence; the status code alone does not. */
-  async function messageFrom(response: Response, fallback: string): Promise<string> {
-    const body = await response.json().catch(() => null);
-    return body?.message || `${fallback} (HTTP ${response.status})`;
+    const data = await requestJson<Partial<AnalyticsStats>>(
+      `${apiUrl}/api/albums/${albumId}/analytics`,
+    );
+    return {
+      analyticsPaused: data.analyticsPaused || false,
+      totalEvents: data.totalEvents || 0,
+      uniqueVisitors: data.uniqueVisitors || 0,
+      pageViews: data.pageViews || 0,
+      filterChanges: data.filterChanges || 0,
+      audioPlays: data.audioPlays || 0,
+      filterTagCounts: data.filterTagCounts || {},
+    };
   }
 
   async function resetAlbumAnalytics(albumId: number): Promise<void> {
-    const response = await fetchWithAuth(`${apiUrl}/api/albums/${albumId}/analytics`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      throw new Error(await messageFrom(response, 'Could not reset analytics'));
-    }
+    await requestJson(`${apiUrl}/api/albums/${albumId}/analytics`, { method: "DELETE" });
   }
 
   async function setAnalyticsPaused(albumId: number, paused: boolean): Promise<void> {
-    const response = await fetchWithAuth(
-      `${apiUrl}/api/albums/${albumId}/analytics/paused?paused=${paused}`,
-      { method: 'PUT' }
-    );
-    if (!response.ok) {
-      throw new Error(await messageFrom(response, 'Could not change counting'));
-    }
+    await requestJson(`${apiUrl}/api/albums/${albumId}/analytics/paused?paused=${paused}`, {
+      method: "PUT",
+    });
   }
 
   /**
@@ -183,9 +146,8 @@ export function useAnalytics(): AnalyticsComposable {
         method: 'POST',
         credentials: 'include' // Include cookies in the request
       });
-    } catch (err) {
-      console.error("Error logging page view:", err);
-      // Silently fail - analytics errors shouldn't break the app
+    } catch {
+      // Analytics must never break the page.
     }
   }
 
@@ -200,9 +162,8 @@ export function useAnalytics(): AnalyticsComposable {
         method: 'POST',
         credentials: 'include' // Include cookies in the request
       });
-    } catch (err) {
-      console.error("Error logging filter change:", err);
-      // Silently fail - analytics errors shouldn't break the app
+    } catch {
+      // Analytics must never break the page.
     }
   }
 
@@ -220,9 +181,8 @@ export function useAnalytics(): AnalyticsComposable {
         method: 'POST',
         credentials: 'include' // Include cookies in the request
       });
-    } catch (err) {
-      console.error("Error logging audio play:", err);
-      // Silently fail - analytics errors shouldn't break the app
+    } catch {
+      // Analytics must never break the page.
     }
   }
 

@@ -2,6 +2,8 @@
 package com.oglimmer.photoupload.config;
 
 import com.oglimmer.photoupload.security.CustomUserDetailsService;
+import com.oglimmer.photoupload.security.SessionTokenAuthenticationFilter;
+import com.oglimmer.photoupload.service.SessionTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,6 +20,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 
 @Profile(Profiles.API)
 @Configuration
@@ -26,6 +29,7 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
   private final CustomUserDetailsService userDetailsService;
+  private final SessionTokenService sessionTokenService;
 
   @Bean
   public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -91,7 +95,12 @@ public class SecurityConfig {
                     .hasRole(CustomUserDetailsService.ROLE_ADMIN)
                     .anyRequest()
                     .authenticated())
-        .httpBasic(basic -> basic.authenticationEntryPoint(silentBasicEntryPoint()));
+        .httpBasic(basic -> basic.authenticationEntryPoint(silentBasicEntryPoint()))
+        // Browser sessions (D78): `Authorization: Bearer zst_…` resolves to a user before the
+        // Basic filter runs. iOS and curl keep sending Basic and never notice this filter.
+        .addFilterBefore(
+            new SessionTokenAuthenticationFilter(sessionTokenService, userDetailsService),
+            BasicAuthenticationFilter.class);
 
     return http.build();
   }
@@ -101,9 +110,9 @@ public class SecurityConfig {
    *
    * <p>Spring's default entry point sends {@code WWW-Authenticate: Basic realm="PhotoUpload"},
    * which is a standing instruction to the browser to prompt for credentials — and Chrome obeys it
-   * even for {@code fetch()} calls made by page JavaScript. This SPA builds its own Basic header
-   * from localStorage (see {@code useAuth.verifyCredentials}), so the native dialog is pure
-   * interference: a visitor whose saved password had gone stale got a credentials prompt on a
+   * even for {@code fetch()} calls made by page JavaScript. This SPA sends its own header — Basic
+   * once at login, then a Bearer session token (D78) — so the native dialog is pure
+   * interference: a visitor whose saved session had gone stale got a credentials prompt on a
    * <em>public</em> share link, over a background request they never asked for, and the app did not
    * mount until they dismissed it.
    *

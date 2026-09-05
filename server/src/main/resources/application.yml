@@ -155,6 +155,10 @@ upload-tokens:
   # uploads finishes on one token; short enough that a token leaked out of a tusd .info object
   # is worthless by the time anyone finds it. Clients refresh on their own before it lapses.
   ttl-hours: "${UPLOAD_TOKEN_TTL_HOURS:24}"
+session-tokens:
+  # D78 — how long a browser stays signed in without logging in again. The token replaces the
+  # account password in localStorage; logout and any password change revoke it early.
+  ttl-days: "${SESSION_TOKEN_TTL_DAYS:30}"
 tus:
   # Phase 5 — TUS resumable uploads. Manifests render based on Helm `tus.enabled`; the api pod
   # reads its own `tus.enabled` env var to decide whether to wire TusHookController. The pair

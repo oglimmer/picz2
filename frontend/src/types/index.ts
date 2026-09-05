@@ -187,13 +187,6 @@ export interface AlbumSettings {
   languages?: Language[];
 }
 
-export interface AuthState {
-  authEmail: string;
-  authPassword: string;
-  isLoggedIn: boolean;
-  loginError: string;
-}
-
 export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;

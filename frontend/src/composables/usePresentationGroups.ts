@@ -1,6 +1,14 @@
 import { ref, type Ref } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
 import type { AlbumFile, PresentationGroup, PresentationSection } from "@/types";
+
+interface GroupsResponse {
+  groups?: PresentationGroup[];
+}
+
+interface GroupResponse {
+  group: PresentationGroup;
+}
 
 export interface GroupPayload {
   label: string;
@@ -63,7 +71,7 @@ export interface PresentationGroupsComposable {
  * start, is never reached by the walk, so the group just stays open-ended.
  */
 export function usePresentationGroups(): PresentationGroupsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson, requestPublicJson } = useApi();
 
   const groups = ref<PresentationGroup[]>([]);
   const loadingGroups = ref<boolean>(false);
@@ -73,17 +81,12 @@ export function usePresentationGroups(): PresentationGroupsComposable {
 
     loadingGroups.value = true;
     try {
-      const response = await fetchWithAuth(
+      const data = await requestJson<GroupsResponse>(
         `${apiUrl}/api/albums/${albumId}/presentation-groups`,
       );
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        groups.value = data.groups || [];
-      }
-    } catch (err) {
+      groups.value = data.groups || [];
+    } catch {
       // Non-fatal: the presentation still renders, just without sections.
-      console.error("Error loading presentation groups:", err);
     } finally {
       loadingGroups.value = false;
     }
@@ -94,16 +97,12 @@ export function usePresentationGroups(): PresentationGroupsComposable {
 
     loadingGroups.value = true;
     try {
-      const response = await fetch(
+      const data = await requestPublicJson<GroupsResponse>(
         `${apiUrl}/api/albums/public/${shareToken}/presentation-groups`,
       );
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        groups.value = data.groups || [];
-      }
-    } catch (err) {
-      console.error("Error loading presentation groups:", err);
+      groups.value = data.groups || [];
+    } catch {
+      // Non-fatal, as above.
     } finally {
       loadingGroups.value = false;
     }
@@ -116,27 +115,16 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     payload: GroupPayload,
     endFileId: number | null = null,
   ): Promise<PresentationGroup> {
-    const response = await fetchWithAuth(
+    const data = await requestJson<GroupResponse>(
       `${apiUrl}/api/albums/${albumId}/presentation-groups`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tag,
-          startFileId,
-          endFileId,
-          label: payload.label,
-          text: payload.text ?? null,
-        }),
-      },
+      jsonBody("POST", {
+        tag,
+        startFileId,
+        endFileId,
+        label: payload.label,
+        text: payload.text ?? null,
+      }),
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
     groups.value = [...groups.value, data.group];
     return data.group;
   }
@@ -145,40 +133,16 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     groupId: number,
     payload: GroupPayload,
   ): Promise<PresentationGroup> {
-    const response = await fetchWithAuth(
+    const data = await requestJson<GroupResponse>(
       `${apiUrl}/api/presentation-groups/${groupId}`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label: payload.label,
-          text: payload.text ?? null,
-        }),
-      },
+      jsonBody("PUT", { label: payload.label, text: payload.text ?? null }),
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
     groups.value = groups.value.map((g) => (g.id === groupId ? data.group : g));
     return data.group;
   }
 
   async function deleteGroup(groupId: number): Promise<void> {
-    const response = await fetchWithAuth(
-      `${apiUrl}/api/presentation-groups/${groupId}`,
-      { method: "DELETE" },
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
+    await requestJson(`${apiUrl}/api/presentation-groups/${groupId}`, { method: "DELETE" });
     groups.value = groups.value.filter((g) => g.id !== groupId);
   }
 
@@ -190,21 +154,10 @@ export function usePresentationGroups(): PresentationGroupsComposable {
     groupId: number,
     endFileId: number | null,
   ): Promise<PresentationGroup> {
-    const response = await fetchWithAuth(
+    const data = await requestJson<GroupResponse>(
       `${apiUrl}/api/presentation-groups/${groupId}/end`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endFileId }),
-      },
+      jsonBody("PUT", { endFileId }),
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
     groups.value = groups.value.map((g) => (g.id === groupId ? data.group : g));
     return data.group;
   }

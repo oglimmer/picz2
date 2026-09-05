@@ -190,6 +190,8 @@ spec:
           value: {{ .Values.tus.maxSize | default 2147483648 | int64 | quote }}
         - name: UPLOAD_TOKEN_TTL_HOURS
           value: {{ .Values.tus.uploadTokenTtlHours | default 24 | quote }}
+        - name: SESSION_TOKEN_TTL_DAYS
+          value: {{ .Values.backend.sessionTokenTtlDays | default 30 | quote }}
         - name: TUS_HOOK_SECRET
           valueFrom:
             secretKeyRef:

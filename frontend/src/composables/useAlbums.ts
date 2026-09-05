@@ -1,6 +1,14 @@
 import { ref, type Ref } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
 import type { Album, MapView } from "@/types";
+
+interface AlbumsResponse {
+  albums?: Album[];
+}
+
+interface AlbumResponse {
+  album?: Album;
+}
 
 export interface AlbumsComposable {
   albums: Ref<Album[]>;
@@ -25,87 +33,58 @@ export interface AlbumsComposable {
 }
 
 /**
- * Albums composable for managing album data and operations
+ * Albums and the one album a view is looking at. Per-instance state (see README.md).
  */
 export function useAlbums(): AlbumsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson, requestPublicJson, shareToken } = useApi();
 
   const albums = ref<Album[]>([]);
   const currentAlbum = ref<Album | null>(null);
   const loading = ref<boolean>(false);
   const error = ref<string | null>(null);
 
-  /**
-   * Load all albums
-   */
   async function loadAlbums(): Promise<void> {
     loading.value = true;
     error.value = null;
-
     try {
-      const response = await fetchWithAuth(`${apiUrl}/api/albums`);
-      const data = await response.json();
-
-      if (data.success) {
-        albums.value = data.albums || [];
-      } else {
-        throw new Error("Failed to load albums");
-      }
+      const data = await requestJson<AlbumsResponse>(`${apiUrl}/api/albums`);
+      albums.value = data.albums || [];
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       error.value = `Error loading albums: ${errorMessage}`;
-      console.error("Error loading albums:", err);
     } finally {
       loading.value = false;
     }
   }
 
   /**
-   * Load a specific album by ID
+   * Load a specific album by ID. With a share token and `startPresentation` the public endpoint is
+   * used, which needs no login.
    */
   async function loadAlbumById(
     albumId: number,
     startPresentation: boolean = false,
   ): Promise<Album | null> {
     try {
-      const { shareToken } = useApi();
-
-      // If we have a shareToken and starting presentation mode, fetch via public endpoint
       if (shareToken.value && startPresentation) {
-        const response = await fetch(
+        const data = await requestPublicJson<AlbumResponse>(
           `${apiUrl}/api/albums/public/${shareToken.value}`,
-        );
-        const data = await response.json();
-
-        if (data.success && data.album) {
-          currentAlbum.value = data.album;
-        } else {
-          // Fallback to minimal info
-          currentAlbum.value = {
-            id: albumId,
-            name: "Presentation",
-            shareToken: shareToken.value,
-          };
-        }
+        ).catch(() => null);
+        currentAlbum.value = data?.album ?? {
+          id: albumId,
+          name: "Presentation",
+          shareToken: shareToken.value,
+        };
       } else {
-        // Regular authenticated mode
-        const response = await fetchWithAuth(`${apiUrl}/api/albums/${albumId}`);
-        const data = await response.json();
-
-        if (data.success) {
-          currentAlbum.value = data.album;
-        }
+        const data = await requestJson<AlbumResponse>(`${apiUrl}/api/albums/${albumId}`);
+        if (data.album) currentAlbum.value = data.album;
       }
       return currentAlbum.value;
-    } catch (err) {
-      console.error("Error loading album:", err);
+    } catch {
       return null;
     }
   }
 
-  /**
-   * Create a new album
-   */
   /**
    * `storageBackendId` null/undefined means the instance's own storage. It is only honoured here,
    * at creation — the server refuses to move an album's bytes later.
@@ -118,96 +97,34 @@ export function useAlbums(): AlbumsComposable {
     if (!name || name.trim() === "") {
       throw new Error("Album name is required");
     }
-
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/albums`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ name, description, storageBackendId }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        if (data.album) {
-          albums.value.push(data.album);
-        }
-        return data.album;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error creating album:", err);
-      throw err;
-    }
+    const data = await requestJson<AlbumResponse>(
+      `${apiUrl}/api/albums`,
+      jsonBody("POST", { name, description, storageBackendId }),
+    );
+    if (data.album) albums.value.push(data.album);
+    return data.album ?? null;
   }
 
-  /**
-   * Delete an album
-   */
   async function deleteAlbum(albumId: number): Promise<void> {
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/albums/${albumId}`, {
-        method: "DELETE",
-      });
+    await requestJson(`${apiUrl}/api/albums/${albumId}`, { method: "DELETE" });
+    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
+    if (albumIndex !== -1) albums.value.splice(albumIndex, 1);
+  }
 
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const albumIndex = albums.value.findIndex((a) => a.id === albumId);
-        if (albumIndex !== -1) {
-          albums.value.splice(albumIndex, 1);
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error deleting album:", err);
-      throw err;
+  /** Applies `patch` to the current album and to its entry in the list, wherever it is held. */
+  function patchAlbum(albumId: number, patch: Partial<Album>): void {
+    if (currentAlbum.value && currentAlbum.value.id === albumId) {
+      currentAlbum.value = { ...currentAlbum.value, ...patch };
+    }
+    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
+    if (albumIndex !== -1) {
+      albums.value[albumIndex] = { ...albums.value[albumIndex], ...patch };
     }
   }
 
-  /**
-   * Update album details
-   */
-  async function updateAlbum(
-    albumId: number,
-    updates: Partial<Album>,
-  ): Promise<void> {
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/albums/${albumId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updates),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        // Update current album if it matches
-        if (currentAlbum.value && currentAlbum.value.id === albumId) {
-          currentAlbum.value = { ...currentAlbum.value, ...updates };
-        }
-
-        // Update in albums list
-        const albumIndex = albums.value.findIndex((a) => a.id === albumId);
-        if (albumIndex !== -1) {
-          albums.value[albumIndex] = {
-            ...albums.value[albumIndex],
-            ...updates,
-          };
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error updating album:", err);
-      throw err;
-    }
+  async function updateAlbum(albumId: number, updates: Partial<Album>): Promise<void> {
+    await requestJson(`${apiUrl}/api/albums/${albumId}`, jsonBody("PUT", updates));
+    patchAlbum(albumId, updates);
   }
 
   /**
@@ -221,40 +138,17 @@ export function useAlbums(): AlbumsComposable {
    * the server clamps out-of-range spans, so echoing our own input back could leave the UI
    * claiming a view that was not stored.
    */
-  async function saveMapView(
-    albumId: number,
-    view: MapView | null,
-  ): Promise<void> {
-    const response = await fetchWithAuth(
+  async function saveMapView(albumId: number, view: MapView | null): Promise<void> {
+    const data = await requestJson<AlbumResponse>(
       `${apiUrl}/api/albums/${albumId}/map-view`,
-      view
-        ? {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(view),
-          }
-        : { method: "DELETE" },
+      view ? jsonBody("PUT", view) : { method: "DELETE" },
     );
-
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Could not save the map view");
-    }
-
-    const patch: Partial<Album> = {
+    patchAlbum(albumId, {
       mapCenterLat: data.album?.mapCenterLat ?? null,
       mapCenterLng: data.album?.mapCenterLng ?? null,
       mapSpanLat: data.album?.mapSpanLat ?? null,
       mapSpanLng: data.album?.mapSpanLng ?? null,
-    };
-
-    if (currentAlbum.value && currentAlbum.value.id === albumId) {
-      currentAlbum.value = { ...currentAlbum.value, ...patch };
-    }
-    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
-    if (albumIndex !== -1) {
-      albums.value[albumIndex] = { ...albums.value[albumIndex], ...patch };
-    }
+    });
   }
 
   /**
@@ -264,67 +158,31 @@ export function useAlbums(): AlbumsComposable {
    * the name, so a toggle would fight an unsaved rename. Patches from the server's answer, so
    * `publishedAt` reflects what was actually stamped on the first publish.
    */
-  async function setPublished(
-    albumId: number,
-    published: boolean,
-  ): Promise<void> {
-    const response = await fetchWithAuth(
+  async function setPublished(albumId: number, published: boolean): Promise<void> {
+    const data = await requestJson<AlbumResponse>(
       `${apiUrl}/api/albums/${albumId}/published?published=${published}`,
       { method: "PUT" },
     );
-
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Could not change album sharing");
-    }
-
-    const patch: Partial<Album> = {
+    patchAlbum(albumId, {
       published: data.album?.published ?? published,
       publishedAt: data.album?.publishedAt ?? null,
-    };
-
-    if (currentAlbum.value && currentAlbum.value.id === albumId) {
-      currentAlbum.value = { ...currentAlbum.value, ...patch };
-    }
-    const albumIndex = albums.value.findIndex((a) => a.id === albumId);
-    if (albumIndex !== -1) {
-      albums.value[albumIndex] = { ...albums.value[albumIndex], ...patch };
-    }
+    });
   }
 
   async function duplicateAlbum(albumId: number): Promise<Album | null> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId}/duplicate`,
-        {
-          method: "POST",
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        if (data.album) {
-          albums.value.push(data.album);
-        }
-        return data.album;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error duplicating album:", err);
-      throw err;
-    }
+    const data = await requestJson<AlbumResponse>(
+      `${apiUrl}/api/albums/${albumId}/duplicate`,
+      { method: "POST" },
+    );
+    if (data.album) albums.value.push(data.album);
+    return data.album ?? null;
   }
 
   return {
-    // State
     albums,
     currentAlbum,
     loading,
     error,
-
-    // Methods
     loadAlbums,
     loadAlbumById,
     createAlbum,

@@ -14,7 +14,7 @@ class SecurityConfigTest {
 
   @Test
   void passwordEncoderIsBCrypt() {
-    SecurityConfig cfg = new SecurityConfig(null);
+    SecurityConfig cfg = new SecurityConfig(null, null);
     PasswordEncoder enc = cfg.passwordEncoder();
     String encoded = enc.encode("pw");
     // BCrypt encodes to a hash, not plaintext
@@ -33,7 +33,7 @@ class SecurityConfigTest {
    */
   @Test
   void unauthorizedChallengeDoesNotPromptTheBrowser() throws Exception {
-    SecurityConfig cfg = new SecurityConfig(null);
+    SecurityConfig cfg = new SecurityConfig(null, null);
     MockHttpServletResponse response = new MockHttpServletResponse();
 
     cfg.silentBasicEntryPoint()

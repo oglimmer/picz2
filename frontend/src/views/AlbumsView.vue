@@ -127,91 +127,7 @@
       </p>
       <span class="shelf-rule" />
       <div class="shelf-controls">
-        <div class="grid-size-picker">
-          <button
-            v-for="size in (['small', 'medium', 'large'] as const)"
-            :key="size"
-            class="grid-size-btn"
-            :class="{ 'grid-size-btn--active': albumSize === size }"
-            :title="`${size.charAt(0).toUpperCase() + size.slice(1)} thumbnails`"
-            :aria-pressed="albumSize === size"
-            @click="albumSize = size"
-          >
-            <svg
-              v-if="size === 'small'"
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="currentColor"
-            >
-              <rect
-                x="0"
-                y="0"
-                width="6"
-                height="6"
-                rx="1"
-              />
-              <rect
-                x="8"
-                y="0"
-                width="6"
-                height="6"
-                rx="1"
-              />
-              <rect
-                x="0"
-                y="8"
-                width="6"
-                height="6"
-                rx="1"
-              />
-              <rect
-                x="8"
-                y="8"
-                width="6"
-                height="6"
-                rx="1"
-              />
-            </svg>
-            <svg
-              v-else-if="size === 'medium'"
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="currentColor"
-            >
-              <rect
-                x="0"
-                y="0"
-                width="6"
-                height="14"
-                rx="1"
-              />
-              <rect
-                x="8"
-                y="0"
-                width="6"
-                height="14"
-                rx="1"
-              />
-            </svg>
-            <svg
-              v-else
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="currentColor"
-            >
-              <rect
-                x="0"
-                y="0"
-                width="14"
-                height="14"
-                rx="1"
-              />
-            </svg>
-          </button>
-        </div>
+        <GridSizePicker v-model="albumSize" />
         <button
           class="new-album-btn"
           @click="showCreateAlbum = !showCreateAlbum"
@@ -438,6 +354,7 @@ import { useConfirm } from '../composables/useConfirm'
 import AlbumCard from '../components/AlbumCard.vue'
 import AccountMenu from '../components/AccountMenu.vue'
 import MenuButton from '../components/MenuButton.vue'
+import GridSizePicker, { type GridSize } from '../components/GridSizePicker.vue'
 import TagManager from '../components/TagManager.vue'
 import LanguageManager from '../components/LanguageManager.vue'
 import { useStorageBackends } from '../composables/useStorageBackends'
@@ -453,7 +370,6 @@ const { error: showError, info, success: showSuccess, removeNotification } = use
 const deletingAlbumId = ref<number | null>(null)
 const { confirm: confirmDialog } = useConfirm()
 
-type GridSize = 'small' | 'medium' | 'large'
 const albumSize = ref<GridSize>((localStorage.getItem('albumGridSize') as GridSize) || 'small')
 watch(albumSize, v => localStorage.setItem('albumGridSize', v))
 

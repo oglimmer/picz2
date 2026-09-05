@@ -28,7 +28,7 @@ export interface SlideshowComposable {
  * Manages recording state, image timing, and upload
  */
 export function useSlideshow(): SlideshowComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
   const {
     isRecording,
     audioBlob,
@@ -84,7 +84,6 @@ export function useSlideshow(): SlideshowComposable {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error("Failed to start recording:", err);
       uploadError.value = "Failed to start recording: " + errorMessage;
       isInRecordingMode.value = false;
       throw err;
@@ -183,25 +182,12 @@ export function useSlideshow(): SlideshowComposable {
       };
       formData.append("data", JSON.stringify(recordingData));
 
-      // Upload to server
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId.value}/recordings`,
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
-
-      if (!response.ok) {
-        // A gateway error answers with HTML, not the API's JSON envelope — parsing it blind
-        // replaces the status with an opaque JSON syntax error.
-        const errorData = await response.json().catch(() => null);
-        throw new Error(
-          errorData?.message || `Upload failed (HTTP ${response.status})`,
-        );
-      }
-
-      const result = await response.json();
+      // Upload to server. requestJson keeps a gateway's HTML 502 from turning into an opaque
+      // JSON syntax error: the status becomes the message.
+      const result = await requestJson(`${apiUrl}/api/albums/${albumId.value}/recordings`, {
+        method: "POST",
+        body: formData,
+      });
 
       // Reset state
       reset();
@@ -209,7 +195,6 @@ export function useSlideshow(): SlideshowComposable {
       return result;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error("Failed to upload recording:", err);
       uploadError.value = "Failed to upload recording: " + errorMessage;
       throw err;
     } finally {
