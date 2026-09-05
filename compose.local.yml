@@ -17,7 +17,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   mariadb:
-    image: mariadb
+    image: mariadb:latest
     container_name: photoupload-mariadb
     restart: unless-stopped
     environment:

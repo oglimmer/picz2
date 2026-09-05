@@ -1,4 +1,4 @@
-FROM node
+FROM node:latest
 
 COPY frontend /opt/frontend
 
