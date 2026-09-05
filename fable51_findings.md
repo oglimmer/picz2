@@ -71,3 +71,77 @@ Paths are relative to `server/src/main/java/com/oglimmer/photoupload/`.
 ## What is good
 
 Profile gating, deterministic storage keys, the `SKIP LOCKED` lease queue, the `TransactionTemplate` discipline on the upload path, the per-backend circuit breakers, and the habit of writing down *why* in comments. Keep all of that.
+
+---
+
+# Web app code review — findings (Fable 5.1, 2026-09-05)
+
+Scope: `frontend/` only. Engineering practice, dead code, bugs, patterns, architecture, composition.
+Method: read all 66 files under `frontend/src` (37 Vue, 28 TS, `style.css`), plus `package.json`,
+`eslint.config.js`, `vite.config.ts`, `Dockerfile-prod`, `nginx.conf`. Ran `vue-tsc --noEmit`
+(0 errors) and `eslint .` (0 errors, 74 warnings). There is no frontend test suite to run.
+
+Paths are relative to `frontend/src/`.
+
+## Bugs — fix first
+
+**Status 2026-09-05: all eight fixed.** `vue-tsc` 0 errors, `eslint --quiet` 0 errors after the change.
+Details per item below.
+
+1. ✅ FIXED (new `utils/basicAuth.ts`, used by `useAuth` and `useUpload`) — **Login fails for any non-ASCII password.** `btoa` encodes UTF-16 code units, not UTF-8, and throws above U+00FF. Spring decodes Basic auth as UTF-8. A password with "€", Cyrillic or an emoji could be registered (the register form posts JSON) but never used to log in from the browser. `composables/useAuth.ts:41`, `:129`; `composables/useUpload.ts:56`, `:122`.
+2. ✅ FIXED — **Slideshow audio listeners were never removed.** `stopPlayback` passed *new* arrow functions to `removeEventListener`, which removes nothing. The `<audio>` element is reused, so every play stacked another `timeupdate`/`ended`/`error` handler. The handlers are now kept and detached by reference. `composables/useSlideshowPlayback.ts:176-178`.
+3. ✅ FIXED — **A failed `/api/capabilities` fetch was cached for the life of the page.** The comment said "don't poison the cache"; the code stored the fallback anyway. One network blip hid the map and the TUS upload path until a hard refresh. The fallback is still returned for that call, but no longer cached. `composables/useCapabilities.ts:37-45`.
+4. ✅ FIXED — **`FAILED` processing status still existed in the frontend.** The server folded it into `DEAD_LETTER` (D76, V51). Removed from `types/index.ts:103`, `composables/useProcessingPoller.ts:12`, `views/GalleryView.vue:2043`, `components/GalleryItem.vue:408/417` (the hover text "Processing failed — will retry" described a state the server can no longer report).
+5. ✅ FIXED — **Stale UI copy.** `views/GalleryView.vue:798` told users to upload with the macOS Share Extension, deleted in D64. Line 748 said 'Click "Manage Album Tags"'; the control is now Manage → Album tags.
+6. ✅ FIXED — **Analytics writes ignored the response.** `resetAlbumAnalytics` and `setAnalyticsPaused` never checked `response.ok`, so a 403 or 500 still produced "Counting paused." / "Analytics reset." toasts. `composables/useAnalytics.ts:147-156`.
+7. ✅ FIXED — **A second confirm dialog orphaned the first.** `confirm()` replaced `currentDialog` without settling the previous promise, so that caller's `await` hung forever. The previous dialog is now resolved `false` first. `composables/useConfirm.ts:25`.
+8. ✅ FIXED — **`formatDate` edge cases.** It used `Math.abs` and 24-hour blocks: a photo whose camera clock is in the future read "Today"; an exact-now timestamp read "-1 days ago"; 23:50 yesterday read "Today". Now counts signed calendar days. `utils/format.ts:30-35`.
+
+## Architecture and composition
+
+**Status 2026-09-05: open.** None of these is a one-line change; they need a decision on scope.
+
+- **`views/GalleryView.vue` is 2917 lines of plain JavaScript.** Its `<script>` has no `lang="ts"`, so `vue-tsc` skips it, and `setup()` returns about 130 bindings. Same in `views/PublicGalleryView.vue` (914), `components/Lightbox.vue`, `components/SubscriptionDialog.vue`, `views/SubscriptionConfirmView.vue`. The other 32 SFCs use `<script setup lang="ts">`. Suggested split for GalleryView: upload flow, recording/playback, reorder mode, duplicate mode, tag picker, group dialogs, each a composable or child component.
+- **`GalleryView` and `PublicGalleryView` duplicate each other.** Tag counting (`composables/useFiles.ts:42` vs `PublicGalleryView.vue:565`), `hasRecordingForLanguage`/`getRecordingForLanguage`, `navigateNext`/`navigatePrevious`, `handlePauseResume`/`handleStopPlayback`, the map and day-region wiring, and the ~80-line day-and-region template block all exist twice. Candidates: `useRecordingPicker`, `useLightboxNavigation`, `useDayRegionView`, a `DayRegionSections` component.
+- **Two pollers for one endpoint.** `useProcessingPoller` and `GalleryView.awaitProcessingDone` (`:2025`) both poll `/api/assets/{id}/status` with their own backoff. `enqueueRotate` (`:2004`) is a raw `fetchWithAuth` in the view; every other file operation lives in `useFiles`. Rotate should enqueue via `useFiles` and let the poller drive the status.
+- **The fetch → `json()` → `success` check → throw sequence is written ~30 times.** Several skip `response.ok` (`useFiles.loadAlbumFiles`, `useAlbums.loadAlbums`, `useTags.loadTags`, `useSettings.load*`), so a 401 HTML body surfaces as a JSON parse error. Most also wrap in `try { … } catch (err) { console.error(…); throw err }`, which adds nothing (61 `console.*` calls total). One `requestJson(url, init)` helper in `useApi` would replace nearly all of it.
+- **Composable state scope is inconsistent.** `useAuth`, `useTags`, `useSettings`, `useNotifications`, `useConfirm`, `useCapabilities` hold module-level singletons. `useFiles`, `useAlbums`, `useStorageBackends`, `useSlideshow*`, `usePresentationGroups` create fresh state per call. It works only because each view calls each once; nothing documents the rule, and `AlbumAnalyticsView` already gets a `currentAlbum` that no one else sees.
+- **The album load sequence is written three times in `GalleryView`** (`onMounted` `:1785`, `watch(presentationMode)` `:1828`, `watch(albumId)` `:1840`) with no cancellation token, so switching albums quickly can land a stale response last.
+- **Three identical `beforeEnter` guards** in `router/index.ts` (`:37`, `:76`, `:95`). One `redirectIfLoggedIn`.
+- **Three cookie parsers.** `useAnalytics.checkConsentStatus`, `CookieConsent.getConsentStatus`, `PublicGalleryView.hasConsentCookie`.
+- **`useFiles.selectedTag` is watched twice with different strategies.** `useFiles.ts:65` filters client-side whenever `allFilesUnfiltered` is non-empty; `GalleryView.vue:1757` reloads from the server. In the logged-in gallery both fire on every tag change.
+- **Plaintext password in `localStorage`, re-sent as Basic on every request.** `composables/useAuth.ts:73-74`. D44 already rejected "base64 is not encryption" for the tusd metadata; the same reasoning applies to the browser: any XSS is a full account takeover and there is no server-side revoke. A session cookie or short-lived token is the fix. **Decision needed** — this is an auth-model change, not a patch.
+- `AlbumFile` carries both `mimeType` and `mimetype` (`types/index.ts:113-114`); the server sends only `mimetype` (`FileInfoMapper`). Drop `mimeType`.
+- `utils/api-config.ts` hard-codes `localhost:8080` and `<ip>:8080`; a `VITE_API_URL` env override is the usual pattern and would remove the guessing.
+
+## Dead code
+
+**Status 2026-09-05: open** (no runtime effect; sweep in one PR).
+
+- Types with no reference outside `types/index.ts`: `AuthState`, `FileFilters`, `SlideshowRecording`, `AlbumSettings`, `ImageTiming`, `PresentationMode`.
+- `usePresentationGroups.groupEndingAt` (`:220`) — defined, exported, never called.
+- `AuthComposable.verifyCredentials` and `useAnalytics.visitorId` are exported but only used internally.
+- `defineExpose({ tagInput })` in `components/BulkTagBar.vue:173` and `defineExpose({ close })` in `components/MenuButton.vue:72` — no parent holds a ref to either.
+- `TagManager` emits `tag-created` / `tag-updated` / `tag-deleted`; `SubscriptionDialog` emits `subscribed` — no listeners anywhere. `TagManager`'s `tags` prop duplicates the shared `useTags` state it also imports.
+- `PublicGalleryView.isConfirmationMode` (`:477`) is never set true, so `SubscriptionDialog`'s `isConfirmation` branch is unreachable. `hasConsent` is destructured and unused (`:459`, eslint warns).
+- `SubscriptionConfirmView.albumName` is never assigned; its template branch (`:25-27`) is dead. Its `token` is interpolated into the query string without `encodeURIComponent`.
+- `GalleryView` returns `mapFilterAvailable`, `dayRegionAvailable`, `toggleFileSelection` — unused in the template. `handleDeleteSelected` (`:1592`) is a copy of `handleBulkDelete` (`:2179`). `handleDragLeave` is a no-op relayed through two components. `handleDragStart` copies `innerHTML` into `dataTransfer` for no consumer.
+- `components/GalleryItem.vue:430`: `canRotate = computed(() => true)`.
+- `assets/css/legal.css` is a one-line comment, imported by three views.
+- `style.css` classes with no matching markup: `album-label`, `album-select`, `album-select-wrapper`, `album-selection`, `analytics-loading`, `btn-large`, `cta-section`, `feature-icon`, `highlight-feature`, `save-btn`, `target-album-panel`, `editable-title-wrapper`.
+- `frontend/.idea/` is tracked in git.
+- `package.json` `lint` scripts pass `--ext`, which ESLint 9 flat config ignores.
+
+## Engineering practice
+
+**Status 2026-09-05: open.**
+
+- **No frontend tests.** No vitest, no Playwright, nothing. `utils/dayRegionGrouping.ts` (clustering, day cut with UTC offsets), `usePresentationGroups.buildSections`, `useUpload.translateUploadError`, `utils/format.ts` and the new `utils/basicAuth.ts` are pure and cheap to cover. Any refactor of `GalleryView` needs a net first.
+- **No CI.** There is no `.github/`; `oglimmer.sh` builds the image. `vue-tsc` runs in `npm run build`, but lint does not, and the ESLint config downgrades `no-explicit-any`, `no-unused-vars` and `vue/no-dupe-keys` to warn "so linting does not fail builds initially" — the 74 warnings are the result.
+- **`Dockerfile-prod`** uses `npm i` instead of `npm ci` (lockfile not enforced) and unpinned `FROM node` / `nginx:latest`.
+- **`nginx.conf`** caches hashed assets 30 days but sets no `Cache-Control: no-cache` on `index.html`; a stale shell can reference assets that no longer exist after a deploy.
+- Cookies are set with `Secure` on every origin (`useAnalytics.ts:97`, `CookieConsent.vue:112`); on plain `http://` dev hosts other than localhost the cookie is dropped silently.
+
+## What is good
+
+The comments say *why*, not what. `LazyImage`'s scroll-aware loading, `PhotoMap`'s build token against overlapping builds, `useRegionNames`' batching and backoff, `useUpload`'s error translation, `dayRegionGrouping`'s complete-linkage clustering with the leader-pass fallback, and the second `hidden` filter on the public gallery are all careful, well-reasoned code. Keep the habit.

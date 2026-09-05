@@ -9,13 +9,13 @@ interface PollEntry {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-const TERMINAL_STATES: ProcessingStatus[] = ["DONE", "FAILED", "DEAD_LETTER"];
+const TERMINAL_STATES: ProcessingStatus[] = ["DONE", "DEAD_LETTER"];
 
 /**
  * Poll /api/assets/{id}/status for files whose backend processing is still in flight after upload.
  * When a file reaches a terminal state, mutate the file in place so dependents (gallery img tags
  * keyed off `cacheBust`) re-render. The poll cadence backs off mildly: 1 s, 2 s, 4 s, capped at
- * 8 s, with a hard cap on attempts so a stuck FAILED case doesn't poll forever.
+ * 8 s, with a hard cap on attempts so a job stuck in QUEUED doesn't poll forever.
  */
 export interface ProcessingPollerComposable {
   pending: Ref<Set<number>>;

@@ -18,21 +18,29 @@ export function formatBytes(bytes: number): string {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
 }
 
+/** Local midnight of the day `date` falls on, in ms. */
+function startOfLocalDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
 /**
- * Format date to relative or absolute format
+ * Format date to relative or absolute format.
+ *
+ * Counts whole calendar days, not 24-hour blocks, so 23:50 yesterday is "Yesterday" and not
+ * "Today". The difference is signed on purpose: a camera with a wrong clock can stamp a photo in
+ * the future, and that must not read as "Today" — it falls through to the plain date.
  */
 export function formatDate(dateString: string): string {
   const date = new Date(dateString);
   // A missing or unparseable timestamp used to reach the UI as the literal string
   // "Invalid Date"; render nothing instead and let the caller omit the element.
   if (Number.isNaN(date.getTime())) return "";
-  const now = new Date();
-  const diffTime = Math.abs(now.getTime() - date.getTime());
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diffDays = Math.round((startOfLocalDay(new Date()) - startOfLocalDay(date)) / dayMs);
 
-  if (diffDays === 1) return "Today";
-  if (diffDays === 2) return "Yesterday";
-  if (diffDays < 7) return `${diffDays - 1} days ago`;
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1 && diffDays < 7) return `${diffDays} days ago`;
 
   return date.toLocaleDateString();
 }

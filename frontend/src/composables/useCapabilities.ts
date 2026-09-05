@@ -34,15 +34,15 @@ export function useCapabilities(): CapabilitiesComposable {
         return json;
       })
       .catch((err) => {
-        // Don't poison the cache on transient failures; reset inflight so a later call
-        // retries. The caller falls back to multipart in this branch (see useUpload).
+        // Hand the caller a safe fallback for *this* call, but leave `cached` empty so the next
+        // call asks the server again. Caching the fallback would turn one network blip into a
+        // map and a TUS path that stay hidden until a hard refresh.
         console.warn("Capabilities fetch failed, falling back to multipart:", err);
         const fallback: Capabilities = {
           tus: { enabled: false, endpoint: "/files/", version: "1.0.0", maxSize: 0 },
           multipart: { enabled: true, endpoint: "/api/upload" },
           maps: { enabled: false, geocoding: false },
         };
-        cached.value = fallback;
         return fallback;
       })
       .finally(() => {

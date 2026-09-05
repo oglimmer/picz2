@@ -405,7 +405,6 @@ const thumbnailReady = computed(
 const thumbnailUrl = computed(() => getImageUrl(props.file, 'thumb'))
 const processingLabel = computed(() => {
   switch (props.file.processingStatus) {
-    case 'FAILED':
     case 'DEAD_LETTER':
       return 'Failed'
     default:
@@ -414,8 +413,6 @@ const processingLabel = computed(() => {
 })
 const processingTitle = computed(() => {
   switch (props.file.processingStatus) {
-    case 'FAILED':
-      return 'Processing failed — will retry'
     case 'DEAD_LETTER':
       return 'Processing failed permanently'
     default:
