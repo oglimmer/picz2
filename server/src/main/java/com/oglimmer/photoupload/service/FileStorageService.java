@@ -987,9 +987,12 @@ public class FileStorageService {
   }
 
   public void deleteFile(Long fileId) {
+    // Owner-scoped, like every other single-file mutation here. A row that belongs to somebody
+    // else answers the same 404 as a row that does not exist.
+    User currentUser = userContext.getCurrentUser();
     FileMetadata metadata =
         metadataRepository
-            .findById(fileId)
+            .findByIdAndUserId(fileId, currentUser.getId())
             .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
 
     // Check if physical files are shared with other FileMetadata records
@@ -1217,9 +1220,12 @@ public class FileStorageService {
 
   @Transactional
   public void reorderFiles(List<Long> fileIds) {
-    // Validate all file IDs exist with a single query
-    List<Long> existingIds = metadataRepository.findExistingIds(fileIds);
-    if (existingIds.size() != fileIds.size()) {
+    // Validate that every id exists AND belongs to the caller, in a single query. An id from
+    // another user's album is reported exactly like an unknown id.
+    User currentUser = userContext.getCurrentUser();
+    List<Long> existingIds =
+        metadataRepository.findExistingIdsForUser(fileIds, currentUser.getId());
+    if (existingIds.size() != new HashSet<>(fileIds).size()) {
       throw new ResourceNotFoundException("One or more file IDs not found");
     }
 

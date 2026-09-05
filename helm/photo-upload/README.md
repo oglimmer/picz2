@@ -514,6 +514,16 @@ UPDATE users SET storage_quota_bytes = 5368709120 WHERE email = 'someone@example
 `0` refuses every further upload, which is a usable way to freeze an abusive account. An album on
 a user's own storage is neither counted nor capped.
 
+Every `/api/admin/*` route needs `ROLE_ADMIN` (D74). That role comes from the `users.is_admin`
+column, which — like the quota — has no UI and no API. A fresh deploy has no admin until you name
+one:
+
+```sql
+UPDATE users SET is_admin = TRUE WHERE email = 'you@example.com';
+```
+
+Any other account gets 403 on those routes, even with a valid login.
+
 Counted: originals, derivatives (thumb/medium/large/transcoded) and narration audio. **Not**
 counted: anything under `tus-uploads/`, which is in flight and swept by retention either way — an
 album on a user's own storage passes its bytes through that prefix, and charging for it would bill

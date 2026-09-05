@@ -95,7 +95,10 @@ public class ImageServeController {
               ? fileInfo.getMimeType()
               : MediaType.APPLICATION_OCTET_STREAM_VALUE,
           safeFilenameForKey(fileInfo));
-    } catch (ResourceNotFoundException e) {
+    } catch (RuntimeException e) {
+      // Already the right shape for GlobalExceptionHandler: 404 for a missing token, 410 for a
+      // retention-purged original, 503 for an open MinIO breaker. Wrapping any of these used to
+      // collapse them all into a 500.
       throw e;
     } catch (Exception e) {
       log.error("Error serving ranged request for file", e);
@@ -138,7 +141,8 @@ public class ImageServeController {
         return serveFromObjectStorage(fileInfo);
       }
       return serveFromDisk(token, fileInfo);
-    } catch (ResourceNotFoundException e) {
+    } catch (RuntimeException e) {
+      // See streamRangeByToken: 404 / 410 / 503 must reach the client with their own status.
       throw e;
     } catch (Exception e) {
       log.error("Error downloading file by token", e);

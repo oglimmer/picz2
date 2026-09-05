@@ -3,7 +3,6 @@ package com.oglimmer.photoupload.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oglimmer.photoupload.config.Profiles;
-import com.oglimmer.photoupload.exception.AudioNotReadyException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.RecordingAudioInfo;
@@ -155,7 +154,9 @@ public class SlideshowRecordingController {
           rangeHeader,
           contentTypeFor(audioInfo),
           audioInfo.getAudioFilename());
-    } catch (AudioNotReadyException e) {
+    } catch (RuntimeException e) {
+      // AudioNotReadyException (503 + Retry-After), MinioUnavailableException (503) and the
+      // not-found cases all have their own handler; only checked I/O failures need wrapping.
       throw e;
     } catch (Exception e) {
       log.error("Error serving recording audio by public token", e);
