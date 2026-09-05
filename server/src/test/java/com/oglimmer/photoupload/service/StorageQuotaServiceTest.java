@@ -60,7 +60,7 @@ class StorageQuotaServiceTest {
             recordingRepository,
             backendRepository,
             albumRepository,
-            Optional.of(objectStorage));
+            objectStorage);
 
     lenient()
         .when(backendRepository.findBySystemDefaultTrue())

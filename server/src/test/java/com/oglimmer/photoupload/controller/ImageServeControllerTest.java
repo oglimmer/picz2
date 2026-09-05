@@ -4,15 +4,20 @@ package com.oglimmer.photoupload.controller;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import com.oglimmer.photoupload.service.ObjectStorageService;
+import com.oglimmer.photoupload.storage.BackendStorage;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,13 +29,19 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.context.request.ServletWebRequest;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.http.AbortableInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 @ExtendWith(MockitoExtension.class)
 class ImageServeControllerTest {
 
   private static final Instant UPLOADED_AT = Instant.parse("2026-04-27T00:00:00Z");
+  private static final long ALBUM_ID = 1L;
 
   @Mock FileStorageService fileStorageService;
+  @Mock ObjectStorageService objectStorage;
+  @Mock BackendStorage bucket;
 
   private ImageServeController controller;
   private MockHttpServletRequest request;
@@ -39,28 +50,31 @@ class ImageServeControllerTest {
 
   @BeforeEach
   void setUp() {
-    // Optional.empty() mirrors a deployment where storage.s3.enabled=false and the
-    // ObjectStorageService bean simply is not in the context.
-    controller = new ImageServeController(fileStorageService, Optional.empty());
+    controller = new ImageServeController(fileStorageService, objectStorage);
+    lenient().when(objectStorage.forAlbumId(ALBUM_ID)).thenReturn(bucket);
     request = new MockHttpServletRequest("GET", "/api/i/tok");
     response = new MockHttpServletResponse();
     webRequest = new ServletWebRequest(request, response);
   }
 
+  /** What the S3 SDK hands back for a GET: the response metadata plus the body stream. */
+  static ResponseInputStream<GetObjectResponse> object(String body, String contentRange) {
+    GetObjectResponse.Builder meta =
+        GetObjectResponse.builder().contentLength((long) body.length());
+    if (contentRange != null) {
+      meta.contentRange(contentRange);
+    }
+    return new ResponseInputStream<>(
+        meta.build(),
+        AbortableInputStream.create(
+            new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8))));
+  }
+
   @Test
   void returnsAcceptedWhenDerivativeMissingAndProcessingNotDone() {
-    FileServeInfo info =
-        new FileServeInfo(
-            "image/heic",
-            "abc",
-            UPLOADED_AT,
-            Paths.get("/nonexistent/photo.heic"),
-            "photo.heic",
-            ProcessingStatus.PROCESSING,
-            false,
-            null,
-            1L);
-    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
+        .thenReturn(
+            serveInfo("image/heic", "originals/photo.heic", ProcessingStatus.PROCESSING, false));
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
 
@@ -69,85 +83,58 @@ class ImageServeControllerTest {
     assertNull(resp.getBody());
     // Cache-Control: no-store so the browser doesn't memoize the empty placeholder response.
     assertNotNull(resp.getHeaders().getCacheControl());
+    verify(bucket, never()).openStream(anyString());
   }
 
   @Test
-  void servesOriginalWhenProcessingDoneEvenIfDerivativeFlagFalse(
-      @org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
-    Path file = tempDir.resolve("served.jpg");
-    java.nio.file.Files.writeString(file, "x");
-
-    FileServeInfo info =
-        new FileServeInfo(
-            "image/jpeg",
-            "abc",
-            UPLOADED_AT,
-            file,
-            "served.jpg",
-            ProcessingStatus.DONE,
-            false,
-            null,
-            1L);
-    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
-
-    ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
-
-    assertEquals(HttpStatus.OK, resp.getStatusCode());
-    assertNotNull(resp.getBody());
-  }
-
-  @Test
-  void servesNormallyWhenDerivativeReady(@org.junit.jupiter.api.io.TempDir Path tempDir)
-      throws Exception {
-    Path file = tempDir.resolve("thumb.jpg");
-    java.nio.file.Files.writeString(file, "x");
-
-    FileServeInfo info =
-        new FileServeInfo(
-            "image/jpeg",
-            "abc",
-            UPLOADED_AT,
-            file,
-            "thumb.jpg",
-            ProcessingStatus.DONE,
-            true,
-            null,
-            1L);
-    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb")).thenReturn(info);
-
-    ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
-
-    assertEquals(HttpStatus.OK, resp.getStatusCode());
-    assertNotNull(resp.getBody());
-  }
-
-  @Test
-  void matchingIfNoneMatchShortCircuitsToNotModifiedWithoutOpeningTheFile(
-      @org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
-    Path file = tempDir.resolve("thumb.jpg");
-    java.nio.file.Files.writeString(file, "x");
+  void servesOriginalWhenProcessingDoneEvenIfDerivativeFlagFalse() {
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
-        .thenReturn(serveInfo(file, ProcessingStatus.DONE, true));
+        .thenReturn(serveInfo("image/jpeg", "originals/served.jpg", ProcessingStatus.DONE, false));
+    when(bucket.openStream("originals/served.jpg")).thenReturn(object("x", null));
+
+    ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
+
+    assertEquals(HttpStatus.OK, resp.getStatusCode());
+    assertNotNull(resp.getBody());
+  }
+
+  @Test
+  void servesNormallyWhenDerivativeReady() {
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
+        .thenReturn(
+            serveInfo("image/jpeg", "derivatives/1/thumb.jpg", ProcessingStatus.DONE, true));
+    when(bucket.openStream("derivatives/1/thumb.jpg")).thenReturn(object("x", null));
+
+    ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
+
+    assertEquals(HttpStatus.OK, resp.getStatusCode());
+    assertNotNull(resp.getBody());
+  }
+
+  @Test
+  void matchingIfNoneMatchShortCircuitsToNotModifiedWithoutOpeningTheObject() {
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
+        .thenReturn(
+            serveInfo("image/jpeg", "derivatives/1/thumb.jpg", ProcessingStatus.DONE, true));
     request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"abc\"");
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
 
     // A null ResponseEntity means "the response is already fully populated" — Spring's
-    // HttpEntityMethodProcessor treats it as handled. Crucially no Resource was ever created,
-    // which on the S3 path is what stops an unclosed ResponseInputStream leaking a pooled
-    // MinIO connection.
+    // HttpEntityMethodProcessor treats it as handled. Crucially no stream was ever opened, which is
+    // what stops an unclosed ResponseInputStream leaking a pooled MinIO connection.
     assertNull(resp);
     assertEquals(HttpStatus.NOT_MODIFIED.value(), response.getStatus());
     assertEquals("\"abc\"", response.getHeader(HttpHeaders.ETAG));
+    verify(bucket, never()).openStream(anyString());
   }
 
   @Test
-  void staleIfNoneMatchStillServesTheBody(@org.junit.jupiter.api.io.TempDir Path tempDir)
-      throws Exception {
-    Path file = tempDir.resolve("thumb.jpg");
-    java.nio.file.Files.writeString(file, "x");
+  void staleIfNoneMatchStillServesTheBody() {
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
-        .thenReturn(serveInfo(file, ProcessingStatus.DONE, true));
+        .thenReturn(
+            serveInfo("image/jpeg", "derivatives/1/thumb.jpg", ProcessingStatus.DONE, true));
+    when(bucket.openStream("derivatives/1/thumb.jpg")).thenReturn(object("x", null));
     request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"stale\"");
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
@@ -164,7 +151,7 @@ class ImageServeControllerTest {
   void notModifiedIsNotEvaluatedWhileProcessingIsStillPending() {
     when(fileStorageService.getFileServeInfoByPublicToken("tok", "thumb"))
         .thenReturn(
-            serveInfo(Paths.get("/nonexistent/photo.heic"), ProcessingStatus.PROCESSING, false));
+            serveInfo("image/heic", "originals/photo.heic", ProcessingStatus.PROCESSING, false));
     request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"abc\"");
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", "thumb", webRequest);
@@ -175,23 +162,12 @@ class ImageServeControllerTest {
   }
 
   @Test
-  void rangedGetOnADiskVideoAnswersPartialContent(@org.junit.jupiter.api.io.TempDir Path tempDir)
-      throws Exception {
-    Path file = tempDir.resolve("clip.mp4");
-    java.nio.file.Files.writeString(file, "0123456789");
-
-    FileServeInfo info =
-        new FileServeInfo(
-            "video/mp4",
-            "abc",
-            UPLOADED_AT,
-            file,
-            "clip.mp4",
-            ProcessingStatus.DONE,
-            false,
-            null,
-            1L);
-    when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
+  void rangedGetOnAVideoAnswersPartialContent() {
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", null))
+        .thenReturn(
+            serveInfo("video/mp4", "derivatives/1/transcoded.mp4", ProcessingStatus.DONE, false));
+    when(bucket.openStream("derivatives/1/transcoded.mp4", "bytes=2-5"))
+        .thenReturn(object("2345", "bytes 2-5/10"));
     request.addHeader(HttpHeaders.RANGE, "bytes=2-5");
 
     ResponseEntity<?> resp = controller.streamRangeByToken("tok", null, "bytes=2-5", webRequest);
@@ -204,23 +180,11 @@ class ImageServeControllerTest {
   }
 
   @Test
-  void unrangedGetStillAdvertisesRangeSupport(@org.junit.jupiter.api.io.TempDir Path tempDir)
-      throws Exception {
-    Path file = tempDir.resolve("clip.mp4");
-    java.nio.file.Files.writeString(file, "0123456789");
-
-    FileServeInfo info =
-        new FileServeInfo(
-            "video/mp4",
-            "abc",
-            UPLOADED_AT,
-            file,
-            "clip.mp4",
-            ProcessingStatus.DONE,
-            false,
-            null,
-            1L);
-    when(fileStorageService.getFileServeInfoByPublicToken("tok", null)).thenReturn(info);
+  void unrangedGetStillAdvertisesRangeSupport() {
+    when(fileStorageService.getFileServeInfoByPublicToken("tok", null))
+        .thenReturn(
+            serveInfo("video/mp4", "derivatives/1/transcoded.mp4", ProcessingStatus.DONE, false));
+    when(bucket.openStream("derivatives/1/transcoded.mp4")).thenReturn(object("0123456789", null));
 
     ResponseEntity<?> resp = controller.downloadFileByToken("tok", null, webRequest);
 
@@ -229,16 +193,16 @@ class ImageServeControllerTest {
     assertEquals("bytes", resp.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES));
   }
 
-  private FileServeInfo serveInfo(Path path, ProcessingStatus status, boolean derivativeReady) {
+  private static FileServeInfo serveInfo(
+      String mime, String key, ProcessingStatus status, boolean derivativeReady) {
     return new FileServeInfo(
-        "image/jpeg",
+        mime,
         "abc",
         UPLOADED_AT,
-        path,
-        path.getFileName().toString(),
+        key.substring(key.lastIndexOf('/') + 1),
         status,
         derivativeReady,
-        null,
-        1L);
+        key,
+        ALBUM_ID);
   }
 }

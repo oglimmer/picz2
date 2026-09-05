@@ -22,7 +22,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,8 +51,8 @@ public class StorageBackendService {
   private final UserContext userContext;
   private final SecretCipher secretCipher;
   private final StorageQuotaService storageQuotaService;
-  private final Optional<StorageClientFactory> clientFactory;
-  private final Optional<ObjectStorageService> objectStorage;
+  private final StorageClientFactory clientFactory;
+  private final ObjectStorageService objectStorage;
 
   /** Backends this user may pick when creating an album: the system default plus their own. */
   @Transactional(readOnly = true)
@@ -104,7 +103,7 @@ public class StorageBackendService {
     StorageBackend saved = repository.save(backend);
     // This pod can drop its cached client immediately; the worker and retention pods notice on
     // their own within the router's cache TTL. Nothing here needs a restart.
-    objectStorage.ifPresent(os -> os.invalidateBackend(saved.getId()));
+    objectStorage.invalidateBackend(saved.getId());
     log.info("Storage backend {} updated", saved.getId());
     return toResponse(saved);
   }
@@ -123,7 +122,7 @@ public class StorageBackendService {
               + ". Delete or move those albums first.");
     }
     repository.delete(backend);
-    objectStorage.ifPresent(os -> os.invalidateBackend(id));
+    objectStorage.invalidateBackend(id);
     log.info("Storage backend {} deleted", id);
   }
 
@@ -136,10 +135,6 @@ public class StorageBackendService {
    */
   @Transactional(readOnly = true)
   public StorageBackendTestResult test(Long existingId, StorageBackendRequest request) {
-    StorageClientFactory factory =
-        clientFactory.orElseThrow(
-            () -> new ValidationException("Object storage is disabled on this server"));
-
     String secret = request.getSecretKey();
     if ((secret == null || secret.isBlank()) && existingId != null) {
       secret = secretCipher.decrypt(requireOwned(existingId).getSecretKeyEncrypted());
@@ -157,7 +152,7 @@ public class StorageBackendService {
             secret,
             request.getPathStyleAccess() == null || request.getPathStyleAccess());
 
-    return probe(factory, settings);
+    return probe(clientFactory, settings);
   }
 
   // ---------------------------------------------------------------- internals
@@ -222,10 +217,7 @@ public class StorageBackendService {
   }
 
   private void requireWorkingConnection(StorageBackend backend) {
-    StorageClientFactory factory =
-        clientFactory.orElseThrow(
-            () -> new ValidationException("Object storage is disabled on this server"));
-    StorageBackendTestResult result = probe(factory, factory.settingsOf(backend));
+    StorageBackendTestResult result = probe(clientFactory, clientFactory.settingsOf(backend));
     if (!result.isOk()) {
       throw new ValidationException(
           "Could not use this storage (" + result.getFailedStep() + "): " + result.getMessage());

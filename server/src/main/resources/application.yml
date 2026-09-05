@@ -81,7 +81,6 @@ storage:
   #   openssl rand -base64 32
   backend-secret-key: "${STORAGE_BACKEND_SECRET_KEY:}"
   s3:
-    enabled: "${STORAGE_S3_ENABLED:false}"
     endpoint: "${STORAGE_S3_ENDPOINT:}"
     access-key: "${STORAGE_S3_ACCESS_KEY:}"
     secret-key: "${STORAGE_S3_SECRET_KEY:}"

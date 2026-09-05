@@ -72,7 +72,6 @@ class FileStorageServiceHiddenTagTest {
             Mockito.mock(TagRepository.class),
             Mockito.mock(ImageTagRepository.class),
             Mockito.mock(AlbumEnabledTagRepository.class),
-            Mockito.mock(LocalFileCleanupService.class),
             Mockito.mock(JdbcTemplate.class),
             albumRepo,
             Mockito.mock(SlideshowRecordingRepository.class),
@@ -83,7 +82,7 @@ class FileStorageServiceHiddenTagTest {
             Mockito.mock(JobEnqueueService.class),
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            Optional.empty());
+            Mockito.mock(ObjectStorageService.class));
 
     user = new User();
     user.setId(1L);

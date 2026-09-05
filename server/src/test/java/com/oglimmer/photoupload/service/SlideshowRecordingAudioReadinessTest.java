@@ -50,6 +50,7 @@ class SlideshowRecordingAudioReadinessTest {
   @Mock AudioReencodingService audioReencodingService;
   @Mock UserContext userContext;
   @Mock RecordingInfoMapper recordingInfoMapper;
+  @Mock ObjectStorageService objectStorage;
   @Mock RecordingAudioService recordingAudioService;
   @Mock JobEnqueueService jobEnqueueService;
   @Mock ProcessingJobRepository jobRepo;
@@ -71,7 +72,7 @@ class SlideshowRecordingAudioReadinessTest {
   void readySiblingIsServedWithoutQueueingAnything() {
     when(recordingAudioService.isAacReady(recording)).thenReturn(true);
     when(recordingAudioService.aacLocation(recording))
-        .thenReturn(new RecordingAudioInfo("abc.m4a", null, "audio/abc.m4a", 1L));
+        .thenReturn(new RecordingAudioInfo("abc.m4a", "audio/abc.m4a", 1L));
 
     RecordingAudioInfo info = service.getRecordingAudioInfoByPublicToken(TOKEN, "m4a");
 

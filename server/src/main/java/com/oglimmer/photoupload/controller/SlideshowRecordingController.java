@@ -12,12 +12,10 @@ import com.oglimmer.photoupload.model.RecordingResponse;
 import com.oglimmer.photoupload.model.RecordingsListResponse;
 import com.oglimmer.photoupload.service.ObjectStorageService;
 import com.oglimmer.photoupload.service.SlideshowRecordingService;
-import com.oglimmer.photoupload.util.RangeRequestHandler;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.List;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -51,9 +49,9 @@ public class SlideshowRecordingController {
   // Boot's own (Jackson 3) mapper — the one MVC uses — for the JSON that arrives as a plain string
   // part of the multipart body. Browsers append it as text/plain, so @RequestPart cannot bind it.
   private final JsonMapper jsonMapper;
-  // Optional: present iff storage.s3.enabled=true. S3-backed audio is streamed through this pod
-  // with the Range header forwarded to MinIO — see serveAudioFromS3.
-  private final Optional<ObjectStorageService> objectStorage;
+  // Audio is streamed through this pod with the Range header forwarded to MinIO — see
+  // serveAudioFromS3.
+  private final ObjectStorageService objectStorage;
 
   @PostMapping("/albums/{albumId}/recordings")
   public ResponseEntity<RecordingResponse> uploadRecording(
@@ -144,14 +142,7 @@ public class SlideshowRecordingController {
     try {
       RecordingAudioInfo audioInfo =
           slideshowRecordingService.getRecordingAudioInfoByPublicToken(publicToken, format);
-      if (audioInfo.getStorageKey() != null) {
-        return serveAudioFromS3(audioInfo, rangeHeader);
-      }
-      return RangeRequestHandler.serveFileWithRangeSupport(
-          audioInfo.getAudioPath(),
-          rangeHeader,
-          contentTypeFor(audioInfo),
-          audioInfo.getAudioFilename());
+      return serveAudioFromS3(audioInfo, rangeHeader);
     } catch (RuntimeException e) {
       // AudioNotReadyException (503 + Retry-After), MinioUnavailableException (503) and the
       // not-found cases all have their own handler; only checked I/O failures need wrapping.
@@ -181,14 +172,8 @@ public class SlideshowRecordingController {
    */
   private ResponseEntity<StreamingResponseBody> serveAudioFromS3(
       RecordingAudioInfo audioInfo, String rangeHeader) {
-    if (objectStorage.isEmpty()) {
-      throw new IllegalStateException(
-          "Recording is S3-backed but ObjectStorageService is disabled — "
-              + "check storage.s3.enabled");
-    }
     ResponseInputStream<GetObjectResponse> stream =
         objectStorage
-            .get()
             .forAlbumId(audioInfo.getAlbumId())
             .openStream(audioInfo.getStorageKey(), rangeHeader);
     GetObjectResponse meta = stream.response();

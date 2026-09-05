@@ -33,6 +33,7 @@ class SlideshowRecordingServiceTest {
   @Mock AudioReencodingService audioReencodingService;
   @Mock UserContext userContext;
   @Mock RecordingInfoMapper recordingInfoMapper;
+  @Mock ObjectStorageService objectStorage;
 
   @InjectMocks SlideshowRecordingService service;
 
@@ -73,16 +74,14 @@ class SlideshowRecordingServiceTest {
   }
 
   @Test
-  void getRecordingAudioInfoByPublicTokenResolvesUnderUploadDir() {
-    when(props.getUploadDir()).thenReturn("/base");
+  void getRecordingAudioInfoByPublicTokenReturnsTheObjectKey() {
     SlideshowRecording r = new SlideshowRecording();
     r.setId(1L);
-    // The album is what says which storage backend holds the audio, so the row needs one even
-    // on the legacy local-disk path.
+    // The album is what says which storage backend holds the audio, so the row needs one.
     Album album = new Album();
     album.setId(1L);
     r.setAlbum(album);
-    r.setAudioPath("recordings/a.webm");
+    r.setAudioPath("audio/a.webm");
     r.setAudioFilename("a.webm");
     r.setPublicToken("tok");
     when(recRepo.findByPublicToken("tok")).thenReturn(Optional.of(r));
@@ -90,6 +89,7 @@ class SlideshowRecordingServiceTest {
     var audioInfo = service.getRecordingAudioInfoByPublicToken("tok", null);
     assertNotNull(audioInfo);
     assertEquals("a.webm", audioInfo.getAudioFilename());
-    assertTrue(audioInfo.getAudioPath().toString().endsWith("/base/recordings/a.webm"));
+    assertEquals("audio/a.webm", audioInfo.getStorageKey());
+    assertEquals(1L, audioInfo.getAlbumId());
   }
 }

@@ -2,7 +2,6 @@
 package com.oglimmer.photoupload.model;
 
 import com.oglimmer.photoupload.entity.ProcessingStatus;
-import java.nio.file.Path;
 import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -16,7 +15,6 @@ public class FileServeInfo {
   private String mimeType;
   private String checksum;
   private Instant uploadedAt;
-  private Path filePath;
   private String filename;
 
   /**
@@ -32,10 +30,7 @@ public class FileServeInfo {
    */
   private boolean derivativeReady;
 
-  /**
-   * When non-null, the requested variant lives in object storage at this key, and {@link #filePath}
-   * is null. Mutually exclusive with {@code filePath} — exactly one of the two is set.
-   */
+  /** Object key of the variant being served, in the album's storage backend. */
   private String storageKey;
 
   /**

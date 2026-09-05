@@ -31,8 +31,8 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
 
   private final JobQueueDepthService jobQueueDepthService;
   private final JobsProperties jobsProperties;
-  // The `minio` breaker from ResilienceConfig — always present, S3 enabled or not. If it is OPEN
-  // we 503 the upload before parsing the body, saving the multipart staging cost during an outage.
+  // The `minio` breaker from ResilienceConfig. If it is OPEN we 503 the upload before parsing the
+  // body, saving the multipart staging cost during an outage.
   private final CircuitBreaker minioCircuitBreaker;
 
   public UploadBackpressureFilter(

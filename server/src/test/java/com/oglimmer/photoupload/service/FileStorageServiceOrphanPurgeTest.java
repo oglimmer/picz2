@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -76,7 +75,6 @@ class FileStorageServiceOrphanPurgeTest {
             mock(TagRepository.class),
             mock(ImageTagRepository.class),
             mock(AlbumEnabledTagRepository.class),
-            mock(LocalFileCleanupService.class),
             mock(JdbcTemplate.class),
             mock(AlbumRepository.class),
             recordingRepo,
@@ -87,7 +85,7 @@ class FileStorageServiceOrphanPurgeTest {
             mock(JobEnqueueService.class),
             mock(SystemTagProvisioner.class),
             mock(StorageQuotaService.class),
-            Optional.of(storage));
+            storage);
   }
 
   @Test

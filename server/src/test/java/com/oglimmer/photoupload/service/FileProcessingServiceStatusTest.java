@@ -3,6 +3,7 @@ package com.oglimmer.photoupload.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -14,7 +15,9 @@ import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.model.CaptureDate;
 import com.oglimmer.photoupload.model.GpsCoordinates;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,6 +37,7 @@ class FileProcessingServiceStatusTest {
   private CaptureDateExtractor captureDateExtractor;
   private GpsExtractor gpsExtractor;
   private PlatformTransactionManager txManager;
+  private BackendStorage bucket;
   private FileProcessingService service;
 
   /** Snapshot of (status, attempts, error, completedAt) recorded at each save() call. */
@@ -58,6 +62,11 @@ class FileProcessingServiceStatusTest {
     when(gpsExtractor.extract(any(), any())).thenReturn(GpsCoordinates.none());
     txManager = mock(PlatformTransactionManager.class);
     when(txManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+    // The album's backend: the GET of the original is a no-op here (the thumbnailer is mocked and
+    // never reads it) and every PUT is swallowed.
+    ObjectStorageService objectStorage = mock(ObjectStorageService.class);
+    bucket = mock(BackendStorage.class);
+    when(objectStorage.forFile(any())).thenReturn(bucket);
     when(repository.save(any(FileMetadata.class)))
         .thenAnswer(
             inv -> {
@@ -78,7 +87,7 @@ class FileProcessingServiceStatusTest {
             captureDateExtractor,
             gpsExtractor,
             txManager,
-            java.util.Optional.empty());
+            objectStorage);
   }
 
   private FileMetadata seedMetadata() {
@@ -87,14 +96,14 @@ class FileProcessingServiceStatusTest {
     md.setOriginalName("photo.jpg");
     md.setStoredFilename("photo-stored.jpg");
     md.setMimeType("image/jpeg");
-    md.setFilePath("photo-stored.jpg");
+    md.setFilePath("originals/photo-stored.jpg");
     md.setProcessingStatus(ProcessingStatus.QUEUED);
     md.setProcessingAttempts(0);
     return md;
   }
 
   @Test
-  void successfulProcessingTransitionsToDoneAndIncrementsAttempts() {
+  void successfulProcessingTransitionsToDoneAndIncrementsAttempts() throws IOException {
     FileMetadata md = seedMetadata();
     when(repository.findById(11L)).thenReturn(Optional.of(md));
     when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
@@ -111,6 +120,10 @@ class FileProcessingServiceStatusTest {
     assertThat(last.status()).isEqualTo(ProcessingStatus.DONE);
     assertThat(last.completedAt()).isNotNull();
     assertThat(last.error()).isNull();
+    // Every derivative went to its deterministic key in the album's backend.
+    verify(bucket).putFile(eq("derivatives/11/thumb.jpg"), any(), eq("image/jpeg"));
+    verify(bucket).putFile(eq("derivatives/11/medium.jpg"), any(), eq("image/jpeg"));
+    verify(bucket).putFile(eq("derivatives/11/large.jpg"), any(), eq("image/jpeg"));
   }
 
   /**
@@ -118,12 +131,17 @@ class FileProcessingServiceStatusTest {
    * nulls is its "every size failed" signal, and {@code processFile} throws on it rather than
    * marking an asset DONE with no derivatives — so a run stubbed that way is a *failed* run.
    */
-  private Path[] generatedThumbnails() {
-    return new Path[] {
+  private Path[] generatedThumbnails() throws IOException {
+    Path[] paths = {
       uploadDir.resolve("photo-stored-thumb.jpg"),
       uploadDir.resolve("photo-stored-medium.jpg"),
       uploadDir.resolve("photo-stored-large.jpg"),
     };
+    // storeDerivative sizes each file before the PUT, so they have to exist.
+    for (Path path : paths) {
+      Files.writeString(path, "jpeg-bytes");
+    }
+    return paths;
   }
 
   @Test
