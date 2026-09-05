@@ -16,6 +16,8 @@ export interface SlideshowPlaybackComposable {
     filterTag?: string | null,
   ) => Promise<RecordingInfo[]>;
   hasRecordings: (filterTag: string) => boolean;
+  recordingFor: (filterTag: string | null, language: string) => RecordingInfo | undefined;
+  hasRecordingFor: (filterTag: string | null, language: string) => boolean;
   startPlayback: (
     recording: RecordingInfo,
     files: AlbumFile[],
@@ -32,7 +34,7 @@ export interface SlideshowPlaybackComposable {
  * Handles playing back recorded slideshows with synchronized audio and images
  */
 export function useSlideshowPlayback(): SlideshowPlaybackComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
 
   const isPlaying = ref<boolean>(false);
   const currentRecording = ref<RecordingInfo | null>(null);
@@ -69,18 +71,11 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
         url += `?filterTag=${encodeURIComponent(filterTag)}`;
       }
 
-      const response = await fetchWithAuth(url);
-
-      if (!response.ok) {
-        throw new Error("Failed to load recordings");
-      }
-
-      const data = await response.json();
+      const data = await requestJson<{ recordings?: RecordingInfo[] }>(url);
       recordings.value = data.recordings || [];
       return recordings.value;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error("Failed to load recordings:", err);
       playbackError.value = "Failed to load recordings: " + errorMessage;
       recordings.value = [];
       return [];
@@ -96,6 +91,16 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     // Normalize empty string to null for comparison
     const normalizedTag = filterTag || null;
     return recordings.value.some((r) => r.filterTag === normalizedTag);
+  }
+
+  /** The recording for this tag filter ("" or null means the whole album) in this language. */
+  function recordingFor(filterTag: string | null, language: string): RecordingInfo | undefined {
+    const normalizedTag = filterTag || null;
+    return recordings.value.find((r) => r.filterTag === normalizedTag && r.language === language);
+  }
+
+  function hasRecordingFor(filterTag: string | null, language: string): boolean {
+    return recordingFor(filterTag, language) !== undefined;
   }
 
   /**
@@ -176,7 +181,6 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
       isPlaying.value = true;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error("Failed to start playback:", err);
       playbackError.value = "Failed to start playback: " + errorMessage;
       stopPlayback();
       throw err;
@@ -246,26 +250,9 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
    * Delete a recording
    */
   async function deleteRecording(recordingId: number): Promise<boolean> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/recordings/${recordingId}`,
-        {
-          method: "DELETE",
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to delete recording");
-      }
-
-      // Remove from local recordings array
-      recordings.value = recordings.value.filter((r) => r.id !== recordingId);
-
-      return true;
-    } catch (err) {
-      console.error("Failed to delete recording:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/recordings/${recordingId}`, { method: "DELETE" });
+    recordings.value = recordings.value.filter((r) => r.id !== recordingId);
+    return true;
   }
 
   return {
@@ -282,6 +269,8 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     // Methods
     loadRecordings,
     hasRecordings,
+    recordingFor,
+    hasRecordingFor,
     startPlayback,
     stopPlayback,
     pausePlayback,

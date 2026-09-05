@@ -80,31 +80,26 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted, onUnmounted} from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { authEmail, authPassword, loginError, login } = useAuth()
+const { authEmail, loginError, login } = useAuth()
 
-const email = computed({
-  get: () => authEmail.value,
-  set: (value: string) => authEmail.value = value
-})
-
-const password = computed({
-  get: () => authPassword.value,
-  set: (value: string) => authPassword.value = value
-})
+// Local to the form: the password is handed to login() once and never kept anywhere (D78).
+const email = ref(authEmail.value)
+const password = ref('')
 
 const error = computed(() => loginError.value)
 const loading = ref(false)
 
 async function handleLogin() {
   loading.value = true
-  const success = await login()
+  const success = await login(email.value, password.value)
   loading.value = false
+  password.value = ''
 
   if (success) {
     // Redirect to the page they were trying to access, or albums

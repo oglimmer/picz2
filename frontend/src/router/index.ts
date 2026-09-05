@@ -31,6 +31,23 @@ declare module "vue-router" {
 }
 
 /**
+ * The landing, login and register pages are for people without a session. A signed-in, verified
+ * user who lands on one is sent to their albums instead.
+ */
+function redirectIfLoggedIn(
+  _to: RouteLocationNormalized,
+  _from: RouteLocationNormalized,
+  next: NavigationGuardNext,
+): void {
+  const { isLoggedIn, emailVerified } = useAuth();
+  if (isLoggedIn.value && emailVerified.value) {
+    next("/albums");
+  } else {
+    next();
+  }
+}
+
+/**
  * Route definitions
  */
 const routes: RouteRecordRaw[] = [
@@ -39,19 +56,7 @@ const routes: RouteRecordRaw[] = [
     name: "Home",
     component: LandingView,
     meta: { public: true },
-    beforeEnter: (
-      _to: RouteLocationNormalized,
-      _from: RouteLocationNormalized,
-      next: NavigationGuardNext,
-    ) => {
-      const { isLoggedIn, emailVerified } = useAuth();
-      // If logged in and verified, redirect to albums
-      if (isLoggedIn.value && emailVerified.value) {
-        next("/albums");
-      } else {
-        next();
-      }
-    },
+    beforeEnter: redirectIfLoggedIn,
   },
   {
     path: "/imprint",
@@ -76,38 +81,14 @@ const routes: RouteRecordRaw[] = [
     name: "Login",
     component: LoginView,
     meta: { public: true },
-    beforeEnter: (
-      _to: RouteLocationNormalized,
-      _from: RouteLocationNormalized,
-      next: NavigationGuardNext,
-    ) => {
-      const { isLoggedIn, emailVerified } = useAuth();
-      // If logged in and verified, redirect to albums
-      if (isLoggedIn.value && emailVerified.value) {
-        next("/albums");
-      } else {
-        next();
-      }
-    },
+    beforeEnter: redirectIfLoggedIn,
   },
   {
     path: "/register",
     name: "Register",
     component: RegisterView,
     meta: { public: true },
-    beforeEnter: (
-      _to: RouteLocationNormalized,
-      _from: RouteLocationNormalized,
-      next: NavigationGuardNext,
-    ) => {
-      const { isLoggedIn, emailVerified } = useAuth();
-      // If logged in and verified, redirect to albums
-      if (isLoggedIn.value && emailVerified.value) {
-        next("/albums");
-      } else {
-        next();
-      }
-    },
+    beforeEnter: redirectIfLoggedIn,
   },
   {
     path: "/forgot-password",

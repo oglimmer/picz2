@@ -74,6 +74,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { readCookie, writeCookie } from '@/utils/cookies'
 
 const showConsent = ref(false)
 const showDetails = ref(false)
@@ -95,21 +96,12 @@ onMounted(() => {
 })
 
 function getConsentStatus(): boolean | null {
-  const cookies = document.cookie.split(';')
-  for (const cookie of cookies) {
-    const [name, value] = cookie.trim().split('=')
-    if (name === CONSENT_COOKIE) {
-      return value === 'accepted'
-    }
-  }
-  return null
+  const value = readCookie(CONSENT_COOKIE)
+  return value === null ? null : value === 'accepted'
 }
 
 function setConsentCookie(accepted: boolean) {
-  const expiryDate = new Date()
-  expiryDate.setDate(expiryDate.getDate() + CONSENT_EXPIRY_DAYS)
-  const value = accepted ? 'accepted' : 'declined'
-  document.cookie = `${CONSENT_COOKIE}=${value}; expires=${expiryDate.toUTCString()}; path=/; SameSite=Lax; Secure`
+  writeCookie(CONSENT_COOKIE, accepted ? 'accepted' : 'declined', CONSENT_EXPIRY_DAYS)
 }
 
 function handleAccept() {

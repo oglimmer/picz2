@@ -172,7 +172,7 @@ import { useSettings, type NewAssetTag } from '../composables/useSettings'
 import StorageBackendManager from '../components/StorageBackendManager.vue'
 
 const router = useRouter()
-const { authEmail, logout } = useAuth()
+const { authEmail, logout, login } = useAuth()
 const { apiUrl, fetchWithAuth } = useApi()
 const { success, error: showError } = useNotifications()
 const { confirm: confirmDialog } = useConfirm()
@@ -295,10 +295,17 @@ async function handleChangePassword() {
       throw new Error(data.message || 'Failed to change password')
     }
 
+    // The server revokes every session on a password change (D78), this one included. Sign
+    // straight back in with the new password so the user is not bounced to the login page.
+    const stillIn = await login(authEmail.value, newPassword.value)
     success('Password changed successfully!')
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
+    if (!stillIn) {
+      logout()
+      router.push({ name: 'Login' })
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     showError(`Error changing password: ${message}`)

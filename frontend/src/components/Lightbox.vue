@@ -132,156 +132,122 @@
   </div>
 </template>
 
-<script>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useApi } from '../composables/useApi'
-import { isVideo } from '../utils/format'
+import { useApi } from '@/composables/useApi'
+import { isVideo } from '@/utils/format'
+import type { AlbumFile } from '@/types'
+import type { GroupContext } from '@/composables/usePresentationGroups'
 
-export default {
-  name: 'Lightbox',
-  props: {
-    file: {
-      type: Object,
-      default: null
-    },
-    isRecording: {
-      type: Boolean,
-      default: false
-    },
-    isSaving: {
-      type: Boolean,
-      default: false
-    },
-    isPlaying: {
-      type: Boolean,
-      default: false
-    },
-    isPaused: {
-      type: Boolean,
-      default: false
-    },
-    audioPlayer: {
-      type: Object,
-      default: null
-    },
-    // { id, label, text, position, total } for the current image, or null when it isn't in a
-    // group. Cleared to null while the lightbox is closed, which also un-dismisses the hint.
-    groupContext: {
-      type: Object,
-      default: null
-    }
-  },
-  emits: ['close', 'next', 'previous', 'image-changed', 'pause-resume', 'stop-playback', 'update:controls-visible'],
-  setup(props, { emit }) {
-    const { getImageUrl } = useApi()
-    const controlsVisible = ref(true)
-    const isLoading = ref(false)
-    const groupTextExpanded = ref(false)
-    const captionExpanded = ref(false)
-    const groupHintDismissed = ref(false)
+interface Props {
+  file: AlbumFile | null
+  isRecording?: boolean
+  isSaving?: boolean
+  isPlaying?: boolean
+  isPaused?: boolean
+  // Which group the current image sits in, or null when it is in none. Cleared to null while the
+  // lightbox is closed, which also un-dismisses the hint.
+  groupContext?: GroupContext | null
+}
 
-    const isVideoFile = computed(() => isVideo(props.file))
+const props = withDefaults(defineProps<Props>(), {
+  isRecording: false,
+  isSaving: false,
+  isPlaying: false,
+  isPaused: false,
+  groupContext: null
+})
 
-    // Stays out of the way of the REC badge (same corner) and honours "Hide Controls" during
-    // slideshow playback, so the photo can still be seen unobstructed.
-    // Whether the toggle is worth drawing at all. A character count rather than a measured
-    // height: the plate's width varies with the viewport, so any exact answer would need a
-    // resize observer to stay right, and being one line out here costs nothing — the toggle
-    // simply appears on a caption that turns out to fit.
-    const captionIsLong = computed(() => (props.file?.caption?.length ?? 0) > 140)
+const emit = defineEmits<{
+  close: []
+  next: []
+  previous: []
+  'pause-resume': []
+  'stop-playback': []
+  'update:controls-visible': [visible: boolean]
+}>()
 
-    // Same rule as the group hint: the caption is chrome, so "Hide Controls" hides it too, and
-    // it stays out of the way while a recording is being made.
-    const captionVisible = computed(
-      () => !props.isRecording && !props.isSaving && (!props.isPlaying || controlsVisible.value)
-    )
+const { getImageUrl } = useApi()
+const controlsVisible = ref(true)
+const isLoading = ref(false)
+const groupTextExpanded = ref(false)
+const captionExpanded = ref(false)
+const groupHintDismissed = ref(false)
 
-    const groupHintVisible = computed(
-      () =>
-        !groupHintDismissed.value &&
-        !props.isRecording &&
-        !props.isSaving &&
-        (!props.isPlaying || controlsVisible.value)
-    )
+const isVideoFile = computed(() => (props.file ? isVideo(props.file) : false))
 
-    const mediaUrl = computed(() => {
-      if (!props.file) return ''
-      return isVideoFile.value
-        ? getImageUrl(props.file)
-        : getImageUrl(props.file, 'large')
-    })
+// Whether the toggle is worth drawing at all. A character count rather than a measured height:
+// the plate's width varies with the viewport, so any exact answer would need a resize observer
+// to stay right, and being one line out here costs nothing — the toggle simply appears on a
+// caption that turns out to fit.
+const captionIsLong = computed(() => (props.file?.caption?.length ?? 0) > 140)
 
-    // Mute video when recording or playing slideshow audio
-    const shouldMuteVideo = computed(() => {
-      return props.isRecording || props.isPlaying
-    })
+// The caption is chrome, so "Hide Controls" hides it too, and it stays out of the way while a
+// recording is being made.
+const captionVisible = computed(
+  () => !props.isRecording && !props.isSaving && (!props.isPlaying || controlsVisible.value)
+)
 
-    // Track when file changes to show loading state
-    watch(() => props.file, (newFile, oldFile) => {
-      if (newFile && oldFile && newFile.id !== oldFile.id) {
-        isLoading.value = true
-        // A caption belongs to its photo, so an expanded one must not stay expanded over the
-        // next photo's — the reader would meet a wall of text they never asked to unfold.
-        captionExpanded.value = false
-      }
-    })
+// Stays out of the way of the REC badge (same corner) and honours "Hide Controls" during
+// slideshow playback, so the photo can still be seen unobstructed.
+const groupHintVisible = computed(
+  () =>
+    !groupHintDismissed.value &&
+    !props.isRecording &&
+    !props.isSaving &&
+    (!props.isPlaying || controlsVisible.value)
+)
 
-    // Moving into a different group is a fresh chapter: bring a dismissed hint back and collapse
-    // the blurb again, so a long text doesn't stay expanded over the next photos. Keyed on the
-    // group id rather than the label, because two groups may legitimately share a label.
-    watch(() => props.groupContext?.id, () => {
-      groupTextExpanded.value = false
-      groupHintDismissed.value = false
-    })
+const mediaUrl = computed(() => {
+  if (!props.file) return ''
+  return isVideoFile.value ? getImageUrl(props.file) : getImageUrl(props.file, 'large')
+})
 
-    function handleImageLoad() {
-      isLoading.value = false
-    }
+// Mute video when recording or playing slideshow audio
+const shouldMuteVideo = computed(() => props.isRecording || props.isPlaying)
 
-    function toggleControls() {
-      controlsVisible.value = !controlsVisible.value
-      emit('update:controls-visible', controlsVisible.value)
-    }
+// Track when file changes to show loading state
+watch(() => props.file, (newFile, oldFile) => {
+  if (newFile && oldFile && newFile.id !== oldFile.id) {
+    isLoading.value = true
+    // A caption belongs to its photo, so an expanded one must not stay expanded over the
+    // next photo's — the reader would meet a wall of text they never asked to unfold.
+    captionExpanded.value = false
+  }
+})
 
-    function handleKeydown(event) {
-      if (!props.file) return
+// Moving into a different group is a fresh chapter: bring a dismissed hint back and collapse
+// the blurb again, so a long text doesn't stay expanded over the next photos. Keyed on the
+// group id rather than the label, because two groups may legitimately share a label.
+watch(() => props.groupContext?.id, () => {
+  groupTextExpanded.value = false
+  groupHintDismissed.value = false
+})
 
-      switch(event.key) {
-        case 'Escape':
-          emit('close')
-          break
-        case 'ArrowLeft':
-          emit('previous')
-          break
-        case 'ArrowRight':
-          emit('next')
-          break
-      }
-    }
+function handleImageLoad() {
+  isLoading.value = false
+}
 
-    onMounted(() => {
-      window.addEventListener('keydown', handleKeydown)
-    })
+function toggleControls() {
+  controlsVisible.value = !controlsVisible.value
+  emit('update:controls-visible', controlsVisible.value)
+}
 
-    onUnmounted(() => {
-      window.removeEventListener('keydown', handleKeydown)
-    })
-
-    return {
-      isVideoFile,
-      mediaUrl,
-      controlsVisible,
-      isLoading,
-      shouldMuteVideo,
-      captionVisible,
-      captionExpanded,
-      captionIsLong,
-      groupHintVisible,
-      groupTextExpanded,
-      groupHintDismissed,
-      toggleControls,
-      handleImageLoad
-    }
+function handleKeydown(event: KeyboardEvent) {
+  if (!props.file) return
+  switch (event.key) {
+    case 'Escape':
+      emit('close')
+      break
+    case 'ArrowLeft':
+      emit('previous')
+      break
+    case 'ArrowRight':
+      emit('next')
+      break
   }
 }
+
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 </script>

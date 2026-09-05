@@ -208,17 +208,7 @@
                 <span>Confirmed</span>
               </span>
             </div>
-            <p
-              v-if="isConfirmation"
-              class="subdlg-lede subdlg-lede--center"
-            >
-              New photos in <strong>{{ albumName }}</strong> will land in your inbox. Every email has a
-              one-click unsubscribe.
-            </p>
-            <p
-              v-else
-              class="subdlg-lede subdlg-lede--center"
-            >
+            <p class="subdlg-lede subdlg-lede--center">
               We'll email <strong>{{ sentTo }}</strong> whenever {{ albumName }} changes. Every message
               has a one-click unsubscribe.
             </p>
@@ -238,9 +228,9 @@
   </Teleport>
 </template>
 
-<script>
+<script setup lang="ts">
 import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
-import { useApi } from '../composables/useApi'
+import { useApi } from '@/composables/useApi'
 
 /**
  * Where the iOS app lives.
@@ -252,174 +242,136 @@ import { useApi } from '../composables/useApi'
  */
 const APP_STORE_URL = 'https://apps.apple.com/de/iphone/apps'
 
-export default {
-  name: 'SubscriptionDialog',
-  props: {
-    show: {
-      type: Boolean,
-      default: false
-    },
-    shareToken: {
-      type: String,
-      required: true
-    },
-    albumName: {
-      type: String,
-      default: 'this album'
-    },
-    isConfirmation: {
-      type: Boolean,
-      default: false
-    }
-  },
-  emits: ['close', 'subscribed'],
-  setup(props, { emit }) {
-    const { apiUrl } = useApi()
-    const appStoreUrl = APP_STORE_URL
-    const loading = ref(false)
-    const error = ref('')
-    const sentTo = ref('')
-    const view = ref('form') // 'form' | 'pending' | 'done'
-    const panel = ref(null)
-    const emailInput = ref(null)
-    const titleId = 'subdlg-title'
+type View = 'form' | 'pending' | 'done'
 
-    const formData = reactive({
-      email: '',
-      notifyAlbumUpdates: true,
-      notifyNewAlbums: false
+interface Props {
+  show: boolean
+  shareToken: string
+  albumName?: string
+}
+
+const props = withDefaults(defineProps<Props>(), { albumName: 'this album' })
+const emit = defineEmits<{ close: [] }>()
+
+const { apiUrl, requestPublicJson } = useApi()
+const appStoreUrl = APP_STORE_URL
+const loading = ref(false)
+const error = ref('')
+const sentTo = ref('')
+const view = ref<View>('form')
+const panel = ref<HTMLElement | null>(null)
+const emailInput = ref<HTMLInputElement | null>(null)
+const titleId = 'subdlg-title'
+
+const formData = reactive({
+  email: '',
+  notifyAlbumUpdates: true,
+  notifyNewAlbums: false
+})
+
+const eyebrow = computed(() => {
+  if (view.value === 'pending') return 'One step left'
+  if (view.value === 'done') return 'All set'
+  return 'Notify me about'
+})
+
+const title = computed(() => {
+  if (view.value === 'pending') return 'Confirm in your inbox'
+  if (view.value === 'done') return "You're on the list"
+  return props.albumName
+})
+
+watch(() => props.show, (open) => {
+  if (open) {
+    view.value = 'form'
+    window.addEventListener('keydown', onKeydown)
+    nextTick(() => {
+      if (view.value === 'form') emailInput.value?.focus()
+      else panel.value?.focus?.()
     })
-
-    const eyebrow = computed(() => {
-      if (view.value === 'pending') return 'One step left'
-      if (view.value === 'done') return 'All set'
-      return 'Notify me about'
-    })
-
-    const title = computed(() => {
-      if (view.value === 'pending') return 'Confirm in your inbox'
-      if (view.value === 'done') return "You're on the list"
-      return props.albumName
-    })
-
-    watch(() => props.show, (open) => {
-      if (open) {
-        view.value = props.isConfirmation ? 'done' : 'form'
-        window.addEventListener('keydown', onKeydown)
-        nextTick(() => {
-          if (view.value === 'form') emailInput.value?.focus()
-          else panel.value?.focus?.()
-        })
-      } else {
-        window.removeEventListener('keydown', onKeydown)
-        resetForm()
-      }
-    }, { immediate: true })
-
-    onUnmounted(() => window.removeEventListener('keydown', onKeydown))
-
-    function onKeydown(event) {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        close()
-      }
-    }
-
-    // Keep tabbing inside the dialog while it owns the screen
-    function trapTab(event) {
-      const focusable = panel.value?.querySelectorAll(
-        'button:not([disabled]), input:not([disabled]), a[href]'
-      )
-      if (!focusable || focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-
-    function resetForm() {
-      formData.email = ''
-      formData.notifyAlbumUpdates = true
-      formData.notifyNewAlbums = false
-      error.value = ''
-      sentTo.value = ''
-      view.value = props.isConfirmation ? 'done' : 'form'
-    }
-
-    function backToForm() {
-      view.value = 'form'
-      error.value = ''
-      nextTick(() => emailInput.value?.focus())
-    }
-
-    async function handleSubmit() {
-      error.value = ''
-
-      if (!formData.notifyAlbumUpdates && !formData.notifyNewAlbums) {
-        error.value = 'Pick at least one thing to be notified about.'
-        return
-      }
-
-      loading.value = true
-
-      try {
-        const response = await fetch(`${apiUrl}/api/public/subscriptions/albums/${props.shareToken}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            email: formData.email,
-            notifyAlbumUpdates: formData.notifyAlbumUpdates,
-            notifyNewAlbums: formData.notifyNewAlbums
-          })
-        })
-
-        const data = await response.json()
-
-        if (response.ok) {
-          sentTo.value = formData.email
-          // An already-confirmed subscriber just changed preferences — no new email goes out
-          view.value = data.confirmed ? 'done' : 'pending'
-          emit('subscribed')
-        } else {
-          error.value = data.message || 'That did not go through. Try again.'
-        }
-      } catch (err) {
-        console.error('Subscription error:', err)
-        error.value = 'We could not reach the server. Check your connection and try again.'
-      } finally {
-        loading.value = false
-      }
-    }
-
-    function close() {
-      emit('close')
-    }
-
-    return {
-      appStoreUrl,
-      formData,
-      loading,
-      error,
-      sentTo,
-      view,
-      panel,
-      emailInput,
-      titleId,
-      eyebrow,
-      title,
-      trapTab,
-      backToForm,
-      handleSubmit,
-      close
-    }
+  } else {
+    window.removeEventListener('keydown', onKeydown)
+    resetForm()
   }
+}, { immediate: true })
+
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.stopPropagation()
+    close()
+  }
+}
+
+// Keep tabbing inside the dialog while it owns the screen
+function trapTab(event: KeyboardEvent) {
+  const focusable = panel.value?.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), a[href]'
+  )
+  if (!focusable || focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function resetForm() {
+  formData.email = ''
+  formData.notifyAlbumUpdates = true
+  formData.notifyNewAlbums = false
+  error.value = ''
+  sentTo.value = ''
+  view.value = 'form'
+}
+
+function backToForm() {
+  view.value = 'form'
+  error.value = ''
+  nextTick(() => emailInput.value?.focus())
+}
+
+async function handleSubmit() {
+  error.value = ''
+
+  if (!formData.notifyAlbumUpdates && !formData.notifyNewAlbums) {
+    error.value = 'Pick at least one thing to be notified about.'
+    return
+  }
+
+  loading.value = true
+  try {
+    const data = await requestPublicJson<{ confirmed?: boolean }>(
+      `${apiUrl}/api/public/subscriptions/albums/${props.shareToken}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email,
+          notifyAlbumUpdates: formData.notifyAlbumUpdates,
+          notifyNewAlbums: formData.notifyNewAlbums
+        })
+      }
+    )
+    sentTo.value = formData.email
+    // An already-confirmed subscriber just changed preferences — no new email goes out
+    view.value = data.confirmed ? 'done' : 'pending'
+  } catch (err) {
+    error.value = err instanceof Error && err.message
+      ? err.message
+      : 'We could not reach the server. Check your connection and try again.'
+  } finally {
+    loading.value = false
+  }
+}
+
+function close() {
+  emit('close')
 }
 </script>
 

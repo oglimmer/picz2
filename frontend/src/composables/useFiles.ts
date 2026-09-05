@@ -1,6 +1,20 @@
 import { ref, computed, watch, type Ref, type ComputedRef } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
+import { countTags } from "../utils/tags";
 import type { AlbumFile, TagCount } from "@/types";
+
+interface FilesResponse {
+  files?: AlbumFile[];
+  totalSize?: number;
+}
+
+interface TagsResponse {
+  tags?: string[];
+}
+
+interface CountResponse {
+  updatedCount?: number;
+}
 
 export interface FilesComposable {
   files: Ref<AlbumFile[]>;
@@ -15,6 +29,7 @@ export interface FilesComposable {
     isPresentationMode?: boolean,
   ) => Promise<void>;
   deleteFile: (fileId: number) => Promise<void>;
+  rotateFile: (fileId: number) => Promise<void>;
   addTag: (fileId: number, tagName: string) => Promise<void>;
   removeTag: (fileId: number, tagName: string) => Promise<void>;
   updateCaption: (fileId: number, caption: string) => Promise<void>;
@@ -26,10 +41,11 @@ export interface FilesComposable {
 }
 
 /**
- * Files composable for managing file data and operations
+ * The files of one album and everything that changes them. Per-instance state (see README.md):
+ * the gallery view calls this once and owns the list.
  */
 export function useFiles(): FilesComposable {
-  const { apiUrl, fetchWithAuth, shareToken } = useApi();
+  const { apiUrl, requestJson, requestPublicJson, shareToken } = useApi();
 
   const files = ref<AlbumFile[]>([]);
   const allFilesUnfiltered = ref<AlbumFile[]>([]);
@@ -37,41 +53,24 @@ export function useFiles(): FilesComposable {
   const error = ref<string | null>(null);
   const totalSize = ref<number>(0);
   const selectedTag = ref<string>("");
+  // Bumped per load; a response for an older load is dropped, so switching albums quickly can
+  // never leave the previous album's files on screen.
+  let loadSeq = 0;
 
-  // Computed: Get tags actually used in files
-  const tagsUsedInAlbum = computed<TagCount[]>(() => {
-    const sourceFiles =
-      allFilesUnfiltered.value.length > 0
-        ? allFilesUnfiltered.value
-        : files.value;
+  // Tags actually carried by the album's files, with counts, for the presentation filter.
+  const tagsUsedInAlbum = computed<TagCount[]>(() =>
+    countTags(
+      allFilesUnfiltered.value.length > 0 ? allFilesUnfiltered.value : files.value,
+    ),
+  );
 
-    if (!sourceFiles || sourceFiles.length === 0) return [];
-
-    const tagCounts = new Map<string, number>();
-    sourceFiles.forEach((file) => {
-      if (file.tags && Array.isArray(file.tags)) {
-        file.tags.forEach((tag) => {
-          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-        });
-      }
-    });
-
-    return Array.from(tagCounts.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  });
-
-  // Watch for tag changes in presentation mode and update filtered files
+  // Presentation mode holds the whole album and filters it here; the logged-in gallery reloads
+  // from the server instead (its own watcher), in which case `allFilesUnfiltered` is empty.
   watch(selectedTag, (newTag) => {
-    // Only apply client-side filtering if we have unfiltered data (presentation mode)
     if (allFilesUnfiltered.value.length > 0) {
-      if (newTag) {
-        files.value = allFilesUnfiltered.value.filter(
-          (file) => file.tags && file.tags.includes(newTag),
-        );
-      } else {
-        files.value = allFilesUnfiltered.value;
-      }
+      files.value = newTag
+        ? allFilesUnfiltered.value.filter((file) => file.tags?.includes(newTag))
+        : allFilesUnfiltered.value;
     }
   });
 
@@ -84,158 +83,99 @@ export function useFiles(): FilesComposable {
   ): Promise<void> {
     if (!albumId) return;
 
+    const seq = ++loadSeq;
     loadingFiles.value = true;
     error.value = null;
 
     try {
-      let url: string;
-      let response: Response;
-
-      // In presentation mode, always load all files (no tag filtering on server)
+      let data: FilesResponse;
       if (isPresentationMode) {
-        if (shareToken.value) {
-          // Public presentation mode - use public endpoint
-          url = `${apiUrl}/api/albums/public/${shareToken.value}/files`;
-          response = await fetch(url);
-        } else {
-          // Authenticated presentation mode - use regular endpoint without tag
-          url = `${apiUrl}/api/files?albumId=${albumId}`;
-          response = await fetchWithAuth(url);
-        }
+        // Presentation mode always loads the whole album and filters client-side.
+        data = shareToken.value
+          ? await requestPublicJson<FilesResponse>(
+              `${apiUrl}/api/albums/public/${shareToken.value}/files`,
+            )
+          : await requestJson<FilesResponse>(`${apiUrl}/api/files?albumId=${albumId}`);
       } else {
-        // Regular mode - use authenticated endpoint with tag filtering
-        url = `${apiUrl}/api/files?albumId=${albumId}`;
+        let url = `${apiUrl}/api/files?albumId=${albumId}`;
         if (selectedTag.value) {
           url += `&tag=${encodeURIComponent(selectedTag.value)}`;
         }
-        response = await fetchWithAuth(url);
+        data = await requestJson<FilesResponse>(url);
+      }
+      if (seq !== loadSeq) return;
+
+      let loadedFiles: AlbumFile[] = data.files || [];
+
+      if (isPresentationMode) {
+        allFilesUnfiltered.value = loadedFiles;
+        if (selectedTag.value) {
+          loadedFiles = loadedFiles.filter((file) => file.tags?.includes(selectedTag.value));
+        }
       }
 
-      const data = await response.json();
+      files.value = loadedFiles;
+      totalSize.value = data.totalSize || 0;
 
-      if (data.success) {
-        let loadedFiles: AlbumFile[] = data.files || [];
-
-        if (isPresentationMode) {
-          // In presentation mode, store all files and do client-side filtering
-          allFilesUnfiltered.value = loadedFiles;
-
-          // Filter by tag if needed
-          if (selectedTag.value) {
-            loadedFiles = loadedFiles.filter(
-              (file) => file.tags && file.tags.includes(selectedTag.value),
-            );
-          }
-        }
-
-        files.value = loadedFiles;
-        totalSize.value = data.totalSize || 0;
-
-        // Store unfiltered files for tag list in non-presentation mode
-        if (!isPresentationMode && !selectedTag.value) {
-          allFilesUnfiltered.value = files.value;
-        }
-      } else {
-        throw new Error("Failed to load files");
+      // Unfiltered copy for the tag list in the logged-in gallery.
+      if (!isPresentationMode && !selectedTag.value) {
+        allFilesUnfiltered.value = files.value;
       }
     } catch (err) {
+      if (seq !== loadSeq) return;
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       error.value = `Error loading photos: ${errorMessage}`;
-      console.error("Error loading files:", err);
     } finally {
-      loadingFiles.value = false;
+      if (seq === loadSeq) loadingFiles.value = false;
     }
   }
 
-  /**
-   * Delete a file
-   */
+  /** Patches every copy of a file — both lists can hold it in presentation mode. */
+  function patchFile(fileId: number, patch: (file: AlbumFile) => void): void {
+    for (const list of [files.value, allFilesUnfiltered.value]) {
+      const file = list.find((f) => f.id === fileId);
+      if (file) patch(file);
+    }
+  }
+
   async function deleteFile(fileId: number): Promise<void> {
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/files/${fileId}`, {
-        method: "DELETE",
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const fileIndex = files.value.findIndex((f) => f.id === fileId);
-        if (fileIndex !== -1) {
-          const deletedFile = files.value[fileIndex];
-          files.value.splice(fileIndex, 1);
-          totalSize.value -= deletedFile.size;
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error deleting file:", err);
-      throw err;
+    await requestJson(`${apiUrl}/api/files/${fileId}`, { method: "DELETE" });
+    const index = files.value.findIndex((f) => f.id === fileId);
+    if (index !== -1) {
+      const [deleted] = files.value.splice(index, 1);
+      totalSize.value -= deleted.size;
     }
+    const unfilteredIndex = allFilesUnfiltered.value.findIndex((f) => f.id === fileId);
+    if (unfilteredIndex !== -1) allFilesUnfiltered.value.splice(unfilteredIndex, 1);
   }
 
   /**
-   * Add tag to file
+   * Asks the worker to turn the image left by 90° (Phase 4.5: the api answers 202 and the job runs
+   * later). The local status flips to QUEUED at once so the tile shows its spinner; the processing
+   * poller brings it back to DONE when the derivatives are rewritten.
    */
+  async function rotateFile(fileId: number): Promise<void> {
+    await requestJson(`${apiUrl}/api/files/${fileId}/rotate`, { method: "POST" });
+    patchFile(fileId, (file) => {
+      file.processingStatus = "QUEUED";
+    });
+  }
+
   async function addTag(fileId: number, tagName: string): Promise<void> {
     if (!tagName) return;
-
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/files/${fileId}/tags`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ tagName }),
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const file = files.value.find((f) => f.id === fileId);
-        if (file && data.tags) {
-          // Update with the tags returned from the backend
-          file.tags = data.tags;
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error adding tag:", err);
-      throw err;
-    }
+    const data = await requestJson<TagsResponse>(
+      `${apiUrl}/api/files/${fileId}/tags`,
+      jsonBody("POST", { tagName }),
+    );
+    if (data.tags) patchFile(fileId, (file) => (file.tags = data.tags!));
   }
 
-  /**
-   * Remove tag from file
-   */
   async function removeTag(fileId: number, tagName: string): Promise<void> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/files/${fileId}/tags/${encodeURIComponent(tagName)}`,
-        {
-          method: "DELETE",
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const file = files.value.find((f) => f.id === fileId);
-        if (file && data.tags) {
-          // Update with the tags returned from the backend
-          file.tags = data.tags;
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error removing tag:", err);
-      throw err;
-    }
+    const data = await requestJson<TagsResponse>(
+      `${apiUrl}/api/files/${fileId}/tags/${encodeURIComponent(tagName)}`,
+      { method: "DELETE" },
+    );
+    if (data.tags) patchFile(fileId, (file) => (file.tags = data.tags!));
   }
 
   /**
@@ -243,155 +183,55 @@ export function useFiles(): FilesComposable {
    * either way, so both lists are patched in place rather than reloaded.
    */
   async function updateCaption(fileId: number, caption: string): Promise<void> {
-    const response = await fetchWithAuth(
+    const updated = await requestJson<AlbumFile>(
       `${apiUrl}/api/files/${fileId}/caption`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ caption }),
-      },
+      jsonBody("PUT", { caption }),
     );
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || "Unknown error");
-    }
-
-    const updated: AlbumFile = await response.json();
-
-    // Both arrays can hold the same photo (presentation mode filters one out of the other),
-    // so patch whichever copies exist instead of assuming a single home.
-    for (const list of [files.value, allFilesUnfiltered.value]) {
-      const file = list.find((f) => f.id === fileId);
-      if (file) file.caption = updated.caption ?? null;
-    }
+    patchFile(fileId, (file) => (file.caption = updated.caption ?? null));
   }
 
   /**
    * Add a tag to every file in an album. Returns how many files actually changed
    * (files that already had the tag are skipped by the backend).
    */
-  async function addTagToAllFiles(
-    albumId: number,
-    tagName: string,
-  ): Promise<number> {
-    const response = await fetchWithAuth(
+  async function addTagToAllFiles(albumId: number, tagName: string): Promise<number> {
+    const data = await requestJson<CountResponse>(
       `${apiUrl}/api/albums/${albumId}/files/tags/${encodeURIComponent(tagName)}`,
-      {
-        method: "POST",
-      },
+      { method: "POST" },
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
     return data.updatedCount || 0;
   }
 
-  /**
-   * Remove a tag from every file in an album. Returns how many files actually changed.
-   */
-  async function removeTagFromAllFiles(
-    albumId: number,
-    tagName: string,
-  ): Promise<number> {
-    const response = await fetchWithAuth(
+  /** Remove a tag from every file in an album. Returns how many files actually changed. */
+  async function removeTagFromAllFiles(albumId: number, tagName: string): Promise<number> {
+    const data = await requestJson<CountResponse>(
       `${apiUrl}/api/albums/${albumId}/files/tags/${encodeURIComponent(tagName)}`,
-      {
-        method: "DELETE",
-      },
+      { method: "DELETE" },
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unknown error");
-    }
-
     return data.updatedCount || 0;
   }
 
-  /**
-   * Reorder files
-   */
   async function reorderFiles(fileIds: number[]): Promise<void> {
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/files/reorder`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ fileIds }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error reordering files:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/files/reorder`, jsonBody("PUT", { fileIds }));
   }
 
-  /**
-   * Reorder files by filename
-   */
   async function reorderByFilename(albumId: number): Promise<number> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId}/reorder-by-filename`,
-        {
-          method: "POST",
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        return data.updatedCount || 0;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error reordering files:", err);
-      throw err;
-    }
+    const data = await requestJson<CountResponse>(
+      `${apiUrl}/api/albums/${albumId}/reorder-by-filename`,
+      { method: "POST" },
+    );
+    return data.updatedCount || 0;
   }
 
-  /**
-   * Reorder files by EXIF date
-   */
   async function reorderByExif(albumId: number): Promise<number> {
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId}/reorder-by-exif`,
-        {
-          method: "POST",
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        return data.updatedCount || 0;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error reordering files by EXIF:", err);
-      throw err;
-    }
+    const data = await requestJson<CountResponse>(
+      `${apiUrl}/api/albums/${albumId}/reorder-by-exif`,
+      { method: "POST" },
+    );
+    return data.updatedCount || 0;
   }
 
   return {
-    // State
     files,
     allFilesUnfiltered,
     loadingFiles,
@@ -399,10 +239,9 @@ export function useFiles(): FilesComposable {
     totalSize,
     selectedTag,
     tagsUsedInAlbum,
-
-    // Methods
     loadAlbumFiles,
     deleteFile,
+    rotateFile,
     addTag,
     removeTag,
     updateCaption,

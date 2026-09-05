@@ -1,8 +1,17 @@
 import { ref, type Ref } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
 import type { Tag } from "@/types";
 
-// Shared tags state across the app
+interface TagsResponse {
+  tags?: Tag[];
+}
+
+interface TagResponse {
+  tag?: Tag;
+}
+
+// Module singleton (see README.md): the tag list is one app-wide fact, read by the albums page,
+// the gallery and the tag manager at the same time.
 const availableTags = ref<Tag[]>([]);
 const enabledAlbumTags = ref<Tag[]>([]);
 const loading = ref<boolean>(false);
@@ -22,169 +31,67 @@ export interface TagsComposable {
   clearEnabledAlbumTags: () => void;
 }
 
-/**
- * Tags composable for managing tags
- */
 export function useTags(): TagsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
 
-  /**
-   * Load all tags
-   */
   async function loadTags(): Promise<void> {
     loading.value = true;
     error.value = null;
-
     try {
-      const response = await fetchWithAuth(`${apiUrl}/api/tags`);
-      const data = await response.json();
-
-      if (data.success) {
-        availableTags.value = data.tags || [];
-      } else {
-        throw new Error("Failed to load tags");
-      }
+      const data = await requestJson<TagsResponse>(`${apiUrl}/api/tags`);
+      availableTags.value = data.tags || [];
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       error.value = `Error loading tags: ${errorMessage}`;
-      console.error("Error loading tags:", err);
     } finally {
       loading.value = false;
     }
   }
 
-  /**
-   * Create a new tag
-   */
   async function createTag(tagName: string): Promise<Tag> {
     if (!tagName || tagName.trim() === "") {
       throw new Error("Tag name is required");
     }
-
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/tags`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ tagName: tagName.trim() }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        if (data.tag) {
-          availableTags.value.push(data.tag);
-        }
-        return data.tag;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error creating tag:", err);
-      throw err;
-    }
+    const data = await requestJson<TagResponse>(
+      `${apiUrl}/api/tags`,
+      jsonBody("POST", { tagName: tagName.trim() }),
+    );
+    if (!data.tag) throw new Error("The server returned no tag");
+    availableTags.value.push(data.tag);
+    return data.tag;
   }
 
-  /**
-   * Update a tag
-   */
-  async function updateTag(
-    tagId: number,
-    newTagName: string,
-  ): Promise<Tag | undefined> {
+  async function updateTag(tagId: number, newTagName: string): Promise<Tag | undefined> {
     if (!newTagName || newTagName.trim() === "") {
       throw new Error("Tag name is required");
     }
-
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/tags/${tagId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ tagName: newTagName.trim() }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const tag = availableTags.value.find((t) => t.id === tagId);
-        if (tag) {
-          tag.name = newTagName.trim();
-        }
-        return tag;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error updating tag:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/tags/${tagId}`, jsonBody("PUT", { tagName: newTagName.trim() }));
+    const tag = availableTags.value.find((t) => t.id === tagId);
+    if (tag) tag.name = newTagName.trim();
+    return tag;
   }
 
-  /**
-   * Delete a tag
-   */
   async function deleteTag(tagId: number): Promise<void> {
-    try {
-      const response = await fetchWithAuth(`${apiUrl}/api/tags/${tagId}`, {
-        method: "DELETE",
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const tagIndex = availableTags.value.findIndex((t) => t.id === tagId);
-        if (tagIndex !== -1) {
-          availableTags.value.splice(tagIndex, 1);
-        }
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error deleting tag:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/tags/${tagId}`, { method: "DELETE" });
+    const tagIndex = availableTags.value.findIndex((t) => t.id === tagId);
+    if (tagIndex !== -1) availableTags.value.splice(tagIndex, 1);
   }
 
+  /** Non-fatal: an album with no readable enabled-tag list simply shows none. */
   async function loadEnabledAlbumTags(albumId: number): Promise<void> {
     try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/albums/${albumId}/enabled-tags`,
-      );
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        enabledAlbumTags.value = data.tags || [];
-      } else {
-        throw new Error(data.message || "Failed to load enabled tags");
-      }
-    } catch (err) {
-      console.error("Error loading enabled album tags:", err);
+      const data = await requestJson<TagsResponse>(`${apiUrl}/api/albums/${albumId}/enabled-tags`);
+      enabledAlbumTags.value = data.tags || [];
+    } catch {
       enabledAlbumTags.value = [];
     }
   }
 
-  async function setEnabledAlbumTags(
-    albumId: number,
-    tagIds: number[],
-  ): Promise<void> {
-    const response = await fetchWithAuth(
+  async function setEnabledAlbumTags(albumId: number, tagIds: number[]): Promise<void> {
+    const data = await requestJson<TagsResponse>(
       `${apiUrl}/api/albums/${albumId}/enabled-tags`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tagIds }),
-      },
+      jsonBody("PUT", { tagIds }),
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Failed to update enabled tags");
-    }
-
     enabledAlbumTags.value = data.tags || [];
   }
 
@@ -193,13 +100,10 @@ export function useTags(): TagsComposable {
   }
 
   return {
-    // State
     availableTags,
     enabledAlbumTags,
     loading,
     error,
-
-    // Methods
     loadTags,
     createTag,
     updateTag,

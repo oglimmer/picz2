@@ -1,7 +1,6 @@
 import { Upload } from "tus-js-client";
 import { formatBytes } from "../utils/format";
 import { getApiUrl } from "../utils/api-config";
-import { basicAuthHeader } from "../utils/basicAuth";
 import { useApi } from "./useApi";
 import { useAuth } from "./useAuth";
 import { useCapabilities } from "./useCapabilities";
@@ -28,33 +27,32 @@ export interface UploadResult {
 /**
  * Cached across calls: a multi-file upload should cost one token, not one per file.
  *
- * Keyed by the credentials it was minted with, which is what makes it self-invalidating — a
- * logout (or a login as somebody else) changes the key, so the old token is never reused and
+ * Keyed by the session it was minted under, which is what makes it self-invalidating — a logout
+ * (or a login as somebody else) changes the session header, so the old token is never reused and
  * `useAuth` does not have to know this cache exists. Importing it there would also make the two
  * composables circular.
  */
-let cachedUploadToken: { credentials: string; token: Promise<string | null> } | null = null;
+let cachedUploadToken: { session: string; token: Promise<string | null> } | null = null;
 
 export function useUpload() {
   const { fetchWithAuth } = useApi();
-  const { authEmail, authPassword } = useAuth();
+  const { getAuthHeaders } = useAuth();
   const { ensureLoaded } = useCapabilities();
 
   /**
-   * Mints a scoped upload token, or null when the server has no such endpoint (§5.9).
+   * Mints a scoped upload token (§5.9), or null when the server refused or is unreachable.
    *
-   * A failure here is deliberately not surfaced: it means "fall back to the legacy credential
-   * value", which is what an older server still expects.
+   * Since D78 the browser holds no password, so there is no legacy `email:password` to fall back
+   * to: without a token the TUS path cannot start and says so.
    */
   function fetchUploadToken(): Promise<string | null> {
-    const credentials = `${authEmail.value}:${authPassword.value}`;
-    if (cachedUploadToken?.credentials === credentials) return cachedUploadToken.token;
+    const session = getAuthHeaders().Authorization ?? "";
+    if (cachedUploadToken?.session === session) return cachedUploadToken.token;
 
     const token = (async () => {
       try {
-        const res = await fetch(`${getApiUrl()}/api/upload-tokens`, {
+        const res = await fetchWithAuth(`${getApiUrl()}/api/upload-tokens`, {
           method: "POST",
-          headers: { Authorization: basicAuthHeader(authEmail.value, authPassword.value) },
         });
         if (!res.ok) return null;
         const body = (await res.json()) as { token?: string };
@@ -63,7 +61,7 @@ export function useUpload() {
         return null;
       }
     })();
-    cachedUploadToken = { credentials, token };
+    cachedUploadToken = { session, token };
     return token;
   }
 
@@ -82,6 +80,9 @@ export function useUpload() {
         throw new Error(tooLargeMessage(file.size, caps.tus.maxSize));
       }
       const uploadToken = await fetchUploadToken();
+      if (!uploadToken) {
+        throw new Error("Could not authorise the upload — sign out and back in, then try again.");
+      }
       return uploadViaTus(file, albumId, caps.tus.endpoint, opts, caps.tus.maxSize, uploadToken);
     }
     return uploadViaMultipart(file, albumId, opts);
@@ -93,7 +94,7 @@ export function useUpload() {
     endpoint: string,
     opts: UploadOptions,
     maxSize: number,
-    uploadToken: string | null,
+    uploadToken: string,
   ): Promise<UploadResult> {
     return new Promise((resolve, reject) => {
       const apiUrl = getApiUrl();
@@ -101,7 +102,6 @@ export function useUpload() {
         ? endpoint
         : `${apiUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 
-      const credentials = `${authEmail.value}:${authPassword.value}`;
       const upload = new Upload(file, {
         endpoint: tusUrl,
         retryDelays: [0, 1000, 3000, 5000],
@@ -109,18 +109,16 @@ export function useUpload() {
           filename: file.name,
           filetype: file.type || "application/octet-stream",
           albumId: String(albumId),
-          // Scoped upload token when the server offers one, otherwise the legacy plain
-          // "email:password" that the api hook splits and validates through the existing
-          // AuthenticationManager. tusd persists this metadata to a `.info` object in storage
-          // for the life of the upload, which is why sending the account password here is the
-          // fallback rather than the default (§5.9). Same convention as iOS.
-          auth: uploadToken ?? credentials,
+          // Scoped upload token (§5.9): tusd persists this metadata to a `.info` object in
+          // storage for the life of the upload, so nothing that outlives the upload may travel
+          // here. Same convention as iOS.
+          auth: uploadToken,
         },
         headers: {
           // Belt-and-braces: tusd forwards Authorization to the hook (per
           // -hooks-http-forward-headers=Authorization). Sending it lets a future server
           // change prefer the standard header without breaking older clients.
-          Authorization: basicAuthHeader(authEmail.value, authPassword.value),
+          ...getAuthHeaders(),
         },
         onError(err) {
           // tus.DetailedError exposes the original response status + headers on a real HTTP
@@ -208,7 +206,7 @@ export function useUpload() {
  * own leaves the user unable to tell a file that is slightly over the cap from one that never
  * had a chance, which is the difference between trimming a clip and giving up.
  */
-function tooLargeMessage(fileSize: number, maxSize: number): string {
+export function tooLargeMessage(fileSize: number, maxSize: number): string {
   return `File is ${formatBytes(fileSize)} — this server accepts up to ${formatBytes(maxSize)}.`;
 }
 
@@ -218,7 +216,7 @@ function tooLargeMessage(fileSize: number, maxSize: number): string {
  * failure. Status `null` means a network / parse / library error with no HTTP response —
  * fall through to the original message (e.g. "Failed to fetch").
  */
-function translateUploadError(
+export function translateUploadError(
   status: number | null,
   retryAfter: string | null,
   fallbackMessage?: string,

@@ -1,5 +1,5 @@
 import { ref, type Ref } from "vue";
-import { useApi } from "./useApi";
+import { useApi, jsonBody } from "./useApi";
 
 /**
  * The tag every newly uploaded photo or video gets (D70).
@@ -25,8 +25,8 @@ export interface SettingsComposable {
   updateNewAssetTag: (tagName: NewAssetTag) => Promise<void>;
 }
 
-// Shared across every caller (same pattern as useAuth): the albums masthead shows the
-// upload destination while other components change it, so both must read one ref.
+// Module singleton (see README.md): the albums masthead shows the upload destination while other
+// components change it, so both must read one ref.
 const language1Name = ref<string>("German");
 const language2Name = ref<string>("English");
 const targetAlbumId = ref<number | null>(null);
@@ -34,178 +34,64 @@ const targetAlbumId = ref<number | null>(null);
 // than tell the user their album is closed while it is open.
 const newAssetTag = ref<NewAssetTag>("hidden");
 
-/**
- * Settings composable for managing app settings
- */
 export function useSettings(): SettingsComposable {
-  const { apiUrl, fetchWithAuth } = useApi();
+  const { apiUrl, requestJson } = useApi();
 
-  /**
-   * Load language settings
-   */
+  /** Non-fatal: the defaults stand if the server cannot be asked. */
   async function loadLanguageSettings(): Promise<void> {
     try {
-      const response = await fetchWithAuth(`${apiUrl}/api/settings/languages`);
-      const data = await response.json();
-
-      if (data.success) {
-        language1Name.value = data.language1 || "German";
-        language2Name.value = data.language2 || "English";
-      }
-    } catch (err) {
-      console.error("Error loading language settings:", err);
+      const data = await requestJson<{ language1?: string; language2?: string }>(
+        `${apiUrl}/api/settings/languages`,
+      );
+      language1Name.value = data.language1 || "German";
+      language2Name.value = data.language2 || "English";
+    } catch {
+      // keep the defaults
     }
   }
 
-  /**
-   * Update language 1 name
-   */
-  async function updateLanguage1Name(newName: string): Promise<void> {
+  async function updateLanguageName(slot: 1 | 2, newName: string): Promise<void> {
     if (!newName || newName.trim() === "") {
       throw new Error("Language name cannot be empty");
     }
-
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/settings/languages/1`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ value: newName }),
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        language1Name.value = newName;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error saving language 1 name:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/settings/languages/${slot}`, jsonBody("PUT", { value: newName }));
+    (slot === 1 ? language1Name : language2Name).value = newName;
   }
 
-  /**
-   * Update language 2 name
-   */
-  async function updateLanguage2Name(newName: string): Promise<void> {
-    if (!newName || newName.trim() === "") {
-      throw new Error("Language name cannot be empty");
-    }
+  const updateLanguage1Name = (newName: string) => updateLanguageName(1, newName);
+  const updateLanguage2Name = (newName: string) => updateLanguageName(2, newName);
 
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/settings/languages/2`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ value: newName }),
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        language2Name.value = newName;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error saving language 2 name:", err);
-      throw err;
-    }
-  }
-
-  /**
-   * Load target album setting
-   */
   async function loadTargetAlbum(): Promise<void> {
     try {
-      const response = await fetchWithAuth(
+      const data = await requestJson<{ albumId?: number | null }>(
         `${apiUrl}/api/settings/target-album`,
       );
-      const data = await response.json();
-
-      if (data.success) {
-        targetAlbumId.value = data.albumId || null;
-      }
-    } catch (err) {
-      console.error("Error loading target album:", err);
+      targetAlbumId.value = data.albumId || null;
+    } catch {
+      // leave whatever we had
     }
   }
 
-  /**
-   * Update target album
-   */
   async function updateTargetAlbum(albumId: number): Promise<void> {
     if (!albumId) {
       throw new Error("Album ID is required");
     }
-
-    try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/settings/target-album`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ albumId }),
-        },
-      );
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        targetAlbumId.value = albumId;
-      } else {
-        throw new Error(data.message || "Unknown error");
-      }
-    } catch (err) {
-      console.error("Error saving target album:", err);
-      throw err;
-    }
+    await requestJson(`${apiUrl}/api/settings/target-album`, jsonBody("PUT", { albumId }));
+    targetAlbumId.value = albumId;
   }
 
-  /**
-   * Clear the target album — the iOS app stops uploading until one is picked again.
-   */
+  /** Clear the target album — the iOS app stops uploading until one is picked again. */
   async function clearTargetAlbum(): Promise<void> {
-    const response = await fetchWithAuth(`${apiUrl}/api/settings/target-album`, {
-      method: "DELETE",
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Failed to pause uploads");
-    }
-
+    await requestJson(`${apiUrl}/api/settings/target-album`, { method: "DELETE" });
     targetAlbumId.value = null;
   }
 
-  /**
-   * Load which tag new uploads get.
-   */
   async function loadNewAssetTag(): Promise<void> {
     try {
-      const response = await fetchWithAuth(
-        `${apiUrl}/api/settings/new-asset-tag`,
-      );
-      const data = await response.json();
-
-      if (data.success && data.tagName) {
-        newAssetTag.value = data.tagName as NewAssetTag;
-      }
-    } catch (err) {
-      console.error("Error loading new-asset tag:", err);
+      const data = await requestJson<{ tagName?: string }>(`${apiUrl}/api/settings/new-asset-tag`);
+      if (data.tagName) newAssetTag.value = data.tagName as NewAssetTag;
+    } catch {
+      // keep "hidden", the safe default
     }
   }
 
@@ -217,34 +103,18 @@ export function useSettings(): SettingsComposable {
    * the flag is a handshake between the two, not a second UI state.
    */
   async function updateNewAssetTag(tagName: NewAssetTag): Promise<void> {
-    const response = await fetchWithAuth(
+    const data = await requestJson<{ tagName?: string }>(
       `${apiUrl}/api/settings/new-asset-tag`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ tagName, confirmed: true }),
-      },
+      jsonBody("PUT", { tagName, confirmed: true }),
     );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Failed to save the setting");
-    }
-
-    newAssetTag.value = data.tagName as NewAssetTag;
+    newAssetTag.value = (data.tagName as NewAssetTag) ?? tagName;
   }
 
   return {
-    // State
     language1Name,
     language2Name,
     targetAlbumId,
     newAssetTag,
-
-    // Methods
     loadLanguageSettings,
     updateLanguage1Name,
     updateLanguage2Name,

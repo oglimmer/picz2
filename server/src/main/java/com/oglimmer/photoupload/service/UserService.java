@@ -30,6 +30,7 @@ public class UserService {
   private final PasswordEncoder passwordEncoder;
   private final EmailService emailService;
   private final UploadTokenService uploadTokenService;
+  private final SessionTokenService sessionTokenService;
 
   @Transactional
   public User createUser(String email, String password) {
@@ -171,7 +172,8 @@ public class UserService {
   }
 
   /**
-   * Changing the password has to invalidate outstanding upload tokens (§5.9).
+   * Changing the password has to invalidate outstanding upload tokens (§5.9) and every browser
+   * session (D78).
    *
    * <p>Otherwise a token minted before the change keeps working, and "I changed my password" would
    * stop meaning "whatever had my old credentials is locked out" — which is the whole reason anyone
@@ -181,6 +183,10 @@ public class UserService {
     int revoked = uploadTokenService.revokeAllFor(user.getId());
     if (revoked > 0) {
       log.info("Revoked {} upload token(s) for user {}", revoked, user.getEmail());
+    }
+    int sessions = sessionTokenService.revokeAllFor(user.getId());
+    if (sessions > 0) {
+      log.info("Revoked {} session(s) for user {}", sessions, user.getEmail());
     }
   }
 

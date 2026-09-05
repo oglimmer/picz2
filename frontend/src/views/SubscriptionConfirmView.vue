@@ -22,63 +22,43 @@
         <p class="info-text">
           You will now receive email notifications based on your preferences.
         </p>
-        <div v-if="albumName" class="album-info">
-          <p>Subscribed to: <strong>{{ albumName }}</strong></p>
-        </div>
       </div>
     </div>
   </div>
 </template>
 
-<script>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { useApi } from '../composables/useApi'
+import { useApi } from '@/composables/useApi'
 
-export default {
-  name: 'SubscriptionConfirmView',
-  setup() {
-    const route = useRoute()
-    const { apiUrl } = useApi()
+const route = useRoute()
+const { apiUrl, requestPublicJson } = useApi()
 
-    const loading = ref(true)
-    const error = ref('')
-    const success = ref('')
-    const albumName = ref('')
+const loading = ref(true)
+const error = ref('')
+const success = ref('')
 
-    onMounted(async () => {
-      const token = route.query.token
+onMounted(async () => {
+  const token = typeof route.query.token === 'string' ? route.query.token : ''
 
-      if (!token) {
-        error.value = 'No confirmation token provided'
-        loading.value = false
-        return
-      }
-
-      try {
-        const response = await fetch(`${apiUrl}/api/public/subscriptions/confirm?token=${token}`)
-        const data = await response.json()
-
-        if (response.ok) {
-          success.value = data.message || 'Your subscription has been confirmed successfully!'
-          // You could extract album name from response if needed
-        } else {
-          error.value = data.message || 'Failed to confirm subscription'
-        }
-      } catch (err) {
-        console.error('Confirmation error:', err)
-        error.value = 'An error occurred while confirming your subscription. Please try again later.'
-      } finally {
-        loading.value = false
-      }
-    })
-
-    return {
-      loading,
-      error,
-      success,
-      albumName
-    }
+  if (!token) {
+    error.value = 'No confirmation token provided'
+    loading.value = false
+    return
   }
-}
+
+  try {
+    const data = await requestPublicJson<{ message?: string }>(
+      `${apiUrl}/api/public/subscriptions/confirm?token=${encodeURIComponent(token)}`
+    )
+    success.value = data.message || 'Your subscription has been confirmed successfully!'
+  } catch (err) {
+    error.value = err instanceof Error && err.message
+      ? err.message
+      : 'An error occurred while confirming your subscription. Please try again later.'
+  } finally {
+    loading.value = false
+  }
+})
 </script>

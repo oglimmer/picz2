@@ -7,6 +7,9 @@ replicaCount: 1
 # Backend (API) configuration
 backend:
   name: api
+  # D78 — how long a browser session token stays valid. The web app holds this instead of the
+  # account password; logout and any password change revoke it early.
+  sessionTokenTtlDays: 30
   image:
     repository: registry.oglimmer.com/picz2-be
     pullPolicy: Always
