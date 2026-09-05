@@ -84,6 +84,11 @@ public class SecurityConfig {
                     // comes from users.is_admin via CustomUserDetailsService.
                     .requestMatchers("/api/admin/**")
                     .hasRole(CustomUserDetailsService.ROLE_ADMIN)
+                    // The two gallery language names are one instance-wide pair (D75). Anyone may
+                    // read them — the public share page does — but renaming them changes every
+                    // user's gallery, so that is the operator's call.
+                    .requestMatchers(HttpMethod.PUT, "/api/settings/languages/**")
+                    .hasRole(CustomUserDetailsService.ROLE_ADMIN)
                     .anyRequest()
                     .authenticated())
         .httpBasic(basic -> basic.authenticationEntryPoint(silentBasicEntryPoint()));

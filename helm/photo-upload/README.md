@@ -523,6 +523,8 @@ UPDATE users SET is_admin = TRUE WHERE email = 'you@example.com';
 ```
 
 Any other account gets 403 on those routes, even with a valid login.
+The same flag gates renaming the two gallery language names (`PUT /api/settings/languages/*`);
+reading them stays public because the share page needs them.
 
 Counted: originals, derivatives (thumb/medium/large/transcoded) and narration audio. **Not**
 counted: anything under `tus-uploads/`, which is in flight and swept by retention either way — an

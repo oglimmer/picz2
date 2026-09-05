@@ -54,7 +54,7 @@ Paths are relative to `server/src/main/java/com/oglimmer/photoupload/`.
 
 ## Patterns and architecture
 
-**Status 2026-09-05 (second pass):** done — 404 consistency in `SlideshowRecordingService`, the `published` gate moved into `listFilesByAlbumByShareToken`, COUNT + first-image queries on `GET /api/albums`, `@Getter`/`@Setter` on the five entities with collections, the regex hoisted, the Jackson 2 bean replaced by Boot's Jackson 3 `JsonMapper`. **Still open (need a decision or a migration):** `User.createdAt` type, global gallery language names, the local-disk shim, controllers injecting repositories, the twin status enums.
+**Status 2026-09-05 (second pass):** done — 404 consistency in `SlideshowRecordingService`, the `published` gate moved into `listFilesByAlbumByShareToken`, COUNT + first-image queries on `GET /api/albums`, `@Getter`/`@Setter` on the five entities with collections, the regex hoisted, the Jackson 2 bean replaced by Boot's Jackson 3 `JsonMapper`. **Decided 2026-09-05:** gallery language names stay global but renaming is admin-only (D75); `JobStatus.FAILED` folded into `DEAD_LETTER` by V51 (D76); `User.createdAt`, the repository-injecting controllers and the twin enums are left as they are on purpose; the local-disk shim is being removed on its own branch.
 
 - **Not-found is inconsistent.** `SlideshowRecordingService` throws `IllegalArgumentException` for missing rows (→ 400); everything else uses `ResourceNotFoundException` (→ 404).
 - **The `published` gate lives in callers.** `AlbumController` calls `requirePublishedByShareToken` and then the service; the `hidden` gate is inside the service. Both belong in `listFilesByAlbumByShareToken`.
