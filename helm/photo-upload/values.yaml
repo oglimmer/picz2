@@ -329,7 +329,7 @@ tus:
     repository: tusproject/tusd
     pullPolicy: IfNotPresent
     # Pin a specific tag rather than `:v2` for reproducible deploys. Bump deliberately.
-    tag: "v2.4.0"
+    tag: "v2.10.0@sha256:9610f0f8edf4cceeb26f1b3ac9fa4bb4803d61a878e222c1573cda63c9e23374"
   service:
     type: ClusterIP
     port: 1080
