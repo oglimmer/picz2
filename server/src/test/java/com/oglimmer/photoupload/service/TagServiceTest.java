@@ -4,6 +4,9 @@ package com.oglimmer.photoupload.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.oglimmer.photoupload.entity.FileMetadata;
+import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
@@ -11,6 +14,7 @@ import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.mapper.TagMapper;
 import com.oglimmer.photoupload.model.TagInfo;
+import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
@@ -20,6 +24,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -30,6 +35,10 @@ class TagServiceTest {
   @Mock TagRepository tagRepository;
 
   @Mock ImageTagRepository imageTagRepository;
+
+  @Mock FileMetadataRepository fileMetadataRepository;
+
+  @Mock SystemTagProvisioner systemTagProvisioner;
 
   @Mock UserContext userContext;
 
@@ -171,6 +180,42 @@ class TagServiceTest {
 
     tagService.deleteTag(42L);
 
+    verify(imageTagRepository).deleteByTagId(42L);
+    verify(tagRepository).delete(tag);
+    // No file carried only this tag, so nothing is re-hidden and `hidden` is not even looked up.
+    verify(imageTagRepository, never()).save(any());
+    verify(systemTagProvisioner, never()).ensureTag(any(User.class), any());
+  }
+
+  /** D79: a file whose only tag is the one being deleted goes back into the holding pen. */
+  @Test
+  void deleteTagReHidesFilesThatCarriedOnlyThatTag() {
+    Tag tag = new Tag();
+    tag.setId(42L);
+    tag.setName("beach");
+    tag.setUser(testUser);
+    when(tagRepository.findByUserAndId(testUser, 42L)).thenReturn(Optional.of(tag));
+    when(imageTagRepository.findFileIdsWhereTagIsTheOnlyOne(42L)).thenReturn(List.of(7L, 9L));
+    when(systemTagProvisioner.ensureTag(testUser, SystemTags.HIDDEN)).thenReturn(11L);
+    Tag hidden = new Tag();
+    hidden.setId(11L);
+    hidden.setName(SystemTags.HIDDEN);
+    when(tagRepository.getReferenceById(11L)).thenReturn(hidden);
+    FileMetadata file7 = new FileMetadata();
+    file7.setId(7L);
+    FileMetadata file9 = new FileMetadata();
+    file9.setId(9L);
+    when(fileMetadataRepository.getReferenceById(7L)).thenReturn(file7);
+    when(fileMetadataRepository.getReferenceById(9L)).thenReturn(file9);
+
+    tagService.deleteTag(42L);
+
+    ArgumentCaptor<ImageTag> saved = ArgumentCaptor.forClass(ImageTag.class);
+    verify(imageTagRepository, times(2)).save(saved.capture());
+    assertEquals(
+        List.of(7L, 9L),
+        saved.getAllValues().stream().map(it -> it.getFileMetadata().getId()).toList());
+    assertTrue(saved.getAllValues().stream().allMatch(it -> it.getTag() == hidden));
     verify(imageTagRepository).deleteByTagId(42L);
     verify(tagRepository).delete(tag);
   }

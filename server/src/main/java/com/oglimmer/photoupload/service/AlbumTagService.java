@@ -41,7 +41,8 @@ public class AlbumTagService {
 
     // Both system tags are always implicitly enabled for every album. Ensure they exist and
     // prepend them so the frontend surfaces them in every album's pickers — `hidden` has to be
-    // there or the owner could not take a new photo out of the holding pen (D70).
+    // there so the owner can filter on it and find the photos still in the holding pen (D70);
+    // since D79 it is not something they assign, the clients keep it out of their tag toggles.
     List<Tag> tags = new ArrayList<>();
     tags.add(ensureSystemTag(currentUser, SystemTags.ALL));
     tags.add(ensureSystemTag(currentUser, SystemTags.HIDDEN));

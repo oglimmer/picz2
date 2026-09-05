@@ -1,14 +1,16 @@
 import { computed, ref, type ComputedRef, type Ref } from "vue";
 import { useNotifications } from "../useNotifications";
+import { HIDDEN_TAG } from "@/utils/tags";
 import type { Album, Tag } from "@/types";
 
 export const ALL_TAG = "all";
-export const HIDDEN_TAG = "hidden";
+export { HIDDEN_TAG };
 /**
  * Neither can be renamed, deleted, or switched off per album — the server always enables both, so
- * they are dropped from the album's tag picker rather than shown as permanently ticked. They stay
- * ordinary tags everywhere else: `hidden` in particular has to be filterable and bulk-removable,
- * because taking it off is how the owner publishes a photo (D70).
+ * they are dropped from the album's tag picker rather than shown as permanently ticked. `all` stays
+ * an ordinary tag everywhere else. `hidden` stays filterable, so the owner can find the photos
+ * still in the holding pen, but it is never offered as something to put on or take off a photo:
+ * the server derives it from "has no other tag" (D79), and giving a photo any tag publishes it.
  */
 export const SYSTEM_TAGS: ReadonlySet<string> = new Set([ALL_TAG, HIDDEN_TAG]);
 

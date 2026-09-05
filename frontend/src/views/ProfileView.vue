@@ -192,7 +192,8 @@ const visibilityOptions: { value: NewAssetTag, title: string, detail: string, re
     value: 'hidden',
     title: 'Keep new photos hidden',
     detail: 'New uploads get the "hidden" tag. Nobody with your share link can see them. You look '
-      + 'at them in your gallery, remove "hidden", and only then do they go public.',
+      + 'at them in your gallery and give them a tag — "all" or one of yours — and only then do '
+      + 'they go public. "hidden" drops off by itself, and comes back if you take every tag off.',
     recommended: true
   },
   {

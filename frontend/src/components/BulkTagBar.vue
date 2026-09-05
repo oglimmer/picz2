@@ -19,7 +19,7 @@
         >
           <span class="bulk-label">Quick tag:</span>
           <button
-            v-for="tag in frequentTags"
+            v-for="tag in assignableTags(frequentTags)"
             :key="tag.name"
             class="bulk-quick-btn"
             :disabled="busy"
@@ -43,7 +43,7 @@
           >
           <datalist id="bulk-tag-list">
             <option
-              v-for="tag in availableTags"
+              v-for="tag in assignableTags(availableTags)"
               :key="tag.id"
               :value="tag.name"
             />
@@ -122,6 +122,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { assignableTags } from '@/utils/tags'
 import type { Tag, TagCount } from '@/types'
 
 const props = defineProps<{
@@ -144,6 +145,9 @@ const emit = defineEmits<{
 
 const customTag = ref('')
 const tagInput = ref<HTMLInputElement | null>(null)
+
+// `hidden` is derived by the server (D79) and refused as an add, so it is not offered here.
+// A typed "hidden" still goes through and comes back as "could not be tagged".
 
 // Only spell out the count when it differs from the selection — i.e. when videos were skipped.
 const rotateLabel = computed(() =>

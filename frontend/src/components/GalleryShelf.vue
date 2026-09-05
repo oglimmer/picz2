@@ -128,8 +128,10 @@
                 :disabled="!!albumTagBusy"
                 @change="$emit('update:albumTagName', ($event.target as HTMLSelectElement).value)"
               >
+                <!-- No `hidden` here: the server refuses to add it and skips a lone one on
+                     remove (D79). "Add all to every photo" is the one-click publish now. -->
                 <option
-                  v-for="tag in enabledAlbumTags"
+                  v-for="tag in assignableTags(enabledAlbumTags)"
                   :key="tag.id"
                   :value="tag.name"
                 >
@@ -205,6 +207,7 @@
 import { ref } from 'vue'
 import GridSizePicker, { type GridSize } from './GridSizePicker.vue'
 import MenuButton from './MenuButton.vue'
+import { assignableTags } from '@/utils/tags'
 import type { Tag } from '@/types'
 import type { AlbumTagMode } from '@/composables/gallery/useAlbumTagAll'
 

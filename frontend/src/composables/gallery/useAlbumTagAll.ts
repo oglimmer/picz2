@@ -1,6 +1,7 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
 import { useConfirm } from "../useConfirm";
 import { useNotifications } from "../useNotifications";
+import { assignableTags } from "@/utils/tags";
 import type { Album, AlbumFile, Tag } from "@/types";
 
 export type AlbumTagMode = "add" | "remove";
@@ -71,10 +72,12 @@ export function useAlbumTagAll(deps: AlbumTagAllDeps): AlbumTagAll {
   );
 
   // Keep the selector on a tag that still exists: the list changes when you switch albums or edit
-  // it in the tag picker, and a stale name would silently 404.
+  // it in the tag picker, and a stale name would silently 404. `hidden` is never a choice — the
+  // server derives it (D79) and the dropdown does not list it.
   watch(
     deps.enabledAlbumTags,
-    (tags) => {
+    (enabled) => {
+      const tags = assignableTags(enabled);
       if (!tags.some((t) => t.name === tagName.value)) {
         tagName.value = tags.length > 0 ? tags[0].name : "";
       }
