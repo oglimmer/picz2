@@ -98,7 +98,7 @@ worker:
     # Same image as backend; tag falls through to backend.image.tag if left blank.
     repository: registry.oglimmer.com/picz2-be
     pullPolicy: Always
-    tag: ""
+    tag: "@sha256:c263c30716407e028f5af406e80fb100c75cd8dcf37c34b267792433acaa8c9a"
   # Worker pods drain processing_jobs. Each pod has Semaphore(1) and heif-convert is
   # effectively single-threaded, so a pod plateaus near 0.8 cores no matter how high its CPU
   # limit is — replica count, not the limit, is the throughput knob (per D22).
@@ -329,7 +329,7 @@ tus:
     repository: tusproject/tusd
     pullPolicy: IfNotPresent
     # Pin a specific tag rather than `:v2` for reproducible deploys. Bump deliberately.
-    tag: "v2.4.0"
+    tag: "v2.4.0@sha256:6c5e17dcb9441d773b7547a5b0eaa356ea77b6a4b6b35ce5cb25660b9a164e58"
   service:
     type: ClusterIP
     port: 1080
