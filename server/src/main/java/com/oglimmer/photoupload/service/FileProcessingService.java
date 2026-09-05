@@ -19,7 +19,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Comparator;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -41,10 +40,9 @@ public class FileProcessingService {
   private final CaptureDateExtractor captureDateExtractor;
   private final GpsExtractor gpsExtractor;
   private final PlatformTransactionManager transactionManager;
-  // Optional: present iff storage.s3.enabled=true. When present, originals are read from MinIO
-  // into a per-job temp dir, derivatives are produced locally and PUT back to S3, and the temp
-  // dir is wiped before the method returns.
-  private final Optional<ObjectStorageService> objectStorage;
+  // Originals are read from the album's backend into a per-job temp dir, derivatives are produced
+  // locally and PUT back, and the temp dir is wiped before the method returns.
+  private final ObjectStorageService objectStorage;
 
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
@@ -59,19 +57,14 @@ public class FileProcessingService {
     String storedFilename = metadata.getStoredFilename();
     String mimeType = metadata.getMimeType();
     String extension = getFileExtension(storedFilename);
-    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
 
     Path workdir = null;
     Path currentFile;
     try {
-      if (s3Backed) {
-        // Per-job scratch dir on the PVC. Wiped in the finally block so we never accumulate.
-        workdir = workdirFor(fileStorageLocation, fileMetadataId);
-        currentFile = workdir.resolve(storedFilename);
-        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
-      } else {
-        currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
-      }
+      // Per-job scratch dir. Wiped in the finally block so we never accumulate.
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
+      currentFile = workdir.resolve(storedFilename);
+      storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
 
       boolean isHeic =
           MimeTypePredicates.isHeicFile(mimeType)
@@ -82,30 +75,24 @@ public class FileProcessingService {
       if (isHeic) {
         String baseName = getFilenameWithoutExtension(storedFilename);
         String convertedFilename = baseName + ".jpg";
-        Path convertedLocation =
-            (workdir != null ? workdir : fileStorageLocation).resolve(convertedFilename);
+        Path convertedLocation = workdir.resolve(convertedFilename);
 
         if (thumbnailService.convertHeicToJpeg(currentFile, convertedLocation)) {
           log.info("Converted HEIC/HEIF to JPEG: {} -> {}", originalName, convertedFilename);
 
-          if (s3Backed) {
-            // Upload the JPEG as the new original, drop the old HEIC key.
-            String newKey = StoragePaths.ORIGINALS_PREFIX + convertedFilename;
-            storageFor(metadata).putFile(newKey, convertedLocation, "image/jpeg");
-            try {
-              storageFor(metadata).delete(metadata.getFilePath());
-            } catch (Exception e) {
-              // Non-fatal: leaves an orphan key but the row is correct. Log and continue.
-              log.warn(
-                  "Could not delete legacy HEIC key {} after conversion: {}",
-                  metadata.getFilePath(),
-                  e.toString());
-            }
-            metadata.setFilePath(newKey);
-          } else {
-            Files.deleteIfExists(currentFile);
-            metadata.setFilePath(toRelativePath(fileStorageLocation, convertedLocation));
+          // Upload the JPEG as the new original, drop the old HEIC key.
+          String newKey = StoragePaths.ORIGINALS_PREFIX + convertedFilename;
+          storageFor(metadata).putFile(newKey, convertedLocation, "image/jpeg");
+          try {
+            storageFor(metadata).delete(metadata.getFilePath());
+          } catch (Exception e) {
+            // Non-fatal: leaves an orphan key but the row is correct. Log and continue.
+            log.warn(
+                "Could not delete legacy HEIC key {} after conversion: {}",
+                metadata.getFilePath(),
+                e.toString());
           }
+          metadata.setFilePath(newKey);
 
           // Switch the in-memory state to the JPEG for derivative generation.
           currentFile = convertedLocation;
@@ -143,27 +130,24 @@ public class FileProcessingService {
           metadata.setThumbnailPath(
               storeDerivative(
                   metadata,
-                  fileStorageLocation,
                   thumbnails[0],
-                  s3Backed ? StoragePaths.derivativeThumbnailKey(fileMetadataId) : null,
+                  StoragePaths.derivativeThumbnailKey(fileMetadataId),
                   "image/jpeg"));
         }
         if (thumbnails[1] != null) {
           metadata.setMediumPath(
               storeDerivative(
                   metadata,
-                  fileStorageLocation,
                   thumbnails[1],
-                  s3Backed ? StoragePaths.derivativeMediumKey(fileMetadataId) : null,
+                  StoragePaths.derivativeMediumKey(fileMetadataId),
                   "image/jpeg"));
         }
         if (thumbnails[2] != null) {
           metadata.setLargePath(
               storeDerivative(
                   metadata,
-                  fileStorageLocation,
                   thumbnails[2],
-                  s3Backed ? StoragePaths.derivativeLargeKey(fileMetadataId) : null,
+                  StoragePaths.derivativeLargeKey(fileMetadataId),
                   "image/jpeg"));
         }
         if (thumbnails[0] != null) {
@@ -175,15 +159,13 @@ public class FileProcessingService {
       if (MimeTypePredicates.isVideoFile(mimeType)) {
         String baseNameWithoutExt = storedFilename.substring(0, storedFilename.lastIndexOf('.'));
         String transcodedFilename = "web_" + baseNameWithoutExt + ".mp4";
-        Path transcodedLocation =
-            (workdir != null ? workdir : fileStorageLocation).resolve(transcodedFilename);
+        Path transcodedLocation = workdir.resolve(transcodedFilename);
         if (thumbnailService.transcodeVideo(currentFile, transcodedLocation)) {
           metadata.setTranscodedVideoPath(
               storeDerivative(
                   metadata,
-                  fileStorageLocation,
                   transcodedLocation,
-                  s3Backed ? StoragePaths.derivativeTranscodedKey(fileMetadataId) : null,
+                  StoragePaths.derivativeTranscodedKey(fileMetadataId),
                   "video/mp4"));
           log.info("🎬 Transcoded video for Safari/iOS: {}", originalName);
         } else {
@@ -191,15 +173,13 @@ public class FileProcessingService {
         }
 
         String thumbnailFilename = "thumb_" + baseNameWithoutExt + ".jpg";
-        Path thumbnailLocation =
-            (workdir != null ? workdir : fileStorageLocation).resolve(thumbnailFilename);
+        Path thumbnailLocation = workdir.resolve(thumbnailFilename);
         if (thumbnailService.generateVideoThumbnail(currentFile, thumbnailLocation)) {
           metadata.setThumbnailPath(
               storeDerivative(
                   metadata,
-                  fileStorageLocation,
                   thumbnailLocation,
-                  s3Backed ? StoragePaths.derivativeThumbnailKey(fileMetadataId) : null,
+                  StoragePaths.derivativeThumbnailKey(fileMetadataId),
                   "image/jpeg"));
           log.info("📸 Generated video thumbnail: {}", originalName);
         } else {
@@ -275,13 +255,6 @@ public class FileProcessingService {
           new StorageException("Cannot rotate non-image asset (mime=" + mimeType + ")"));
       return;
     }
-    if (objectStorage.isEmpty()) {
-      markFailed(
-          tx,
-          fileMetadataId,
-          new StorageException("Rotate requires the asset to be on object storage"));
-      return;
-    }
     // Source key for the rotation: prefer the original, then fall back through the derivative
     // ladder for assets whose original has been purged by retention. Output is bounded by
     // LARGE=2400px anyway, so feeding `large` produces pixel-equivalent derivatives to feeding
@@ -333,7 +306,6 @@ public class FileProcessingService {
         metadata.setThumbnailPath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[0],
                 StoragePaths.derivativeThumbnailKey(fileMetadataId),
                 "image/jpeg"));
@@ -342,7 +314,6 @@ public class FileProcessingService {
         metadata.setMediumPath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[1],
                 StoragePaths.derivativeMediumKey(fileMetadataId),
                 "image/jpeg"));
@@ -351,7 +322,6 @@ public class FileProcessingService {
         metadata.setLargePath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[2],
                 StoragePaths.derivativeLargeKey(fileMetadataId),
                 "image/jpeg"));
@@ -421,13 +391,6 @@ public class FileProcessingService {
               "Cannot regenerate thumbnails for non-image asset (mime=" + mimeType + ")"));
       return;
     }
-    if (objectStorage.isEmpty()) {
-      markFailed(
-          tx,
-          fileMetadataId,
-          new StorageException("Regen-thumbnails requires the asset to be on object storage"));
-      return;
-    }
     String sourceKey = pickRotationSource(metadata);
     if (sourceKey == null) {
       markFailed(
@@ -459,7 +422,6 @@ public class FileProcessingService {
         metadata.setThumbnailPath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[0],
                 StoragePaths.derivativeThumbnailKey(fileMetadataId),
                 "image/jpeg"));
@@ -468,7 +430,6 @@ public class FileProcessingService {
         metadata.setMediumPath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[1],
                 StoragePaths.derivativeMediumKey(fileMetadataId),
                 "image/jpeg"));
@@ -477,7 +438,6 @@ public class FileProcessingService {
         metadata.setLargePath(
             storeDerivative(
                 metadata,
-                fileStorageLocation,
                 thumbnails[2],
                 StoragePaths.derivativeLargeKey(fileMetadataId),
                 "image/jpeg"));
@@ -539,18 +499,12 @@ public class FileProcessingService {
                   + ": original is gone (retention-purged)"));
       return;
     }
-    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
 
     Path workdir = null;
     try {
-      Path currentFile;
-      if (s3Backed) {
-        workdir = workdirFor(fileStorageLocation, fileMetadataId);
-        currentFile = workdir.resolve(metadata.getStoredFilename());
-        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
-      } else {
-        currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
-      }
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
+      Path currentFile = workdir.resolve(metadata.getStoredFilename());
+      storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
 
       CaptureDate captureDate = captureDateExtractor.extract(currentFile, mimeType);
       Instant previous = metadata.getExifDateTimeOriginal();
@@ -625,18 +579,12 @@ public class FileProcessingService {
                   + ": original is gone (retention-purged)"));
       return;
     }
-    boolean s3Backed = objectStorage.isPresent() && StoragePaths.isS3Key(metadata.getFilePath());
 
     Path workdir = null;
     try {
-      Path currentFile;
-      if (s3Backed) {
-        workdir = workdirFor(fileStorageLocation, fileMetadataId);
-        currentFile = workdir.resolve(metadata.getStoredFilename());
-        storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
-      } else {
-        currentFile = fileStorageLocation.resolve(metadata.getFilePath()).normalize();
-      }
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
+      Path currentFile = workdir.resolve(metadata.getStoredFilename());
+      storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
 
       GpsCoordinates gps = gpsExtractor.extract(currentFile, mimeType);
       // A NONE result is written, not skipped: it is what takes the row out of the sweep's
@@ -704,34 +652,27 @@ public class FileProcessingService {
    * transcode would pin credentials that the owner may have corrected in the meantime.
    */
   private BackendStorage storageFor(FileMetadata metadata) {
-    return objectStorage
-        .orElseThrow(() -> new StorageException("Object storage is not enabled"))
-        .forFile(metadata);
+    return objectStorage.forFile(metadata);
   }
 
   /**
-   * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file to
-   * S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
-   * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
-   * fall back to storing the derivative on the PVC and returning its relative path.
+   * Persist a freshly-generated derivative: PUT the local file under {@code s3Key}, count its bytes
+   * towards the asset, and return the key as the DB pointer. The local file is deleted eagerly (it
+   * lives in the temp workdir which is wiped anyway) to keep peak disk small.
    */
   private String storeDerivative(
-      FileMetadata metadata, Path fileStorageLocation, Path local, String s3Key, String contentType)
-      throws IOException {
-    if (s3Key != null) {
-      // Measured before the PUT, while the file is still on disk — afterwards it is deleted, and
-      // asking S3 for the size would be a second round trip per derivative.
-      long size = Files.size(local);
-      storageFor(metadata).putFile(s3Key, local, contentType);
-      metadata.setDerivativeBytes(nullToZero(metadata.getDerivativeBytes()) + size);
-      try {
-        Files.deleteIfExists(local);
-      } catch (IOException cleanup) {
-        log.warn("Could not delete derivative temp file {}: {}", local, cleanup.toString());
-      }
-      return s3Key;
+      FileMetadata metadata, Path local, String s3Key, String contentType) throws IOException {
+    // Measured before the PUT, while the file is still on disk — afterwards it is deleted, and
+    // asking S3 for the size would be a second round trip per derivative.
+    long size = Files.size(local);
+    storageFor(metadata).putFile(s3Key, local, contentType);
+    metadata.setDerivativeBytes(nullToZero(metadata.getDerivativeBytes()) + size);
+    try {
+      Files.deleteIfExists(local);
+    } catch (IOException cleanup) {
+      log.warn("Could not delete derivative temp file {}: {}", local, cleanup.toString());
     }
-    return toRelativePath(fileStorageLocation, local);
+    return s3Key;
   }
 
   /**
@@ -815,10 +756,6 @@ public class FileProcessingService {
   private String truncateError(Throwable cause) {
     String msg = cause.getClass().getSimpleName() + ": " + cause.getMessage();
     return msg.length() > 4000 ? msg.substring(0, 4000) : msg;
-  }
-
-  private String toRelativePath(Path storageRoot, Path absolutePath) {
-    return storageRoot.relativize(absolutePath.toAbsolutePath().normalize()).toString();
   }
 
   private String getFileExtension(String filename) {

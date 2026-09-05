@@ -149,7 +149,7 @@ The api and worker pods run **the same image** with different `SPRING_PROFILES_A
 
 | Parameter                    | Description                                                                | Default                                  |
 | ---------------------------- | -------------------------------------------------------------------------- | ---------------------------------------- |
-| `objectStorage.enabled`      | When true, uploads / derivatives / serves go through S3                    | `true`                                   |
+| `objectStorage.enabled`      | Renders the S3 env/secret wiring. Must stay `true`: since D77 the backend has no other storage mode and will not boot without an endpoint | `true`                                   |
 | `objectStorage.endpoint`     | S3 endpoint URL                                                            | `http://minio.minio.svc.cluster.local:9000` |
 | `objectStorage.bucket`       | Bucket name (auto-created on startup if missing)                           | `photo-upload`                           |
 | `objectStorage.region`       | S3 region (MinIO ignores this but the SDK requires it)                     | `us-east-1`                              |

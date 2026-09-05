@@ -44,7 +44,7 @@ public class StorageQuotaService {
   private final SlideshowRecordingRepository recordingRepository;
   private final StorageBackendRepository backendRepository;
   private final AlbumRepository albumRepository;
-  private final Optional<ObjectStorageService> objectStorage;
+  private final ObjectStorageService objectStorage;
 
   /**
    * A user's standing with the metered backend.
@@ -126,15 +126,11 @@ public class StorageQuotaService {
   @Transactional
   public Map<String, Object> backfillStoredBytes() {
     Map<String, Object> result = new HashMap<>();
-    if (objectStorage.isEmpty()) {
-      result.put("skipped", "object storage is not enabled");
-      return result;
-    }
     StorageBackend system =
         backendRepository
             .findBySystemDefaultTrue()
             .orElseThrow(() -> new IllegalStateException("No system default storage backend row"));
-    BackendStorage storage = objectStorage.get().forBackend(system);
+    BackendStorage storage = objectStorage.forBackend(system);
 
     Map<String, Long> derivativeSizes = storage.listKeySizes(StoragePaths.DERIVATIVES_PREFIX);
     Map<String, Long> audioSizes = storage.listKeySizes(StoragePaths.AUDIO_PREFIX);

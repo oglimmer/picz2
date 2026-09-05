@@ -75,7 +75,6 @@ class FileStorageServiceBulkTagTest {
             tagRepo,
             imageTagRepo,
             albumEnabledTagRepo,
-            Mockito.mock(LocalFileCleanupService.class),
             Mockito.mock(JdbcTemplate.class),
             albumRepo,
             Mockito.mock(SlideshowRecordingRepository.class),
@@ -86,7 +85,7 @@ class FileStorageServiceBulkTagTest {
             Mockito.mock(JobEnqueueService.class),
             systemTagProvisioner,
             Mockito.mock(StorageQuotaService.class),
-            Optional.empty());
+            Mockito.mock(ObjectStorageService.class));
 
     user = new User();
     user.setId(1L);

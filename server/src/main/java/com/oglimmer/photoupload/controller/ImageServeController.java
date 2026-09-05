@@ -3,20 +3,16 @@ package com.oglimmer.photoupload.controller;
 
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
-import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.model.FileServeInfo;
 import com.oglimmer.photoupload.service.FileStorageService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
 import com.oglimmer.photoupload.storage.BackendStorage;
-import com.oglimmer.photoupload.util.RangeRequestHandler;
 import java.io.OutputStream;
 import java.time.Instant;
-import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -42,12 +38,10 @@ public class ImageServeController {
   private static final String RETRY_AFTER_SECONDS = "2";
 
   private final FileStorageService fileStorageService;
-  // Optional: only populated when storage.s3.enabled=true. Older deployments without MinIO still
-  // boot; serving an S3-keyed row in that mode is impossible by definition.
-  private final Optional<ObjectStorageService> objectStorage;
+  private final ObjectStorageService objectStorage;
 
   public ImageServeController(
-      FileStorageService fileStorageService, Optional<ObjectStorageService> objectStorage) {
+      FileStorageService fileStorageService, ObjectStorageService objectStorage) {
     this.fileStorageService = fileStorageService;
     this.objectStorage = objectStorage;
   }
@@ -85,16 +79,7 @@ public class ImageServeController {
         return null; // webRequest already set 304 + validators on the response
       }
 
-      if (fileInfo.getStorageKey() != null) {
-        return serveRangeFromObjectStorage(fileInfo, rangeHeader);
-      }
-      return RangeRequestHandler.serveFileWithRangeSupport(
-          fileInfo.getFilePath(),
-          rangeHeader,
-          fileInfo.getMimeType() != null
-              ? fileInfo.getMimeType()
-              : MediaType.APPLICATION_OCTET_STREAM_VALUE,
-          safeFilenameForKey(fileInfo));
+      return serveRangeFromObjectStorage(fileInfo, rangeHeader);
     } catch (RuntimeException e) {
       // Already the right shape for GlobalExceptionHandler: 404 for a missing token, 410 for a
       // retention-purged original, 503 for an open MinIO breaker. Wrapping any of these used to
@@ -137,10 +122,7 @@ public class ImageServeController {
         return null; // webRequest already set 304 + validators on the response
       }
 
-      if (fileInfo.getStorageKey() != null) {
-        return serveFromObjectStorage(fileInfo);
-      }
-      return serveFromDisk(token, fileInfo);
+      return serveFromObjectStorage(fileInfo);
     } catch (RuntimeException e) {
       // See streamRangeByToken: 404 / 410 / 503 must reach the client with their own status.
       throw e;
@@ -163,46 +145,12 @@ public class ImageServeController {
     return webRequest.checkNotModified(fileInfo.getChecksum(), lastModified);
   }
 
-  private ResponseEntity<Resource> serveFromDisk(String token, FileServeInfo fileInfo)
-      throws Exception {
-    Resource resource = new UrlResource(fileInfo.getFilePath().toUri());
-    if (!resource.exists()) {
-      // Derivative metadata exists but the file is missing on disk — fall back to the
-      // original. This shouldn't normally happen but keeps the gallery functional if a
-      // derivative is deleted out-of-band.
-      fileInfo = fileStorageService.getFileServeInfoByPublicToken(token, "original");
-      if (fileInfo.getStorageKey() != null) {
-        return serveFromObjectStorage(fileInfo);
-      }
-      resource = new UrlResource(fileInfo.getFilePath().toUri());
-      if (!resource.exists()) {
-        throw new ResourceNotFoundException("File not found");
-      }
-    }
-
-    MediaType mediaType = parseMediaType(fileInfo.getMimeType());
-    return ResponseEntity.ok()
-        .contentType(mediaType)
-        .cacheControl(
-            CacheControl.maxAge(365, java.util.concurrent.TimeUnit.DAYS).cachePublic().immutable())
-        .header(
-            HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
-        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-        .body(resource);
-  }
-
   /**
    * The storage backend holding this asset. An S3 key is not self-describing — the same key can
    * exist in the instance's MinIO and in a user's own bucket — so the album decides the endpoint.
    */
   private BackendStorage storageFor(FileServeInfo fileInfo) {
-    ObjectStorageService os =
-        objectStorage.orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "Asset path is an S3 key but ObjectStorageService is not enabled — "
-                        + "check storage.s3.enabled"));
-    return os.forAlbumId(fileInfo.getAlbumId());
+    return objectStorage.forAlbumId(fileInfo.getAlbumId());
   }
 
   private ResponseEntity<Resource> serveFromObjectStorage(FileServeInfo fileInfo) {

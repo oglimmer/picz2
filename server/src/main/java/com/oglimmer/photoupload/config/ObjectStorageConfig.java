@@ -5,18 +5,16 @@ import com.oglimmer.photoupload.storage.S3Clients;
 import com.oglimmer.photoupload.storage.StorageClientFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.services.s3.S3Client;
 
 /**
- * Wires AWS SDK v2 against the in-cluster MinIO. Beans are created only when {@code
- * storage.s3.enabled=true} so a developer running the app without MinIO doesn't need to set up fake
- * credentials. The builder itself lives in {@link S3Clients}, shared with the per-user backends.
+ * Wires AWS SDK v2 against the instance's own MinIO. Object storage is the only storage there is
+ * (D77) — local dev runs MinIO from compose, production from the cluster — so these beans are
+ * unconditional. The builder itself lives in {@link S3Clients}, shared with the per-user backends.
  */
 @Configuration
-@ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 @Slf4j
 public class ObjectStorageConfig {

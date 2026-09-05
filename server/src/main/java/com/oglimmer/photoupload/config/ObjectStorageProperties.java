@@ -10,13 +10,6 @@ import org.springframework.context.annotation.Configuration;
 @Data
 public class ObjectStorageProperties {
 
-  /**
-   * Master switch. When false, no S3 beans are created and the application falls back to the
-   * filesystem code paths exactly as before. Lets us land the S3 client wiring before the
-   * upload/processing/serve refactors, and lets local dev boot without MinIO.
-   */
-  private boolean enabled = false;
-
   /** Full URL including scheme (e.g. {@code http://minio.minio.svc.cluster.local:9000}). */
   private String endpoint;
 

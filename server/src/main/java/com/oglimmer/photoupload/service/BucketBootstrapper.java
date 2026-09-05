@@ -5,7 +5,6 @@ import com.oglimmer.photoupload.config.ObjectStorageProperties;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
@@ -20,7 +19,6 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * bucket fails fast so a misconfigured deploy doesn't silently lose uploads.
  */
 @Component
-@ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 @Slf4j
 public class BucketBootstrapper {

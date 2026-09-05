@@ -114,7 +114,6 @@ public class FileStorageService {
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
-  private final LocalFileCleanupService localFileCleanupService;
   private final JdbcTemplate jdbcTemplate;
   private final AlbumRepository albumRepository;
   private final SlideshowRecordingRepository slideshowRecordingRepository;
@@ -125,10 +124,9 @@ public class FileStorageService {
   private final JobEnqueueService jobEnqueueService;
   private final SystemTagProvisioner systemTagProvisioner;
   private final StorageQuotaService storageQuotaService;
-  // Optional: present iff storage.s3.enabled=true. When present, the upload path PUTs the body
-  // directly to MinIO and stores an S3 key in file_path; the local PVC is used only for Spring's
-  // transient .multipart-tmp staging (auto-cleaned per request) and per-job processing scratch.
-  private final Optional<ObjectStorageService> objectStorage;
+  // The upload path PUTs the body to the album's backend and stores the object key in file_path;
+  // local disk is only Spring's transient .multipart-tmp staging (D77).
+  private final ObjectStorageService objectStorage;
 
   public FileStorageService(
       FileStorageProperties properties,
@@ -136,7 +134,6 @@ public class FileStorageService {
       TagRepository tagRepository,
       ImageTagRepository imageTagRepository,
       AlbumEnabledTagRepository albumEnabledTagRepository,
-      LocalFileCleanupService localFileCleanupService,
       JdbcTemplate jdbcTemplate,
       AlbumRepository albumRepository,
       SlideshowRecordingRepository slideshowRecordingRepository,
@@ -147,13 +144,12 @@ public class FileStorageService {
       JobEnqueueService jobEnqueueService,
       SystemTagProvisioner systemTagProvisioner,
       StorageQuotaService storageQuotaService,
-      Optional<ObjectStorageService> objectStorage) {
+      ObjectStorageService objectStorage) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
     this.imageTagRepository = imageTagRepository;
     this.albumEnabledTagRepository = albumEnabledTagRepository;
-    this.localFileCleanupService = localFileCleanupService;
     this.jdbcTemplate = jdbcTemplate;
     this.fileInfoMapper = fileInfoMapper;
     this.albumRepository = albumRepository;
@@ -177,35 +173,6 @@ public class FileStorageService {
     } catch (Exception ex) {
       throw new StorageException("Could not create upload directory!", ex);
     }
-  }
-
-  /**
-   * Convert an absolute path to a relative path for storage in the database. The path is relative
-   * to the upload directory.
-   */
-  private String toRelativePath(Path absolutePath) {
-    return this.fileStorageLocation
-        .relativize(absolutePath.toAbsolutePath().normalize())
-        .toString();
-  }
-
-  /**
-   * Convert a relative path from the database to an absolute path. The path is resolved relative to
-   * the upload directory.
-   */
-  private Path toAbsolutePath(String relativePath) {
-    if (relativePath == null) {
-      return null;
-    }
-    return this.fileStorageLocation.resolve(relativePath).toAbsolutePath().normalize();
-  }
-
-  /**
-   * Public method to resolve a file path from database to absolute path. Used by controllers to
-   * serve files.
-   */
-  public Path resolveFilePath(String relativePath) {
-    return toAbsolutePath(relativePath);
   }
 
   public FileInfo storeFile(MultipartFile file, Long albumId, String contentId) throws IOException {
@@ -285,12 +252,10 @@ public class FileStorageService {
     String uniqueSuffix =
         System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 9);
     String newFilename = nameWithoutExtension + "-" + uniqueSuffix + "." + extension;
-    boolean useObjectStorage = objectStorage.isPresent();
     // Resolve the album's storage backend BEFORE any byte is written. An album can live on its
     // owner's own S3, so choosing the backend after the PUT would mean the bytes went to the
     // instance's MinIO while the row claims otherwise — unreadable, and invisible until serve time.
-    final BackendStorage albumStorage =
-        useObjectStorage ? objectStorage.get().forAlbumId(effectiveAlbumId) : null;
+    final BackendStorage albumStorage = objectStorage.forAlbumId(effectiveAlbumId);
 
     // Write the multipart body to a stable temp file exactly once.
     // Calling file.getInputStream() twice is unreliable: some Part implementations back the
@@ -317,24 +282,14 @@ public class FileStorageService {
     }
 
     String contentType = file.getContentType();
-    // Persist the bytes. With S3 enabled the storage of record is MinIO; otherwise fall back to
-    // the legacy local-disk write so tests / non-S3 deployments still function.
-    final String storedPath;
-    if (useObjectStorage) {
-      String storageKey = StoragePaths.ORIGINALS_PREFIX + newFilename;
-      try {
-        albumStorage.putFile(storageKey, tempFile, contentType);
-      } finally {
-        Files.deleteIfExists(tempFile);
-      }
-      storedPath = storageKey;
-      log.info("✅ File uploaded to S3: {} ({})", originalFilename, formatBytes(file.getSize()));
-    } else {
-      Path targetLocation = this.fileStorageLocation.resolve(newFilename);
-      Files.move(tempFile, targetLocation, StandardCopyOption.ATOMIC_MOVE);
-      storedPath = toRelativePath(targetLocation);
-      log.info("✅ File uploaded to disk: {} ({})", originalFilename, formatBytes(file.getSize()));
+    // Persist the bytes: the storage of record is the album's backend.
+    final String storedPath = StoragePaths.ORIGINALS_PREFIX + newFilename;
+    try {
+      albumStorage.putFile(storedPath, tempFile, contentType);
+    } finally {
+      Files.deleteIfExists(tempFile);
     }
+    log.info("✅ File uploaded to S3: {} ({})", originalFilename, formatBytes(file.getSize()));
 
     // Insert metadata row immediately with null thumbnails/transcoded paths — processing
     // will fill those in asynchronously and save again.
@@ -469,10 +424,6 @@ public class FileStorageService {
       String contentType,
       String contentId,
       String checksum) {
-    if (objectStorage.isEmpty()) {
-      throw new StorageException("registerTusUpload requires storage.s3.enabled=true");
-    }
-
     final Long effectiveAlbumId;
     if (albumId == null) {
       effectiveAlbumId = currentUser.getDefaultAlbumId();
@@ -508,10 +459,9 @@ public class FileStorageService {
     // the bytes reach the album's actual backend. Same backend: a server-side COPY, no JVM bytes.
     // Different backend: transfer() streams them through this pod, which is the unavoidable price
     // of an album on the user's own S3.
-    ObjectStorageService storage = objectStorage.get();
-    BackendStorage staging = storage.forSystemDefault();
-    BackendStorage target = storage.forAlbumId(effectiveAlbumId);
-    storage.transfer(staging, tusS3Key, target, originalKey, contentType);
+    BackendStorage staging = objectStorage.forSystemDefault();
+    BackendStorage target = objectStorage.forAlbumId(effectiveAlbumId);
+    objectStorage.transfer(staging, tusS3Key, target, originalKey, contentType);
 
     final String finalContentType = contentType;
     final String finalNewFilename = newFilename;
@@ -792,10 +742,7 @@ public class FileStorageService {
    * queries that need no shared snapshot.
    */
   public Map<String, Object> purgeOrphanedS3Objects(boolean dryRun) {
-    if (objectStorage.isEmpty()) {
-      throw new IllegalStateException("S3 storage is not enabled");
-    }
-    ObjectStorageService s3 = objectStorage.get();
+    ObjectStorageService s3 = objectStorage;
 
     int totalBucketKeys = 0;
     int knownDbPaths = 0;
@@ -881,13 +828,7 @@ public class FileStorageService {
   }
 
   private void deleteS3Objects(FileMetadata metadata) {
-    if (objectStorage.isEmpty()) {
-      log.warn(
-          "S3 key {} found in DB but ObjectStorageService is not available — skipping object deletion",
-          metadata.getFilePath());
-      return;
-    }
-    BackendStorage s3 = objectStorage.get().forFile(metadata);
+    BackendStorage s3 = objectStorage.forFile(metadata);
     deleteS3Key(s3, metadata.getFilePath(), "original");
     deleteS3Key(s3, metadata.getThumbnailPath(), "thumbnail");
     deleteS3Key(s3, metadata.getMediumPath(), "medium");
@@ -916,11 +857,8 @@ public class FileStorageService {
    *   <li>Files whose {@code file_path} is also referenced by rows in another album are skipped
    *       entirely (cross-album dedupe via {@code duplicateAlbum} shares all five storage paths as
    *       a unit).
-   *   <li>S3-backed paths are batched via {@link ObjectStorageService#deleteKeys(Collection)} (1000
-   *       keys per call).
-   *   <li>Local paths are deleted via {@link Files#deleteIfExists(java.nio.file.Path)} + {@link
-   *       LocalFileCleanupService}, swallowing IO errors so a missing file does not abort the whole
-   *       album.
+   *   <li>Keys are batched via {@link BackendStorage#deleteKeys(java.util.Collection)} (1000 keys
+   *       per call); per-key failures are logged, not thrown.
    * </ul>
    *
    * <p>Does NOT touch the database. The caller deletes the rows first and calls this afterwards
@@ -939,33 +877,14 @@ public class FileStorageService {
       // have to be named here or they are never freed: the nightly orphan sweep only reads
       // originals/, and only the manual admin purge would ever find a stray audio/ object.
       for (SlideshowRecording recording : recordings) {
-        String audioPath = recording.getAudioPath();
-        if (StoragePaths.isAudioS3Key(audioPath)) {
-          addIfNotBlank(audioKeysToDelete, audioPath);
-          if (recording.getAudioFilename() != null) {
-            addIfNotBlank(
-                audioKeysToDelete, StoragePaths.audioAacKey(recording.getAudioFilename()));
-          }
-        } else if (audioPath != null) {
-          deleteLocalQuietly(audioPath);
-          if (recording.getAudioFilename() != null) {
-            deleteLocalQuietly(
-                Paths.get(audioPath)
-                    .resolveSibling(StoragePaths.aacFilename(recording.getAudioFilename()))
-                    .toString());
-          }
+        addIfNotBlank(audioKeysToDelete, recording.getAudioPath());
+        if (recording.getAudioFilename() != null) {
+          addIfNotBlank(audioKeysToDelete, StoragePaths.audioAacKey(recording.getAudioFilename()));
         }
       }
     }
     if (!audioKeysToDelete.isEmpty()) {
-      if (objectStorage.isEmpty()) {
-        log.warn(
-            "Album {} has {} S3-backed audio objects but ObjectStorageService is not available — leaving them in place",
-            albumId,
-            audioKeysToDelete.size());
-      } else {
-        objectStorage.get().forBackend(backend).deleteKeys(audioKeysToDelete);
-      }
+      objectStorage.forBackend(backend).deleteKeys(audioKeysToDelete);
     }
 
     if (files == null || files.isEmpty()) {
@@ -994,31 +913,15 @@ public class FileStorageService {
             f.getStoredFilename());
         continue;
       }
-      if (StoragePaths.isS3Key(f.getFilePath())) {
-        addIfNotBlank(s3KeysToDelete, f.getFilePath());
-        addIfNotBlank(s3KeysToDelete, f.getThumbnailPath());
-        addIfNotBlank(s3KeysToDelete, f.getMediumPath());
-        addIfNotBlank(s3KeysToDelete, f.getLargePath());
-        addIfNotBlank(s3KeysToDelete, f.getTranscodedVideoPath());
-      } else {
-        deleteLocalQuietly(f.getFilePath());
-        localFileCleanupService.deleteThumbnails(
-            toAbsolutePath(f.getThumbnailPath()),
-            toAbsolutePath(f.getMediumPath()),
-            toAbsolutePath(f.getLargePath()));
-        localFileCleanupService.deleteTranscodedVideo(toAbsolutePath(f.getTranscodedVideoPath()));
-      }
+      addIfNotBlank(s3KeysToDelete, f.getFilePath());
+      addIfNotBlank(s3KeysToDelete, f.getThumbnailPath());
+      addIfNotBlank(s3KeysToDelete, f.getMediumPath());
+      addIfNotBlank(s3KeysToDelete, f.getLargePath());
+      addIfNotBlank(s3KeysToDelete, f.getTranscodedVideoPath());
     }
 
     if (!s3KeysToDelete.isEmpty()) {
-      if (objectStorage.isEmpty()) {
-        log.warn(
-            "Album {} has {} S3-backed files but ObjectStorageService is not available — leaving objects in place",
-            albumId,
-            s3KeysToDelete.size());
-      } else {
-        objectStorage.get().forBackend(backend).deleteKeys(s3KeysToDelete);
-      }
+      objectStorage.forBackend(backend).deleteKeys(s3KeysToDelete);
     }
     log.info(
         "Album {} storage purge: {} files processed, {} S3 keys batched, {} cross-album shared skipped",
@@ -1031,17 +934,6 @@ public class FileStorageService {
   private static void addIfNotBlank(List<String> sink, String value) {
     if (value != null && !value.isBlank()) {
       sink.add(value);
-    }
-  }
-
-  private void deleteLocalQuietly(String relativePath) {
-    if (relativePath == null) {
-      return;
-    }
-    try {
-      Files.deleteIfExists(toAbsolutePath(relativePath));
-    } catch (IOException e) {
-      log.warn("Failed to delete local file {}: {}", relativePath, e.getMessage());
     }
   }
 
@@ -1061,28 +953,8 @@ public class FileStorageService {
       log.info(
           "Skipping physical file deletion for {} — shared with other records",
           metadata.getStoredFilename());
-    } else if (StoragePaths.isS3Key(metadata.getFilePath())) {
-      deleteS3Objects(metadata);
     } else {
-      try {
-        // Delete physical file
-        Path filePath = toAbsolutePath(metadata.getFilePath());
-        Files.deleteIfExists(filePath);
-        log.info("Deleted file: {}", metadata.getStoredFilename());
-
-        // Delete thumbnails
-        localFileCleanupService.deleteThumbnails(
-            toAbsolutePath(metadata.getThumbnailPath()),
-            toAbsolutePath(metadata.getMediumPath()),
-            toAbsolutePath(metadata.getLargePath()));
-
-        // Delete transcoded video if exists
-        localFileCleanupService.deleteTranscodedVideo(
-            toAbsolutePath(metadata.getTranscodedVideoPath()));
-      } catch (IOException e) {
-        log.error("Error deleting file", e);
-        throw new StorageException("Could not delete file: " + e.getMessage(), e);
-      }
+      deleteS3Objects(metadata);
     }
 
     // Delete metadata (cascade will delete image_tags)
@@ -1421,21 +1293,21 @@ public class FileStorageService {
       mimeType = "video/mp4";
     }
 
-    // Migrated rows hold an S3 object key (originals/... or derivatives/...). Leave the local
-    // Path null in that case so the controller fails loudly if it forgets to check storageKey,
-    // and route serve via ObjectStorageService instead.
-    boolean s3Backed = StoragePaths.isS3Key(filePath);
-    Path absolutePath = s3Backed ? null : toAbsolutePath(filePath);
+    // Every row holds object keys (originals/... or derivatives/...). A path that is not one is a
+    // pre-migration leftover the api pod has no way to read — say so rather than 500.
+    if (!StoragePaths.isS3Key(filePath)) {
+      throw new ResourceGoneException(
+          "This asset is on legacy local storage and can no longer be served.");
+    }
 
     return new FileServeInfo(
         mimeType,
         metadata.getChecksum(),
         metadata.getUploadedAt(),
-        absolutePath,
         metadata.getStoredFilename(),
         metadata.getProcessingStatus(),
         derivativeReady,
-        s3Backed ? filePath : null,
+        filePath,
         metadata.getAlbum() != null ? metadata.getAlbum().getId() : null);
   }
 

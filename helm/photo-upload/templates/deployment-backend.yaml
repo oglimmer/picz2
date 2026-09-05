@@ -83,8 +83,6 @@ spec:
         - name: FILE_UPLOAD_PROCESSING_QUEUE_CAPACITY
           value: {{ .Values.backend.processingQueueCapacity | default 50 | quote }}
         {{- if .Values.objectStorage.enabled }}
-        - name: STORAGE_S3_ENABLED
-          value: "true"
         - name: STORAGE_S3_ENDPOINT
           valueFrom:
             configMapKeyRef:

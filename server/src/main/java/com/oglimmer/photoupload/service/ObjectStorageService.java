@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
@@ -33,7 +32,6 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
  * album is known.
  */
 @Service
-@ConditionalOnProperty(prefix = "storage.s3", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 @Slf4j
 public class ObjectStorageService {

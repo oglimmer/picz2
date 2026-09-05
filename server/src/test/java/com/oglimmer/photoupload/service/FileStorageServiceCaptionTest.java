@@ -64,7 +64,6 @@ class FileStorageServiceCaptionTest {
             Mockito.mock(TagRepository.class),
             imageTagRepo,
             Mockito.mock(AlbumEnabledTagRepository.class),
-            Mockito.mock(LocalFileCleanupService.class),
             Mockito.mock(JdbcTemplate.class),
             Mockito.mock(AlbumRepository.class),
             Mockito.mock(SlideshowRecordingRepository.class),
@@ -75,7 +74,7 @@ class FileStorageServiceCaptionTest {
             Mockito.mock(JobEnqueueService.class),
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            Optional.empty());
+            Mockito.mock(ObjectStorageService.class));
 
     user = new User();
     user.setId(1L);

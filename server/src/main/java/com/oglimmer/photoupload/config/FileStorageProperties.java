@@ -15,7 +15,12 @@ public class FileStorageProperties {
     MAGICK
   }
 
+  /**
+   * Local scratch only (D77): Spring's multipart staging, the worker's per-job work dir and the
+   * ffmpeg audio temp dir. Nothing durable lives here; every kept byte is in object storage.
+   */
   private String uploadDir = "uploads";
+
   private long maxFileSize = 500 * 1024 * 1024; // 500MB
   private int maxFilesPerRequest = 100;
   private int maxConcurrentProcessing = 2; // Maximum concurrent file processing operations

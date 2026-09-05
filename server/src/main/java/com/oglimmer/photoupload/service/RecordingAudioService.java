@@ -11,8 +11,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,13 +41,11 @@ public class RecordingAudioService {
   private final SlideshowRecordingRepository slideshowRecordingRepository;
   private final FileStorageProperties fileStorageProperties;
   private final AudioReencodingService audioReencodingService;
-  private final Optional<ObjectStorageService> objectStorage;
+  private final ObjectStorageService objectStorage;
 
   /** The storage backend of the album this commentary belongs to. */
   private BackendStorage storageFor(SlideshowRecording recording) {
-    return objectStorage
-        .orElseThrow(() -> new IllegalStateException("Object storage is not enabled"))
-        .forAlbumId(recording.getAlbum().getId());
+    return objectStorage.forAlbumId(recording.getAlbum().getId());
   }
 
   /** True when the sibling already exists and can be served straight away. */
@@ -59,10 +55,7 @@ public class RecordingAudioService {
       return false;
     }
     try {
-      if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
-        return storageFor(recording).exists(StoragePaths.audioAacKey(recording.getAudioFilename()));
-      }
-      return Files.exists(localAac(recording));
+      return storageFor(recording).exists(StoragePaths.audioAacKey(recording.getAudioFilename()));
     } catch (Exception e) {
       // "Cannot tell" must not read as "ready": a false here costs one queued job, a false
       // positive hands the client a 404 mid-playback.
@@ -74,16 +67,10 @@ public class RecordingAudioService {
 
   /** Where the sibling lives, for the controller to stream. Only valid once {@link #isAacReady}. */
   public RecordingAudioInfo aacLocation(SlideshowRecording recording) {
-    String aacFilename = StoragePaths.aacFilename(recording.getAudioFilename());
-    if (StoragePaths.isAudioS3Key(recording.getAudioPath()) && objectStorage.isPresent()) {
-      return new RecordingAudioInfo(
-          aacFilename,
-          null,
-          StoragePaths.audioAacKey(recording.getAudioFilename()),
-          recording.getAlbum().getId());
-    }
     return new RecordingAudioInfo(
-        aacFilename, localAac(recording), null, recording.getAlbum().getId());
+        StoragePaths.aacFilename(recording.getAudioFilename()),
+        StoragePaths.audioAacKey(recording.getAudioFilename()),
+        recording.getAlbum().getId());
   }
 
   /**
@@ -116,34 +103,19 @@ public class RecordingAudioService {
     Path scratch = tempDir.resolve("aac-out-" + UUID.randomUUID() + ".m4a");
 
     try {
-      if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
-        Path master = tempDir.resolve("aac-src-" + UUID.randomUUID());
-        try {
-          storageFor(recording).getToFile(audioPath, master);
-          audioReencodingService.transcodeToAac(master, scratch);
-        } finally {
-          Files.deleteIfExists(master);
-        }
-        String aacKey = StoragePaths.audioAacKey(masterFilename);
-        storageFor(recording).putFile(aacKey, scratch, AAC_CONTENT_TYPE);
-        log.info("Stored AAC sibling s3://.../{}", aacKey);
-        return;
+      Path master = tempDir.resolve("aac-src-" + UUID.randomUUID());
+      try {
+        storageFor(recording).getToFile(audioPath, master);
+        audioReencodingService.transcodeToAac(master, scratch);
+      } finally {
+        Files.deleteIfExists(master);
       }
-
-      Path master = uploadDir().resolve(audioPath);
-      audioReencodingService.transcodeToAac(master, scratch);
-      Path destination = localAac(recording);
-      Files.createDirectories(destination.getParent());
-      Files.move(scratch, destination, StandardCopyOption.REPLACE_EXISTING);
-      log.info("Stored AAC sibling {}", destination);
+      String aacKey = StoragePaths.audioAacKey(masterFilename);
+      storageFor(recording).putFile(aacKey, scratch, AAC_CONTENT_TYPE);
+      log.info("Stored AAC sibling s3://.../{}", aacKey);
     } finally {
       Files.deleteIfExists(scratch);
     }
-  }
-
-  private Path localAac(SlideshowRecording recording) {
-    Path master = uploadDir().resolve(recording.getAudioPath());
-    return master.resolveSibling(StoragePaths.aacFilename(recording.getAudioFilename()));
   }
 
   private Path uploadDir() {

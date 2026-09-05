@@ -31,7 +31,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -63,23 +62,18 @@ public class SlideshowRecordingService {
   private final RecordingAudioService recordingAudioService;
   private final JobEnqueueService jobEnqueueService;
   private final ProcessingJobRepository processingJobRepository;
-  // Optional: present iff storage.s3.enabled=true. When present, new audio uploads PUT directly
-  // to MinIO with key audio/{filename} and the audio_path column stores that key. Legacy rows
-  // continue to use audio_path = "recordings/{filename}" (local disk relative path).
-  private final Optional<ObjectStorageService> objectStorage;
+  // Narration is PUT to the album's storage backend under audio/{filename}; audio_path holds that
+  // key. Local disk is only ever the ffmpeg scratch space under .audio-tmp.
+  private final ObjectStorageService objectStorage;
 
   @PostConstruct
   public void init() {
     try {
-      Path uploadDir = uploadDir();
-      Path recordingsDir = uploadDir.resolve("recordings");
-      // Always ensure the legacy directory exists so the disk-backed code path stays viable
-      // (until the helm chart drops the PVC mount).
-      Files.createDirectories(recordingsDir);
-      Files.createDirectories(uploadDir.resolve(AUDIO_TMP));
-      log.info("Recordings directory: {} (S3 mode: {})", recordingsDir, objectStorage.isPresent());
+      Path scratch = uploadDir().resolve(AUDIO_TMP);
+      Files.createDirectories(scratch);
+      log.info("Audio scratch directory: {}", scratch);
     } catch (Exception ex) {
-      throw new RuntimeException("Could not create recordings directory!", ex);
+      throw new RuntimeException("Could not create audio scratch directory!", ex);
     }
   }
 
@@ -166,14 +160,14 @@ public class SlideshowRecordingService {
     return convertToRecordingInfo(recording);
   }
 
-  /**
-   * Stage the upload to a local temp file, re-encode it with ffmpeg (which needs a local file),
-   * then either PUT to S3 (and delete the temp) or move to the durable {@code recordings/}
-   * directory. Returns the value to store in {@code audio_path}.
-   */
   /** Where the narration ended up, and what it costs — master plus its derived AAC sibling. */
   private record StoredAudio(String path, long bytes) {}
 
+  /**
+   * Stage the upload to a local temp file, re-encode it with ffmpeg (which needs a local file),
+   * make the AAC sibling, PUT both to the album's backend and delete the temp files. Returns the
+   * key to store in {@code audio_path} and the bytes the two objects occupy.
+   */
   private StoredAudio persistAudio(MultipartFile audioFile, String audioFilename, Long albumId)
       throws IOException {
     Path uploadDir = uploadDir();
@@ -206,39 +200,22 @@ public class SlideshowRecordingService {
         log.warn("Could not make the AAC sibling for {}: {}", audioFilename, e.toString());
       }
 
-      if (objectStorage.isPresent()) {
-        // Commentary follows its album's storage, same as the photos it talks over — otherwise a
-        // user on their own S3 would have the pictures on their bill and the audio on ours.
-        BackendStorage storage = objectStorage.get().forAlbumId(albumId);
-        String key = StoragePaths.audioKey(audioFilename);
-        // Sized before the PUTs, while both files are still on disk.
-        long bytes = Files.size(tempPath) + (haveAac ? Files.size(aacPath) : 0);
-        storage.putFile(key, tempPath, contentTypeFor(audioFilename));
-        if (haveAac) {
-          storage.putFile(
-              StoragePaths.audioAacKey(audioFilename),
-              aacPath,
-              RecordingAudioService.AAC_CONTENT_TYPE);
-        }
-        Files.deleteIfExists(tempPath);
-        Files.deleteIfExists(aacPath);
-        return new StoredAudio(key, bytes);
-      }
-
-      // Legacy path: move re-encoded file to the durable recordings dir, keep DB pointer
-      // relative (recordings/{filename}) just like before.
-      Path durable = uploadDir.resolve("recordings").resolve(audioFilename);
-      Files.createDirectories(durable.getParent());
-      Files.move(tempPath, durable);
+      // Commentary follows its album's storage, same as the photos it talks over — otherwise a
+      // user on their own S3 would have the pictures on their bill and the audio on ours.
+      BackendStorage storage = objectStorage.forAlbumId(albumId);
+      String key = StoragePaths.audioKey(audioFilename);
+      // Sized before the PUTs, while both files are still on disk.
+      long bytes = Files.size(tempPath) + (haveAac ? Files.size(aacPath) : 0);
+      storage.putFile(key, tempPath, contentTypeFor(audioFilename));
       if (haveAac) {
-        Files.move(aacPath, durable.resolveSibling(StoragePaths.aacFilename(audioFilename)));
+        storage.putFile(
+            StoragePaths.audioAacKey(audioFilename),
+            aacPath,
+            RecordingAudioService.AAC_CONTENT_TYPE);
       }
-      long localBytes =
-          Files.size(durable)
-              + (haveAac
-                  ? Files.size(durable.resolveSibling(StoragePaths.aacFilename(audioFilename)))
-                  : 0);
-      return new StoredAudio("recordings/" + audioFilename, localBytes);
+      Files.deleteIfExists(tempPath);
+      Files.deleteIfExists(aacPath);
+      return new StoredAudio(key, bytes);
     } catch (IOException e) {
       try {
         Files.deleteIfExists(tempPath);
@@ -355,9 +332,8 @@ public class SlideshowRecordingService {
                 () -> new ResourceNotFoundException("Recording not found with id: " + recordingId));
 
     String audioPath = recording.getAudioPath();
-    String aacFilename = StoragePaths.aacFilename(recording.getAudioFilename());
-    if (StoragePaths.isAudioS3Key(audioPath) && objectStorage.isPresent()) {
-      BackendStorage storage = objectStorage.get().forAlbumId(recording.getAlbum().getId());
+    if (audioPath != null) {
+      BackendStorage storage = objectStorage.forAlbumId(recording.getAlbum().getId());
       try {
         storage.delete(audioPath);
         log.info("Deleted audio object: s3://.../{}", audioPath);
@@ -373,13 +349,6 @@ public class SlideshowRecordingService {
       } catch (Exception e) {
         log.warn("Could not delete AAC sibling {}: {}", aacKey, e.toString());
       }
-    } else if (audioPath != null) {
-      Path local = uploadDir().resolve(audioPath);
-      if (Files.exists(local)) {
-        Files.delete(local);
-        log.info("Deleted audio file: {}", local);
-      }
-      Files.deleteIfExists(local.resolveSibling(aacFilename));
     }
 
     // Delete database record (cascade will handle images)
@@ -398,15 +367,8 @@ public class SlideshowRecordingService {
       return aacRendition(recording);
     }
 
-    String audioPath = recording.getAudioPath();
-    if (StoragePaths.isAudioS3Key(audioPath)) {
-      // S3-backed: pass the key, leave audioPath null so the controller streams from MinIO.
-      return new RecordingAudioInfo(
-          recording.getAudioFilename(), null, audioPath, recording.getAlbum().getId());
-    }
-    Path local = uploadDir().resolve(audioPath);
     return new RecordingAudioInfo(
-        recording.getAudioFilename(), local, null, recording.getAlbum().getId());
+        recording.getAudioFilename(), recording.getAudioPath(), recording.getAlbum().getId());
   }
 
   /**

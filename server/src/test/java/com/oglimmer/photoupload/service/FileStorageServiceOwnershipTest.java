@@ -22,6 +22,7 @@ import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
+import com.oglimmer.photoupload.storage.BackendStorage;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
@@ -45,6 +46,8 @@ class FileStorageServiceOwnershipTest {
 
   private FileMetadataRepository metaRepo;
   private JdbcTemplate jdbcTemplate;
+  private ObjectStorageService storage;
+  private BackendStorage bucket;
   private FileStorageService svc;
 
   @BeforeEach
@@ -54,6 +57,8 @@ class FileStorageServiceOwnershipTest {
 
     metaRepo = Mockito.mock(FileMetadataRepository.class);
     jdbcTemplate = Mockito.mock(JdbcTemplate.class);
+    storage = Mockito.mock(ObjectStorageService.class);
+    bucket = Mockito.mock(BackendStorage.class);
     UserContext userContext = Mockito.mock(UserContext.class);
 
     User user = new User();
@@ -68,7 +73,6 @@ class FileStorageServiceOwnershipTest {
             Mockito.mock(TagRepository.class),
             Mockito.mock(ImageTagRepository.class),
             Mockito.mock(AlbumEnabledTagRepository.class),
-            Mockito.mock(LocalFileCleanupService.class),
             jdbcTemplate,
             Mockito.mock(AlbumRepository.class),
             Mockito.mock(SlideshowRecordingRepository.class),
@@ -79,7 +83,7 @@ class FileStorageServiceOwnershipTest {
             Mockito.mock(JobEnqueueService.class),
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            Optional.empty());
+            storage);
   }
 
   @Test
@@ -97,12 +101,16 @@ class FileStorageServiceOwnershipTest {
     FileMetadata own = new FileMetadata();
     own.setId(OWN_FILE);
     own.setStoredFilename("own.jpg");
-    own.setFilePath("own.jpg");
+    own.setFilePath("originals/own.jpg");
+    own.setThumbnailPath("derivatives/100/thumb.jpg");
     when(metaRepo.findByIdAndUserId(OWN_FILE, USER_ID)).thenReturn(Optional.of(own));
-    when(metaRepo.countByFilePath("own.jpg")).thenReturn(1L);
+    when(metaRepo.countByFilePath("originals/own.jpg")).thenReturn(1L);
+    when(storage.forFile(own)).thenReturn(bucket);
 
     svc.deleteFile(OWN_FILE);
 
+    verify(bucket).delete("originals/own.jpg");
+    verify(bucket).delete("derivatives/100/thumb.jpg");
     verify(metaRepo).delete(own);
   }
 
