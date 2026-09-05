@@ -21,7 +21,6 @@ class JobMetricsConfigTest {
     when(depth.getCount(JobStatus.PROCESSING)).thenReturn(1L);
     when(depth.getCount(JobStatus.DEAD_LETTER)).thenReturn(2L);
     when(depth.getCount(JobStatus.DONE)).thenReturn(0L);
-    when(depth.getCount(JobStatus.FAILED)).thenReturn(0L);
 
     JobMetricsConfig config = new JobMetricsConfig(registry, depth);
     config.registerGauges();
