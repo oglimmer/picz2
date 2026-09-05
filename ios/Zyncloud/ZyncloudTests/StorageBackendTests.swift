@@ -137,11 +137,13 @@ struct StorageBackendTests {
         }
     }
 
-    /// AWS is the one provider that wants virtual-hosted addressing; everyone else here needs
-    /// path-style, and getting it backwards produces a signature error that names neither.
-    @Test func `only amazon defaults to virtual hosted addressing`() {
+    /// AWS and OVH want virtual-hosted addressing (OVH buckets are addressable like Amazon's);
+    /// everyone else here needs path-style, and getting it backwards produces a signature error
+    /// that names neither.
+    @Test func `only amazon and ovh default to virtual hosted addressing`() {
+        let virtualHosted: Set<String> = ["aws", "ovh"]
         for provider in StorageProvider.all {
-            #expect(provider.pathStyleAccess == (provider.id != "aws"))
+            #expect(provider.pathStyleAccess == !virtualHosted.contains(provider.id), "\(provider.id)")
         }
     }
 
