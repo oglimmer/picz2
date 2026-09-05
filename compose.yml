@@ -54,7 +54,7 @@ services:
         condition: service_healthy
 
   mariadb:
-    image: mariadb
+    image: mariadb:latest
     container_name: photoupload-mariadb
     restart: unless-stopped
     environment:
