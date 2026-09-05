@@ -12,6 +12,10 @@ class SyncOptionsViewModel: ViewModelProtocol {
     @Published var selectedAlbum: Album?
     @Published var isLoadingAlbums: Bool = false
     @Published var isDeletingAccount: Bool = false
+    /// Whether this account may change instance-wide settings — today, the two narration language
+    /// names (server D75). Read from `/api/auth/check` on appearance; false until it answers, so
+    /// the row appears rather than disappears, and never for a plain account.
+    @Published var isAdmin: Bool = false
 
     private let syncCoordinator: SyncCoordinator
     private let apiClient: APIClient?
@@ -37,6 +41,21 @@ class SyncOptionsViewModel: ViewModelProtocol {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { @Sendable [weak self] status in
             Task { @MainActor in
                 self?.authStatus = status
+            }
+        }
+    }
+
+    /// Refreshes `isAdmin`. Silent on failure: this only decides whether an operator row is shown,
+    /// and a transient error should not put up an alert on a screen that is otherwise fine.
+    func loadAccountRole() {
+        guard let apiClient else { return }
+
+        apiClient.checkAuth { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                if case let .success(response) = result {
+                    self.isAdmin = response.isAdmin
+                }
             }
         }
     }

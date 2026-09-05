@@ -378,6 +378,13 @@ struct AuthCheckResponse: Codable {
     let success: Bool
     let email: String?
     let emailVerified: Bool
+    /// Operator account (server D74). Optional because a server older than that answers without
+    /// the field, and a missing flag must read as "not an admin", never as a decode failure.
+    let admin: Bool?
+
+    var isAdmin: Bool {
+        admin ?? false
+    }
 }
 
 // MARK: - Reordering
