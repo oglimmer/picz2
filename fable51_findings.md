@@ -99,7 +99,7 @@ Details per item below.
 
 ## Architecture and composition
 
-**Status 2026-09-05: open.** None of these is a one-line change; they need a decision on scope.
+**Status 2026-09-05 (second pass): all done.** Session tokens are **D78** (`V52`, `SessionTokenService`, `SessionTokenAuthenticationFilter`, `POST/DELETE /api/auth/sessions`); the five JS SFCs are TypeScript; `GalleryView.vue` is ~1050 lines over `composables/gallery/*` and five new components; the two galleries share `useLightboxNavigation`, `usePlaybackControls`, `useMapViewMode`, `useDayRegionView`, `countTags`, `DayRegionSections`, `PresentationSectionList`; one poller (`useProcessingPoller.waitFor`) and `useFiles.rotateFile`; `useApi.requestJson`; `composables/README.md` documents state scope; one album loader with a generation counter plus a load sequence in `useFiles`; one router guard; `utils/cookies.ts`. Verified with `vue-tsc`, `eslint`, `vite build` and the server suite (289/0). Each item below is kept as written for the record.
 
 - **`views/GalleryView.vue` is 2917 lines of plain JavaScript.** Its `<script>` has no `lang="ts"`, so `vue-tsc` skips it, and `setup()` returns about 130 bindings. Same in `views/PublicGalleryView.vue` (914), `components/Lightbox.vue`, `components/SubscriptionDialog.vue`, `views/SubscriptionConfirmView.vue`. The other 32 SFCs use `<script setup lang="ts">`. Suggested split for GalleryView: upload flow, recording/playback, reorder mode, duplicate mode, tag picker, group dialogs, each a composable or child component.
 - **`GalleryView` and `PublicGalleryView` duplicate each other.** Tag counting (`composables/useFiles.ts:42` vs `PublicGalleryView.vue:565`), `hasRecordingForLanguage`/`getRecordingForLanguage`, `navigateNext`/`navigatePrevious`, `handlePauseResume`/`handleStopPlayback`, the map and day-region wiring, and the ~80-line day-and-region template block all exist twice. Candidates: `useRecordingPicker`, `useLightboxNavigation`, `useDayRegionView`, a `DayRegionSections` component.
@@ -111,7 +111,7 @@ Details per item below.
 - **Three cookie parsers.** `useAnalytics.checkConsentStatus`, `CookieConsent.getConsentStatus`, `PublicGalleryView.hasConsentCookie`.
 - **`useFiles.selectedTag` is watched twice with different strategies.** `useFiles.ts:65` filters client-side whenever `allFilesUnfiltered` is non-empty; `GalleryView.vue:1757` reloads from the server. In the logged-in gallery both fire on every tag change.
 - **Plaintext password in `localStorage`, re-sent as Basic on every request.** `composables/useAuth.ts:73-74`. D44 already rejected "base64 is not encryption" for the tusd metadata; the same reasoning applies to the browser: any XSS is a full account takeover and there is no server-side revoke. A session cookie or short-lived token is the fix. **Decision needed** — this is an auth-model change, not a patch.
-- `AlbumFile` carries both `mimeType` and `mimetype` (`types/index.ts:113-114`); the server sends only `mimetype` (`FileInfoMapper`). Drop `mimeType`.
+- `AlbumFile` carries both `mimeType` and `mimetype` (`types/index.ts:113-114`); the server sends only `mimetype` (`FileInfoMapper`). Drop `mimeType`. *(still open — dead-code sweep)*
 - `utils/api-config.ts` hard-codes `localhost:8080` and `<ip>:8080`; a `VITE_API_URL` env override is the usual pattern and would remove the guessing.
 
 ## Dead code
@@ -120,7 +120,7 @@ Details per item below.
 
 - Types with no reference outside `types/index.ts`: `AuthState`, `FileFilters`, `SlideshowRecording`, `AlbumSettings`, `ImageTiming`, `PresentationMode`.
 - `usePresentationGroups.groupEndingAt` (`:220`) — defined, exported, never called.
-- `AuthComposable.verifyCredentials` and `useAnalytics.visitorId` are exported but only used internally.
+- `useAnalytics.visitorId` is exported but only used internally. (`verifyCredentials` and the `AuthState` type went with D78.)
 - `defineExpose({ tagInput })` in `components/BulkTagBar.vue:173` and `defineExpose({ close })` in `components/MenuButton.vue:72` — no parent holds a ref to either.
 - `TagManager` emits `tag-created` / `tag-updated` / `tag-deleted`; `SubscriptionDialog` emits `subscribed` — no listeners anywhere. `TagManager`'s `tags` prop duplicates the shared `useTags` state it also imports.
 - `PublicGalleryView.isConfirmationMode` (`:477`) is never set true, so `SubscriptionDialog`'s `isConfirmation` branch is unreachable. `hasConsent` is destructured and unused (`:459`, eslint warns).
@@ -130,13 +130,13 @@ Details per item below.
 - `assets/css/legal.css` is a one-line comment, imported by three views.
 - `style.css` classes with no matching markup: `album-label`, `album-select`, `album-select-wrapper`, `album-selection`, `analytics-loading`, `btn-large`, `cta-section`, `feature-icon`, `highlight-feature`, `save-btn`, `target-album-panel`, `editable-title-wrapper`.
 - `frontend/.idea/` is tracked in git.
-- `package.json` `lint` scripts pass `--ext`, which ESLint 9 flat config ignores.
+- ~~`package.json` `lint` scripts pass `--ext`, which ESLint 9 flat config ignores.~~ Fixed.
 
 ## Engineering practice
 
-**Status 2026-09-05: open.**
+**Status 2026-09-05 (second pass):** the test suite exists — vitest + jsdom, 68 tests over `utils/*` (Basic auth encoding, dates, byte sizes, tag counts, cookies, the day/region clustering incl. the camera-clock day cut and the no-chaining guarantee) and the composables (`requestJson` error shapes, the D78 session flow incl. the legacy-password migration, the poller's `waitFor`, `buildSections`/`groupContextFor`, lightbox wrap, upload error copy, selection, reorder, duplicate mode, bulk actions, the album loader's cancellation). `npm test`, `npm run type-check:test`. The ESLint `--ext` flag is gone. Still open: CI, `npm ci` and pinned images in the Dockerfile, `index.html` caching, and any component-level or browser test.
 
-- **No frontend tests.** No vitest, no Playwright, nothing. `utils/dayRegionGrouping.ts` (clustering, day cut with UTC offsets), `usePresentationGroups.buildSections`, `useUpload.translateUploadError`, `utils/format.ts` and the new `utils/basicAuth.ts` are pure and cheap to cover. Any refactor of `GalleryView` needs a net first.
+- **No frontend tests.** *(fixed, see above)* No vitest, no Playwright, nothing. `utils/dayRegionGrouping.ts` (clustering, day cut with UTC offsets), `usePresentationGroups.buildSections`, `useUpload.translateUploadError`, `utils/format.ts` and the new `utils/basicAuth.ts` are pure and cheap to cover. Any refactor of `GalleryView` needs a net first.
 - **No CI.** There is no `.github/`; `oglimmer.sh` builds the image. `vue-tsc` runs in `npm run build`, but lint does not, and the ESLint config downgrades `no-explicit-any`, `no-unused-vars` and `vue/no-dupe-keys` to warn "so linting does not fail builds initially" — the 74 warnings are the result.
 - **`Dockerfile-prod`** uses `npm i` instead of `npm ci` (lockfile not enforced) and unpinned `FROM node` / `nginx:latest`.
 - **`nginx.conf`** caches hashed assets 30 days but sets no `Cache-Control: no-cache` on `index.html`; a stale shell can reference assets that no longer exist after a deploy.
