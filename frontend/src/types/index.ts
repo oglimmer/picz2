@@ -59,6 +59,18 @@ export interface StorageBackend {
   quotaBytes?: number | null;
 }
 
+/**
+ * `GET /api/storage-usage`: the signed-in user's standing with the site's own storage. `full` is
+ * the server's verdict — the same rule the upload path enforces — and drives the persistent
+ * banner; the numbers are there for display only.
+ */
+export interface StorageUsage {
+  usedBytes: number;
+  quotaBytes: number;
+  remainingBytes: number;
+  full: boolean;
+}
+
 /** What the add/edit form sends. `secretKey` omitted on edit means "keep the stored one". */
 export interface StorageBackendInput {
   name: string;

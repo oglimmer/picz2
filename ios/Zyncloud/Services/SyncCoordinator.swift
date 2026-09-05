@@ -479,6 +479,9 @@ final class SyncCoordinator: ObservableObject, @unchecked Sendable {
         DispatchQueue.main.async {
             self.metrics.uploaded += 1
         }
+        // Each upload moves the storage meter; the monitor coalesces a burst into one re-ask,
+        // so the "storage full" banner appears as the last megabyte goes, not a minute later.
+        StorageUsageMonitor.reportUsageChanged()
     }
 
     // MARK: - Sync Reconciliation

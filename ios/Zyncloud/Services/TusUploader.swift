@@ -670,6 +670,7 @@ final class TusUploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, U
             filename: exp.filename,
             serverMessage: Self.serverMessage(from: response),
         )
+        StorageUsageMonitor.reportStorageFull()
         // Deliberately not marked uploaded: the bytes are not on the server, and a later run
         // must try again once the user has made room.
         UploadStore.shared.removeFromUploading(assetId)
