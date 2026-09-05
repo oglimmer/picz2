@@ -22,6 +22,12 @@ export function useConfirm() {
     } = {},
   ): Promise<boolean> => {
     return new Promise((resolve) => {
+      // Only one dialog is ever drawn. If a caller opens a second one while the first is still
+      // up, the first would otherwise be replaced and its promise would never settle, leaving
+      // that caller's `await` hanging for good. Answer it "no" instead: nothing was confirmed.
+      if (currentDialog.value) {
+        currentDialog.value.resolve(false);
+      }
       const id = `confirm-${dialogId++}`;
       currentDialog.value = {
         id,

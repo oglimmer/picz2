@@ -1,5 +1,6 @@
 import { ref, type Ref } from "vue";
 import { getApiUrl } from "../utils/api-config";
+import { basicAuthHeader } from "../utils/basicAuth";
 
 const apiUrl = getApiUrl();
 
@@ -39,9 +40,8 @@ export function useAuth(): AuthComposable {
     password: string,
   ): Promise<boolean> {
     try {
-      const token = btoa(`${email}:${password}`);
       const res = await fetch(`${apiUrl}/api/auth/check`, {
-        headers: { Authorization: `Basic ${token}` },
+        headers: { Authorization: basicAuthHeader(email, password) },
       });
       if (!res.ok) return false;
       const data = await res.json().catch(() => ({}));
@@ -120,8 +120,7 @@ export function useAuth(): AuthComposable {
     if (!isLoggedIn.value || !authEmail.value || !authPassword.value) {
       return {};
     }
-    const token = btoa(`${authEmail.value}:${authPassword.value}`);
-    return { Authorization: `Basic ${token}` };
+    return { Authorization: basicAuthHeader(authEmail.value, authPassword.value) };
   }
 
   return {

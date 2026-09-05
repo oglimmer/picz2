@@ -144,15 +144,29 @@ export function useAnalytics(): AnalyticsComposable {
     }
   }
 
+  /** The server's error body carries the useful sentence; the status code alone does not. */
+  async function messageFrom(response: Response, fallback: string): Promise<string> {
+    const body = await response.json().catch(() => null);
+    return body?.message || `${fallback} (HTTP ${response.status})`;
+  }
+
   async function resetAlbumAnalytics(albumId: number): Promise<void> {
-    await fetchWithAuth(`${apiUrl}/api/albums/${albumId}/analytics`, { method: 'DELETE' });
+    const response = await fetchWithAuth(`${apiUrl}/api/albums/${albumId}/analytics`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error(await messageFrom(response, 'Could not reset analytics'));
+    }
   }
 
   async function setAnalyticsPaused(albumId: number, paused: boolean): Promise<void> {
-    await fetchWithAuth(
+    const response = await fetchWithAuth(
       `${apiUrl}/api/albums/${albumId}/analytics/paused?paused=${paused}`,
       { method: 'PUT' }
     );
+    if (!response.ok) {
+      throw new Error(await messageFrom(response, 'Could not change counting'));
+    }
   }
 
   /**

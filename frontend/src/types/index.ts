@@ -96,12 +96,9 @@ export function albumMapView(album: Album | null | undefined): MapView | null {
   };
 }
 
-export type ProcessingStatus =
-  | "QUEUED"
-  | "PROCESSING"
-  | "DONE"
-  | "FAILED"
-  | "DEAD_LETTER";
+// Mirrors JobStatus on the server: there is no FAILED (D76). A failed attempt goes back to
+// QUEUED; out of attempts means DEAD_LETTER.
+export type ProcessingStatus = "QUEUED" | "PROCESSING" | "DONE" | "DEAD_LETTER";
 
 export interface AlbumFile {
   id: number;

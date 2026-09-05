@@ -43,6 +43,15 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
   const recordings = ref<RecordingInfo[]>([]);
   const loadingRecordings = ref<boolean>(false);
   const playbackTimeline = ref<PlaybackTimelineEntry[]>([]);
+  // The handlers attached to the current audio element, kept so stopPlayback can detach the
+  // very same functions. removeEventListener with a fresh arrow function removes nothing, and
+  // the element is reused across plays, so without this every play stacked another set.
+  let attached: {
+    element: HTMLAudioElement;
+    onTimeUpdate: () => void;
+    onEnded: () => void;
+    onError: (e: Event) => void;
+  } | null = null;
 
   /**
    * Load recordings for a specific album and optional filter tag
@@ -151,9 +160,16 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
         stopPlayback();
       };
 
+      detachListeners();
       audioElement.value.addEventListener("timeupdate", handleTimeUpdate);
       audioElement.value.addEventListener("ended", handleEnded);
       audioElement.value.addEventListener("error", handleError);
+      attached = {
+        element: audioElement.value,
+        onTimeUpdate: handleTimeUpdate,
+        onEnded: handleEnded,
+        onError: handleError,
+      };
 
       // Start playing
       await audioElement.value.play();
@@ -167,15 +183,22 @@ export function useSlideshowPlayback(): SlideshowPlaybackComposable {
     }
   }
 
+  function detachListeners(): void {
+    if (!attached) return;
+    const { element, onTimeUpdate, onEnded, onError } = attached;
+    element.removeEventListener("timeupdate", onTimeUpdate);
+    element.removeEventListener("ended", onEnded);
+    element.removeEventListener("error", onError);
+    attached = null;
+  }
+
   /**
    * Stop playback
    */
   function stopPlayback(): void {
+    detachListeners();
     if (audioElement.value) {
       audioElement.value.pause();
-      audioElement.value.removeEventListener("timeupdate", () => {});
-      audioElement.value.removeEventListener("ended", () => {});
-      audioElement.value.removeEventListener("error", () => {});
       audioElement.value.src = "";
     }
 

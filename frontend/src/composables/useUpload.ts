@@ -1,6 +1,7 @@
 import { Upload } from "tus-js-client";
 import { formatBytes } from "../utils/format";
 import { getApiUrl } from "../utils/api-config";
+import { basicAuthHeader } from "../utils/basicAuth";
 import { useApi } from "./useApi";
 import { useAuth } from "./useAuth";
 import { useCapabilities } from "./useCapabilities";
@@ -53,7 +54,7 @@ export function useUpload() {
       try {
         const res = await fetch(`${getApiUrl()}/api/upload-tokens`, {
           method: "POST",
-          headers: { Authorization: `Basic ${btoa(credentials)}` },
+          headers: { Authorization: basicAuthHeader(authEmail.value, authPassword.value) },
         });
         if (!res.ok) return null;
         const body = (await res.json()) as { token?: string };
@@ -119,7 +120,7 @@ export function useUpload() {
           // Belt-and-braces: tusd forwards Authorization to the hook (per
           // -hooks-http-forward-headers=Authorization). Sending it lets a future server
           // change prefer the standard header without breaking older clients.
-          Authorization: `Basic ${btoa(credentials)}`,
+          Authorization: basicAuthHeader(authEmail.value, authPassword.value),
         },
         onError(err) {
           // tus.DetailedError exposes the original response status + headers on a real HTTP

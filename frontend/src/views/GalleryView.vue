@@ -745,7 +745,7 @@
       v-if="!presentationMode && isLoggedIn && !tagPickerOpen && enabledAlbumTags.length === 0 && availableTags.length > 0"
       class="tag-picker-notice"
     >
-      No tags are enabled for this album yet. Click "Manage Album Tags" to enable tags.
+      No tags are enabled for this album yet. Enable some under Manage → Album tags.
     </div>
 
     <div
@@ -795,7 +795,7 @@
           No photos in this album
         </p>
         <p class="empty-hint">
-          Upload photos using the macOS Share Extension
+          Use “Upload photos” above, or let your phone send them here.
         </p>
       </div>
     </div>
@@ -2019,7 +2019,7 @@ export default {
      * show stale derivatives. Cap the wait so a stuck worker surfaces as a user-visible error
      * instead of an infinite spinner.
      *
-     * Returns the ids the worker reported as FAILED/DEAD_LETTER, each with its message; callers
+     * Returns the ids the worker reported as DEAD_LETTER, each with its message; callers
      * decide whether one failure is fatal (single image) or partial (bulk).
      */
     async function awaitProcessingDone(fileIds, timeoutMs) {
@@ -2040,7 +2040,7 @@ export default {
           }
           if (status.processingStatus === 'DONE') {
             pending.delete(fileId)
-          } else if (status.processingStatus === 'FAILED' || status.processingStatus === 'DEAD_LETTER') {
+          } else if (status.processingStatus === 'DEAD_LETTER') {
             pending.delete(fileId)
             failures.push({ fileId, message: status.error || 'Rotation failed on the worker' })
           }
