@@ -1,7 +1,6 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.MessageResponse;
@@ -11,8 +10,6 @@ import com.oglimmer.photoupload.model.RecordingInfo;
 import com.oglimmer.photoupload.model.RecordingRequest;
 import com.oglimmer.photoupload.model.RecordingResponse;
 import com.oglimmer.photoupload.model.RecordingsListResponse;
-import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
-import com.oglimmer.photoupload.service.AnalyticsService;
 import com.oglimmer.photoupload.service.ObjectStorageService;
 import com.oglimmer.photoupload.service.SlideshowRecordingService;
 import com.oglimmer.photoupload.util.RangeRequestHandler;
@@ -40,6 +37,8 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 @Profile(Profiles.API)
 @RestController
@@ -49,13 +48,12 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 public class SlideshowRecordingController {
 
   private final SlideshowRecordingService slideshowRecordingService;
-  private final ObjectMapper objectMapper;
-  // Optional: present iff storage.s3.enabled=true. Used to mint short-lived presigned URLs for
-  // S3-backed recordings — the client follows the 302 directly to MinIO, which handles HTTP
-  // Range natively, so the API pod stays out of the audio data path.
+  // Boot's own (Jackson 3) mapper — the one MVC uses — for the JSON that arrives as a plain string
+  // part of the multipart body. Browsers append it as text/plain, so @RequestPart cannot bind it.
+  private final JsonMapper jsonMapper;
+  // Optional: present iff storage.s3.enabled=true. S3-backed audio is streamed through this pod
+  // with the Range header forwarded to MinIO — see serveAudioFromS3.
   private final Optional<ObjectStorageService> objectStorage;
-  private final AnalyticsService analyticsService;
-  private final SlideshowRecordingRepository slideshowRecordingRepository;
 
   @PostMapping("/albums/{albumId}/recordings")
   public ResponseEntity<RecordingResponse> uploadRecording(
@@ -64,7 +62,7 @@ public class SlideshowRecordingController {
       @RequestParam("data") String dataJson) {
     try {
       // Parse the JSON data
-      RecordingRequest request = objectMapper.readValue(dataJson, RecordingRequest.class);
+      RecordingRequest request = jsonMapper.readValue(dataJson, RecordingRequest.class);
 
       // Validate audio file
       if (audioFile.isEmpty()) {
@@ -83,7 +81,7 @@ public class SlideshowRecordingController {
               .build();
 
       return ResponseEntity.ok(response);
-    } catch (IOException e) {
+    } catch (JacksonException | IOException e) {
       log.error("Error parsing recording data", e);
       throw new ValidationException("Invalid recording data: " + e.getMessage());
     }

@@ -8,6 +8,7 @@ import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.entity.SlideshowRecording;
 import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
@@ -233,6 +234,11 @@ public class FileStorageService {
     // Validate file
     validateFile(file);
 
+    // Ownership BEFORE any byte moves. The album decides which storage backend receives the PUT,
+    // and an album id that is not the caller's used to be discovered only by the insert transaction
+    // — after the bytes had already landed in somebody else's bucket as an orphan.
+    requireOwnedAlbum(currentUser, effectiveAlbumId);
+
     // Before anything is staged or PUT: an upload that cannot be kept should not be carried.
     // A no-op when the album lives on the user's own storage — that disk is theirs to fill.
     storageQuotaService.requireRoomFor(currentUser, effectiveAlbumId, file.getSize());
@@ -295,53 +301,22 @@ public class FileStorageService {
     try (InputStream in = file.getInputStream()) {
       Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
     }
-    final String checksum = computeSha256(tempFile);
-
-    // Check for duplicate by checksum (same album and other albums) in a single transaction.
-    FileInfo duplicateByChecksum =
-        !properties.isDuplicateDetectionEnabled()
-            ? null
-            : transactionTemplate.execute(
-                status -> {
-                  Optional<FileMetadata> existingFile =
-                      metadataRepository.findByChecksumAndAlbumIdAndUserId(
-                          checksum, effectiveAlbumId, currentUser.getId());
-                  if (existingFile.isPresent()) {
-                    FileMetadata existing = existingFile.get();
-                    log.info(
-                        "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
-                        effectiveAlbumId,
-                        file.getOriginalFilename(),
-                        existing.getOriginalName());
-                    return convertToFileInfo(existing);
-                  }
-
-                  List<FileMetadata> existingInOtherAlbum =
-                      metadataRepository.findByChecksum(checksum);
-                  if (!existingInOtherAlbum.isEmpty()) {
-                    FileMetadata existing = existingInOtherAlbum.get(0);
-                    if (existingInOtherAlbum.size() > 1) {
-                      log.warn(
-                          "⚠️ Found {} duplicate files with checksum {}, using first one",
-                          existingInOtherAlbum.size(),
-                          checksum);
-                    }
-                    log.info(
-                        "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
-                        file.getOriginalFilename(),
-                        existing.getOriginalName(),
-                        existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
-                    return convertToFileInfo(existing);
-                  }
-                  return null;
-                });
+    // From here until the bytes are durable, every exit path must remove the staged file.
+    final String checksum;
+    final FileInfo duplicateByChecksum;
+    try {
+      checksum = computeSha256(tempFile);
+      duplicateByChecksum = findDuplicateByChecksum(checksum, file, effectiveAlbumId, currentUser);
+    } catch (IOException | RuntimeException e) {
+      Files.deleteIfExists(tempFile);
+      throw e;
+    }
     if (duplicateByChecksum != null) {
       Files.deleteIfExists(tempFile);
       return duplicateByChecksum;
     }
 
     String contentType = file.getContentType();
-
     // Persist the bytes. With S3 enabled the storage of record is MinIO; otherwise fall back to
     // the legacy local-disk write so tests / non-S3 deployments still function.
     final String storedPath;
@@ -405,14 +380,55 @@ public class FileStorageService {
               addNewAssetTagToFile(saved, newAssetTagId, newAssetTag);
               // Same TX as the metadata insert → either both visible or neither.
               jobEnqueueService.enqueue(saved.getId());
-              return convertToFileInfoWithId(saved);
+              return convertToFileInfo(saved);
             });
 
     return result;
   }
 
-  private FileInfo convertToFileInfoWithId(FileMetadata saved) {
-    return convertToFileInfo(saved);
+  /**
+   * Checksum-based duplicate detection for the multipart path: first the same album, then any
+   * album. Returns the existing asset to hand back instead of storing a second copy, or {@code
+   * null} when the upload is new (or detection is switched off).
+   */
+  private FileInfo findDuplicateByChecksum(
+      String checksum, MultipartFile file, Long effectiveAlbumId, User currentUser) {
+    if (!properties.isDuplicateDetectionEnabled()) {
+      return null;
+    }
+    return transactionTemplate.execute(
+        status -> {
+          Optional<FileMetadata> existingFile =
+              metadataRepository.findByChecksumAndAlbumIdAndUserId(
+                  checksum, effectiveAlbumId, currentUser.getId());
+          if (existingFile.isPresent()) {
+            FileMetadata existing = existingFile.get();
+            log.info(
+                "⚠️ Duplicate file detected in album {}: {} (matches existing file: {}). Upload skipped.",
+                effectiveAlbumId,
+                file.getOriginalFilename(),
+                existing.getOriginalName());
+            return convertToFileInfo(existing);
+          }
+
+          List<FileMetadata> existingInOtherAlbum = metadataRepository.findByChecksum(checksum);
+          if (!existingInOtherAlbum.isEmpty()) {
+            FileMetadata existing = existingInOtherAlbum.get(0);
+            if (existingInOtherAlbum.size() > 1) {
+              log.warn(
+                  "⚠️ Found {} duplicate files with checksum {}, using first one",
+                  existingInOtherAlbum.size(),
+                  checksum);
+            }
+            log.info(
+                "⚠️ Duplicate file detected: {} (matches existing file: {} in album {}). Upload skipped.",
+                file.getOriginalFilename(),
+                existing.getOriginalName(),
+                existing.getAlbum() != null ? existing.getAlbum().getName() : "unknown");
+            return convertToFileInfo(existing);
+          }
+          return null;
+        });
   }
 
   /**
@@ -469,6 +485,10 @@ public class FileStorageService {
     }
 
     validateTusUpload(originalName, contentType, fileSize);
+
+    // Same rule as storeFile: prove the album is the caller's before the bytes are moved into its
+    // backend. The staged tus-uploads/ object is left for the retention sweep on rejection.
+    requireOwnedAlbum(currentUser, effectiveAlbumId);
 
     // Re-checked here even though pre-create already asked: the pre-create hook sees the size the
     // client *declared*, and the album it names can be changed between the two calls. Rejecting
@@ -578,13 +598,6 @@ public class FileStorageService {
   }
 
   @Transactional(readOnly = true)
-  public List<FileInfo> listFiles() {
-    return metadataRepository.findAllByOrderByDisplayOrderAsc().stream()
-        .map(this::convertToFileInfo)
-        .collect(Collectors.toList());
-  }
-
-  @Transactional(readOnly = true)
   public List<FileInfo> listFilesByAlbum(Long albumId) {
     User currentUser = userContext.getCurrentUser();
     // Return files in specified album (albumId required)
@@ -596,9 +609,16 @@ public class FileStorageService {
         .collect(Collectors.toList());
   }
 
+  /**
+   * The public listing behind a share link. Both privacy gates live here, not in the callers: the
+   * album must be published (an unpublished or unknown token is the same 404), and assets in the
+   * {@code hidden} holding pen (D70) are dropped.
+   */
   @Transactional(readOnly = true)
   public List<FileInfo> listFilesByAlbumByShareToken(String shareToken) {
-    // Return files in specified album (albumId required)
+    albumRepository
+        .findByShareTokenAndPublishedTrue(shareToken)
+        .orElseThrow(() -> new ResourceNotFoundException("Album not found with share token"));
     // Using optimized query with JOIN FETCH to avoid N+1 query problem
     return metadataRepository
         .findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(shareToken)
@@ -705,7 +725,7 @@ public class FileStorageService {
     return filename.substring(0, filename.lastIndexOf("."));
   }
 
-  public String byteCountToDisplaySize(long size) {
+  private static String formatBytes(long size) {
     final boolean negative = size < 0;
     long n = negative ? -size : size;
 
@@ -728,10 +748,6 @@ public class FileStorageService {
     }
 
     return negative ? "-" + out : out;
-  }
-
-  private String formatBytes(long bytes) {
-    return byteCountToDisplaySize(bytes);
   }
 
   private String computeSha256(Path file) throws IOException {
@@ -770,8 +786,11 @@ public class FileStorageService {
    * at all until the post-finish hook moves them, so "no row" there means "in flight", not
    * "garbage". {@link com.oglimmer.photoupload.service.RetentionService} reaps that prefix on a
    * grace period instead, which is the only safe way to judge it.
+   *
+   * <p>Deliberately NOT {@code @Transactional}: the method lists whole buckets over the network,
+   * and a transaction here pinned a pool connection for the entire sweep. The reads are point
+   * queries that need no shared snapshot.
    */
-  @Transactional
   public Map<String, Object> purgeOrphanedS3Objects(boolean dryRun) {
     if (objectStorage.isEmpty()) {
       throw new IllegalStateException("S3 storage is not enabled");
@@ -904,11 +923,51 @@ public class FileStorageService {
    *       album.
    * </ul>
    *
-   * <p>Does NOT touch the database — caller is responsible for removing the metadata rows after
-   * this returns. Any S3 keys we fail to delete here will be picked up by {@link
-   * #purgeOrphanedS3Objects(boolean)} on its next run.
+   * <p>Does NOT touch the database. The caller deletes the rows first and calls this afterwards
+   * with the entities it loaded beforehand, so a storage failure can never leave rows pointing at
+   * bytes that are gone; the reverse — bytes outliving their rows — is what {@link
+   * #purgeOrphanedS3Objects(boolean)} exists for.
    */
-  public void bulkDeleteAlbumStorage(Long albumId, List<FileMetadata> files) {
+  public void bulkDeleteAlbumStorage(
+      Long albumId,
+      StorageBackend backend,
+      List<FileMetadata> files,
+      List<SlideshowRecording> recordings) {
+    List<String> audioKeysToDelete = new ArrayList<>();
+    if (recordings != null) {
+      // Narration is album-scoped too, and its rows go with the album's SQL cascade — so the keys
+      // have to be named here or they are never freed: the nightly orphan sweep only reads
+      // originals/, and only the manual admin purge would ever find a stray audio/ object.
+      for (SlideshowRecording recording : recordings) {
+        String audioPath = recording.getAudioPath();
+        if (StoragePaths.isAudioS3Key(audioPath)) {
+          addIfNotBlank(audioKeysToDelete, audioPath);
+          if (recording.getAudioFilename() != null) {
+            addIfNotBlank(
+                audioKeysToDelete, StoragePaths.audioAacKey(recording.getAudioFilename()));
+          }
+        } else if (audioPath != null) {
+          deleteLocalQuietly(audioPath);
+          if (recording.getAudioFilename() != null) {
+            deleteLocalQuietly(
+                Paths.get(audioPath)
+                    .resolveSibling(StoragePaths.aacFilename(recording.getAudioFilename()))
+                    .toString());
+          }
+        }
+      }
+    }
+    if (!audioKeysToDelete.isEmpty()) {
+      if (objectStorage.isEmpty()) {
+        log.warn(
+            "Album {} has {} S3-backed audio objects but ObjectStorageService is not available — leaving them in place",
+            albumId,
+            audioKeysToDelete.size());
+      } else {
+        objectStorage.get().forBackend(backend).deleteKeys(audioKeysToDelete);
+      }
+    }
+
     if (files == null || files.isEmpty()) {
       return;
     }
@@ -958,7 +1017,7 @@ public class FileStorageService {
             albumId,
             s3KeysToDelete.size());
       } else {
-        objectStorage.get().forAlbumId(albumId).deleteKeys(s3KeysToDelete);
+        objectStorage.get().forBackend(backend).deleteKeys(s3KeysToDelete);
       }
     }
     log.info(
@@ -1507,18 +1566,53 @@ public class FileStorageService {
         currentUser.getEmail());
 
     transactionTemplate.executeWithoutResult(
+        status -> resetAndEnqueue(fileId, JobType.ROTATE_LEFT));
+  }
+
+  /**
+   * Inside the caller's transaction: put the row back to QUEUED with a clean slate and insert the
+   * job in the same unit of work, so the dispatcher never sees a queued job for an asset whose row
+   * still says DONE.
+   */
+  private void resetAndEnqueue(Long fileId, JobType jobType) {
+    FileMetadata locked =
+        metadataRepository
+            .findById(fileId)
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+    locked.setProcessingStatus(ProcessingStatus.QUEUED);
+    locked.setProcessingAttempts(0);
+    locked.setProcessingError(null);
+    locked.setProcessingCompletedAt(null);
+    metadataRepository.save(locked);
+    jobEnqueueService.enqueue(fileId, jobType);
+  }
+
+  /**
+   * Shared body of the admin backfill sweeps: one API-side transaction that flips every selected
+   * row to QUEUED and inserts its job, so a crash mid-batch leaves no row "claimed but never
+   * queued". The repository queries already skip rows with a live job, so re-invoking converges.
+   *
+   * @return how many jobs were enqueued — the caller pages by re-invoking until this is 0
+   */
+  private int enqueueSweep(String label, List<Long> ids, int cap, JobType jobType) {
+    if (ids.isEmpty()) {
+      log.info("{} sweep: no eligible assets", label);
+      return 0;
+    }
+    log.info("{} sweep: enqueuing {} jobs (cap={})", label, ids.size(), cap);
+    transactionTemplate.executeWithoutResult(
         status -> {
-          FileMetadata locked =
-              metadataRepository
-                  .findById(fileId)
-                  .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
-          locked.setProcessingStatus(ProcessingStatus.QUEUED);
-          locked.setProcessingAttempts(0);
-          locked.setProcessingError(null);
-          locked.setProcessingCompletedAt(null);
-          metadataRepository.save(locked);
-          jobEnqueueService.enqueue(fileId, JobType.ROTATE_LEFT);
+          for (Long id : ids) {
+            resetAndEnqueue(id, jobType);
+          }
         });
+    log.info("{} sweep: enqueued {} jobs", label, ids.size());
+    return ids.size();
+  }
+
+  /** {@code maxRows} clamped to what a single API call may enqueue. */
+  private static int sweepCap(int maxRows) {
+    return Math.max(1, Math.min(maxRows, 5000));
   }
 
   /**
@@ -1537,30 +1631,12 @@ public class FileStorageService {
    * @return number of jobs actually enqueued
    */
   public int enqueueRegenForMissingThumbnails(int maxRows) {
-    int safeMax = Math.max(1, Math.min(maxRows, 5000));
-    List<Long> ids = metadataRepository.findMissingThumbnailIds(safeMax);
-    if (ids.isEmpty()) {
-      log.info("Regen-thumbnails sweep: no eligible assets");
-      return 0;
-    }
-    log.info("Regen-thumbnails sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
-    transactionTemplate.executeWithoutResult(
-        status -> {
-          for (Long id : ids) {
-            FileMetadata locked =
-                metadataRepository
-                    .findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
-            locked.setProcessingStatus(ProcessingStatus.QUEUED);
-            locked.setProcessingAttempts(0);
-            locked.setProcessingError(null);
-            locked.setProcessingCompletedAt(null);
-            metadataRepository.save(locked);
-            jobEnqueueService.enqueue(id, JobType.REGEN_THUMBNAILS);
-          }
-        });
-    log.info("Regen-thumbnails sweep: enqueued {} jobs", ids.size());
-    return ids.size();
+    int cap = sweepCap(maxRows);
+    return enqueueSweep(
+        "Regen-thumbnails",
+        metadataRepository.findMissingThumbnailIds(cap),
+        cap,
+        JobType.REGEN_THUMBNAILS);
   }
 
   /**
@@ -1579,30 +1655,12 @@ public class FileStorageService {
    * soon as it has a transcode. Page by re-invoking until {@code enqueued == 0}.
    */
   public int enqueueReprocessForMissingVideoTranscodes(int maxRows) {
-    int safeMax = Math.max(1, Math.min(maxRows, 5000));
-    List<Long> ids = metadataRepository.findMissingVideoTranscodeIds(safeMax);
-    if (ids.isEmpty()) {
-      log.info("Video-transcode sweep: no eligible assets");
-      return 0;
-    }
-    log.info("Video-transcode sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
-    transactionTemplate.executeWithoutResult(
-        status -> {
-          for (Long id : ids) {
-            FileMetadata locked =
-                metadataRepository
-                    .findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
-            locked.setProcessingStatus(ProcessingStatus.QUEUED);
-            locked.setProcessingAttempts(0);
-            locked.setProcessingError(null);
-            locked.setProcessingCompletedAt(null);
-            metadataRepository.save(locked);
-            jobEnqueueService.enqueue(id, JobType.PROCESS);
-          }
-        });
-    log.info("Video-transcode sweep: enqueued {} jobs", ids.size());
-    return ids.size();
+    int cap = sweepCap(maxRows);
+    return enqueueSweep(
+        "Video-transcode",
+        metadataRepository.findMissingVideoTranscodeIds(cap),
+        cap,
+        JobType.PROCESS);
   }
 
   /**
@@ -1621,30 +1679,12 @@ public class FileStorageService {
    * @return number of jobs actually enqueued
    */
   public int enqueueCaptureDateReextract(int maxRows) {
-    int safeMax = Math.max(1, Math.min(maxRows, 5000));
-    List<Long> ids = metadataRepository.findStaleCaptureDateIds(safeMax);
-    if (ids.isEmpty()) {
-      log.info("Capture-date sweep: no eligible assets");
-      return 0;
-    }
-    log.info("Capture-date sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
-    transactionTemplate.executeWithoutResult(
-        status -> {
-          for (Long id : ids) {
-            FileMetadata locked =
-                metadataRepository
-                    .findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
-            locked.setProcessingStatus(ProcessingStatus.QUEUED);
-            locked.setProcessingAttempts(0);
-            locked.setProcessingError(null);
-            locked.setProcessingCompletedAt(null);
-            metadataRepository.save(locked);
-            jobEnqueueService.enqueue(id, JobType.EXTRACT_CAPTURE_DATE);
-          }
-        });
-    log.info("Capture-date sweep: enqueued {} jobs", ids.size());
-    return ids.size();
+    int cap = sweepCap(maxRows);
+    return enqueueSweep(
+        "Capture-date",
+        metadataRepository.findStaleCaptureDateIds(cap),
+        cap,
+        JobType.EXTRACT_CAPTURE_DATE);
   }
 
   /**
@@ -1656,29 +1696,7 @@ public class FileStorageService {
    * @return how many jobs were enqueued; re-invoke until this returns 0
    */
   public int enqueueGpsExtract(int maxRows) {
-    int safeMax = Math.max(1, Math.min(maxRows, 5000));
-    List<Long> ids = metadataRepository.findMissingGpsIds(safeMax);
-    if (ids.isEmpty()) {
-      log.info("GPS sweep: no eligible assets");
-      return 0;
-    }
-    log.info("GPS sweep: enqueuing {} jobs (cap={})", ids.size(), safeMax);
-    transactionTemplate.executeWithoutResult(
-        status -> {
-          for (Long id : ids) {
-            FileMetadata locked =
-                metadataRepository
-                    .findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("File", "id", id));
-            locked.setProcessingStatus(ProcessingStatus.QUEUED);
-            locked.setProcessingAttempts(0);
-            locked.setProcessingError(null);
-            locked.setProcessingCompletedAt(null);
-            metadataRepository.save(locked);
-            jobEnqueueService.enqueue(id, JobType.EXTRACT_GPS);
-          }
-        });
-    log.info("GPS sweep: enqueued {} jobs", ids.size());
-    return ids.size();
+    int cap = sweepCap(maxRows);
+    return enqueueSweep("GPS", metadataRepository.findMissingGpsIds(cap), cap, JobType.EXTRACT_GPS);
   }
 }

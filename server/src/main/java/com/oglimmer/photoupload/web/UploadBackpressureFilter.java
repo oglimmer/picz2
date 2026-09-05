@@ -10,7 +10,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -32,15 +31,14 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
 
   private final JobQueueDepthService jobQueueDepthService;
   private final JobsProperties jobsProperties;
-  // Optional: present when Resilience4j is on the classpath AND a "minio" breaker is configured
-  // (always true in current builds). If MinIO is OPEN we 503 the upload before parsing the body,
-  // saving the multipart staging cost during an outage.
-  private final Optional<CircuitBreaker> minioCircuitBreaker;
+  // The `minio` breaker from ResilienceConfig — always present, S3 enabled or not. If it is OPEN
+  // we 503 the upload before parsing the body, saving the multipart staging cost during an outage.
+  private final CircuitBreaker minioCircuitBreaker;
 
   public UploadBackpressureFilter(
       JobQueueDepthService jobQueueDepthService,
       JobsProperties jobsProperties,
-      Optional<CircuitBreaker> minioCircuitBreaker) {
+      CircuitBreaker minioCircuitBreaker) {
     this.jobQueueDepthService = jobQueueDepthService;
     this.jobsProperties = jobsProperties;
     this.minioCircuitBreaker = minioCircuitBreaker;
@@ -74,8 +72,7 @@ public class UploadBackpressureFilter extends OncePerRequestFilter {
   private boolean shouldReject() {
     // Fail fast on MinIO outages BEFORE we look at queue depth or read the multipart body.
     // The breaker stays CLOSED in the steady state so this is a single volatile read per upload.
-    if (minioCircuitBreaker.isPresent()
-        && minioCircuitBreaker.get().getState() == CircuitBreaker.State.OPEN) {
+    if (minioCircuitBreaker.getState() == CircuitBreaker.State.OPEN) {
       log.warn("Rejecting upload — minio circuit breaker is OPEN");
       return true;
     }

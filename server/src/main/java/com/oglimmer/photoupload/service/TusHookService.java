@@ -12,6 +12,7 @@ import com.oglimmer.photoupload.model.tus.TusHookRequest;
 import com.oglimmer.photoupload.model.tus.TusHookResponse;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.UserRepository;
+import com.oglimmer.photoupload.storage.StoragePaths;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -62,9 +63,6 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class TusHookService {
 
-  /** S3 prefix tusd writes uploads under (must match the {@code -s3-object-prefix} flag). */
-  private static final String TUS_UPLOADS_PREFIX = "tus-uploads/";
-
   /** Metadata key carrying the iOS / web bearer credentials. */
   private static final String META_AUTH = "auth";
 
@@ -112,9 +110,10 @@ public class TusHookService {
 
     int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();
     long depth = queueDepthService.getDepth();
-    if (depth > threshold) {
+    // Same comparison as UploadBackpressureFilter, so the two ingest paths refuse at one depth.
+    if (depth >= threshold) {
       log.info(
-          "TUS pre-create rejected: queue depth {} > threshold {} (user {})",
+          "TUS pre-create rejected: queue depth {} >= threshold {} (user {})",
           depth,
           threshold,
           user.getId());
@@ -284,7 +283,7 @@ public class TusHookService {
     }
     int plus = id.indexOf('+');
     String objectName = plus < 0 ? id : id.substring(0, plus);
-    return TUS_UPLOADS_PREFIX + objectName;
+    return StoragePaths.TUS_UPLOADS_PREFIX + objectName;
   }
 
   private TusHookRequest.TusUpload uploadOf(TusHookRequest request) {

@@ -6,32 +6,34 @@ import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumEnabledTag;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
+import com.oglimmer.photoupload.entity.SlideshowRecording;
 import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.ValidationException;
-import com.oglimmer.photoupload.mapper.AlbumMapper;
 import com.oglimmer.photoupload.model.AlbumInfo;
 import com.oglimmer.photoupload.model.MapView;
 import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
-import java.security.SecureRandom;
+import com.oglimmer.photoupload.util.RandomTokens;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,11 +49,13 @@ public class AlbumService {
   private final ImageTagRepository imageTagRepository;
   private final AlbumEnabledTagRepository albumEnabledTagRepository;
   private final StorageBackendRepository storageBackendRepository;
-  private final JdbcTemplate jdbcTemplate;
+  private final SlideshowRecordingRepository slideshowRecordingRepository;
   private final FileStorageService fileStorageService;
   private final UserContext userContext;
-  private final AlbumMapper albumMapper;
   private final SystemTagProvisioner systemTagProvisioner;
+
+  /** First run of digits in a filename; compiled once, not once per comparison in a sort. */
+  private static final Pattern FIRST_NUMBER = Pattern.compile("\\d+");
 
   @Transactional
   public AlbumInfo createAlbum(String name, String description) {
@@ -82,11 +86,8 @@ public class AlbumService {
     album.setCreatedAt(Instant.now());
     album.setUpdatedAt(Instant.now());
 
-    // Generate a new random token (64 hex chars)
-    byte[] bytes = new byte[32];
-    new SecureRandom().nextBytes(bytes);
-    String token = HexFormat.of().formatHex(bytes);
-    album.setShareToken(token);
+    // 64 hex chars. The link stays dead until the owner publishes — see below.
+    album.setShareToken(RandomTokens.hex(32));
 
     // Set display order to be at the end for this user
     Integer maxOrder = albumRepository.findMaxDisplayOrderByUser(currentUser);
@@ -262,25 +263,41 @@ public class AlbumService {
             .findByUserAndId(currentUser, albumId)
             .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
 
+    // Everything the storage cleanup will need, loaded while the rows still exist: the files, the
+    // narration (its rows go with the album's SQL cascade) and the backend the bytes live in —
+    // after the album row is gone, nothing can answer "which bucket" any more.
     List<FileMetadata> files =
         fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(
             albumId, currentUser.getId());
+    List<SlideshowRecording> recordings =
+        slideshowRecordingRepository.findByAlbumIdAndUserIdOrderByCreatedAtDesc(
+            albumId, currentUser.getId());
+    StorageBackend backend = album.getStorageBackend();
 
-    // Storage cleanup first — batched S3 DeleteObjects (≤1000 keys/call) plus best-effort local
-    // file deletes. Anything left behind is reaped by purgeOrphanedS3Objects.
-    fileStorageService.bulkDeleteAlbumStorage(albumId, files);
-
-    // Then a single bulk SQL delete for file_metadata (cascades image_tags, processing_jobs,
-    // slideshow_recording_images via FK), followed by the album row (cascades the remaining
-    // album-scoped tables). Replaces N+1 per-row JPA deletes that were the source of the
-    // long-running request / proxy timeout.
+    // Rows first: a single bulk SQL delete for file_metadata (cascades image_tags,
+    // processing_jobs, slideshow_recording_images via FK), then the album row (cascades the
+    // remaining album-scoped tables). Replaces N+1 per-row JPA deletes that used to hit the
+    // proxy timeout.
     fileMetadataRepository.bulkDeleteByAlbumId(albumId);
     albumRepository.bulkDeleteById(albumId);
 
+    // Storage second, and never fatal. The old order — bytes first, then rows — meant a DB failure
+    // left rows pointing at objects that were already gone. Bytes that outlive their rows are the
+    // orphan sweep's job; rows that outlive their bytes are a 404 nothing repairs.
+    try {
+      fileStorageService.bulkDeleteAlbumStorage(albumId, backend, files, recordings);
+    } catch (Exception e) {
+      log.warn(
+          "Album {} rows deleted but storage cleanup failed; orphan sweep will mop up: {}",
+          albumId,
+          e.toString());
+    }
+
     log.info(
-        "Deleted album '{}' with {} photos for user: {}",
+        "Deleted album '{}' with {} photos and {} recordings for user: {}",
         album.getName(),
         files.size(),
+        recordings.size(),
         currentUser.getEmail());
   }
 
@@ -401,8 +418,7 @@ public class AlbumService {
       return null;
     }
 
-    // Find the first sequence of digits
-    java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(filename);
+    Matcher matcher = FIRST_NUMBER.matcher(filename);
     if (matcher.find()) {
       try {
         return Long.parseLong(matcher.group());
@@ -454,9 +470,7 @@ public class AlbumService {
     newAlbum.setCreatedAt(Instant.now());
     newAlbum.setUpdatedAt(Instant.now());
 
-    byte[] bytes = new byte[32];
-    new SecureRandom().nextBytes(bytes);
-    newAlbum.setShareToken(HexFormat.of().formatHex(bytes));
+    newAlbum.setShareToken(RandomTokens.hex(32));
 
     // A copy is a draft, however public its source was. The duplicate is usually about to be
     // re-curated, and publishing it here would put a half-edited album behind a live link.
@@ -607,35 +621,17 @@ public class AlbumService {
       info.setStorageBackendName(album.getStorageBackend().getName());
     }
 
-    // Get files in this album (use user-scoped query)
-    List<FileMetadata> files =
-        fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(
-            album.getId(), album.getUser().getId());
-    info.setFileCount(files.size());
-
-    // Set cover image (first image in album - not a video)
-    if (!files.isEmpty()) {
-      FileMetadata cover =
-          files.stream()
-              .filter(file -> file.getMimeType() != null && file.getMimeType().startsWith("image/"))
-              .findFirst()
-              .orElse(null);
-
-      if (cover != null) {
-        String coverFilename = cover.getStoredFilename();
-        log.info(
-            "Album {} - Setting cover image: {} (found {} files)",
-            album.getName(),
-            coverFilename,
-            files.size());
-        info.setCoverImageFilename(coverFilename);
-        info.setCoverImageToken(cover.getPublicToken());
-      } else {
-        log.info("Album {} - No image files found for cover (only videos/other)", album.getName());
-      }
-    } else {
-      log.info("Album {} - No files found for cover image", album.getName());
-    }
+    // One COUNT and one single-row lookup per album. This used to load every file entity of every
+    // album on GET /api/albums just to size the list and pick a cover.
+    info.setFileCount((int) fileMetadataRepository.countByAlbumId(album.getId()));
+    Optional<FileMetadata> cover =
+        fileMetadataRepository.findFirstByAlbumIdAndMimeTypeStartingWithOrderByDisplayOrderAsc(
+            album.getId(), "image/");
+    cover.ifPresent(
+        c -> {
+          info.setCoverImageFilename(c.getStoredFilename());
+          info.setCoverImageToken(c.getPublicToken());
+        });
 
     return info;
   }

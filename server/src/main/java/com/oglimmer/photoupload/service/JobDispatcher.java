@@ -75,13 +75,15 @@ public class JobDispatcher {
       return;
     }
     JobType jobType = job.getJobType() != null ? job.getJobType() : JobType.PROCESS;
-    log.info(
-        "Leased {} job {} (subject {}, attempt {}/{})",
-        jobType,
-        job.getId(),
+    String subject =
         jobType == JobType.TRANSCODE_AUDIO_AAC
             ? "recording " + job.getRecordingId()
-            : "asset " + job.getAssetId(),
+            : "asset " + job.getAssetId();
+    log.info(
+        "Leased {} job {} ({}, attempt {}/{})",
+        jobType,
+        job.getId(),
+        subject,
         job.getAttempts(),
         job.getMaxAttempts());
 
@@ -97,7 +99,7 @@ public class JobDispatcher {
     } catch (Exception e) {
       // The service-layer methods catch their own exceptions today, but treat any leak
       // defensively so the lease is released cleanly.
-      log.error("{} threw for asset {}: {}", jobType, job.getAssetId(), e.getMessage(), e);
+      log.error("{} threw for {}: {}", jobType, subject, e.getMessage(), e);
       jobLeaseService.markFailedOrDeadLetter(job.getId(), e.toString());
       return;
     }

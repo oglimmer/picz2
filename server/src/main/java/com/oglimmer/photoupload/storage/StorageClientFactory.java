@@ -9,31 +9,20 @@ import com.oglimmer.photoupload.security.SecretCipher;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import jakarta.annotation.PreDestroy;
-import java.net.URI;
-import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
-import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
-import software.amazon.awssdk.http.apache.ApacheHttpClient;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.S3Configuration;
-import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 /**
  * Builds and caches one {@link StorageClients} per {@link StorageBackend}.
  *
- * <p>The system default backend reuses the singleton {@code S3Client}/{@code S3Presigner} beans, so
- * its connection pool and breaker behave exactly as they did before per-album storage existed. A
- * user backend gets its own pair, built lazily on first use and kept until its row changes.
+ * <p>The system default backend reuses the singleton {@code S3Client} bean, so its connection pool
+ * and breaker behave exactly as they did before per-album storage existed. A user backend gets its
+ * own client, built lazily on first use and kept until its row changes.
  *
  * <p>Cache invalidation is by content, not by event: the cached entry remembers a fingerprint of
  * the row's connection fields, and a mismatch rebuilds. That way an edit made by another pod (the
@@ -48,7 +37,6 @@ public class StorageClientFactory {
 
   private final ObjectStorageProperties properties;
   private final S3Client systemS3;
-  private final S3Presigner systemPresigner;
   private final CircuitBreakerRegistry breakerRegistry;
   private final SecretCipher secretCipher;
 
@@ -99,19 +87,18 @@ public class StorageClientFactory {
 
   /** The call-facing handle for a backend: {@link BackendStorage} bound to its clients. */
   public BackendStorage storageFor(StorageBackend backend) {
-    return new BackendStorage(clientsFor(backend), properties.getPresignSeconds());
+    return new BackendStorage(clientsFor(backend));
   }
 
   /** Same, for clients the caller built itself via {@link #probeClients(Settings)}. */
   public BackendStorage storageFor(StorageClients clients) {
-    return new BackendStorage(clients, properties.getPresignSeconds());
+    return new BackendStorage(clients);
   }
 
   private StorageClients systemClients(Long backendId) {
     return new StorageClients(
         backendId,
         systemS3,
-        systemPresigner,
         properties.getBucket(),
         breakerRegistry.circuitBreaker(ResilienceConfig.MINIO_BREAKER),
         true);
@@ -156,49 +143,18 @@ public class StorageClientFactory {
     if (s.bucket() == null || s.bucket().isBlank()) {
       throw new StorageException("Storage backend has no bucket");
     }
-    StaticCredentialsProvider creds =
-        StaticCredentialsProvider.create(AwsBasicCredentials.create(s.accessKey(), s.secretKey()));
-    S3Configuration serviceConfig =
-        S3Configuration.builder().pathStyleAccessEnabled(s.pathStyleAccess()).build();
+    // A user backend is one person's traffic, not the whole instance's, so it gets a quarter of
+    // the shared pool rather than a second full-sized one. Dozens of registered backends would
+    // otherwise each reserve 64 sockets.
     S3Client client =
-        S3Client.builder()
-            .endpointOverride(URI.create(s.endpoint()))
-            .region(Region.of(s.region()))
-            .credentialsProvider(creds)
-            .serviceConfiguration(serviceConfig)
-            .httpClientBuilder(
-                ApacheHttpClient.builder()
-                    // A user backend is one person's traffic, not the whole instance's, so it gets
-                    // a quarter of the shared pool rather than a second full-sized one. Dozens of
-                    // registered backends would otherwise each reserve 64 sockets.
-                    .maxConnections(Math.max(8, properties.getMaxConnections() / 4))
-                    .connectionAcquisitionTimeout(
-                        Duration.ofSeconds(properties.getConnectionAcquisitionTimeoutSeconds())))
-            .overrideConfiguration(
-                ClientOverrideConfiguration.builder()
-                    .apiCallAttemptTimeout(
-                        Duration.ofSeconds(properties.getApiCallAttemptTimeoutSeconds()))
-                    .apiCallTimeout(Duration.ofSeconds(properties.getApiCallTimeoutSeconds()))
-                    .build())
-            // Same reason as ObjectStorageConfig: MinIO (and several other gateways) still want
-            // Content-MD5 on DeleteObjects and 400 without it.
-            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
-            .build();
-    S3Presigner presigner =
-        S3Presigner.builder()
-            .endpointOverride(URI.create(s.endpoint()))
-            .region(Region.of(s.region()))
-            .credentialsProvider(creds)
-            .serviceConfiguration(serviceConfig)
-            .build();
+        S3Clients.build(s, Math.max(8, properties.getMaxConnections() / 4), properties);
     log.info(
         "Built S3 client for backend={} endpoint={} bucket={} pathStyle={}",
         backendId,
         s.endpoint(),
         s.bucket(),
         s.pathStyleAccess());
-    return new StorageClients(backendId, client, presigner, s.bucket(), breaker, systemDefault);
+    return new StorageClients(backendId, client, s.bucket(), breaker, systemDefault);
   }
 
   private String fingerprint(StorageBackend b) {
@@ -232,11 +188,6 @@ public class StorageClientFactory {
       clients.s3().close();
     } catch (RuntimeException e) {
       log.warn("Failed to close S3 client for backend {}: {}", clients.backendId(), e.getMessage());
-    }
-    try {
-      clients.presigner().close();
-    } catch (RuntimeException e) {
-      log.warn("Failed to close presigner for backend {}: {}", clients.backendId(), e.getMessage());
     }
   }
 

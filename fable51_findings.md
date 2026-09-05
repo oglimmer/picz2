@@ -16,16 +16,20 @@ Paths are relative to `server/src/main/java/com/oglimmer/photoupload/`.
 4. ✅ FIXED — **The subscription mail job runs every minute.** Cron is `0 * * * * *`; the comment says every 6 hours. It loads every file of every subscribed album each minute. Noted in the plan doc on 2026-09-01 and still present. `service/AlbumSubscriptionNotificationService.java:38`.
 5. ✅ FIXED — **Image serve turns 410 and 503 into 500.** Both handlers catch `Exception` and wrap it in `RuntimeException`; only `ResourceNotFoundException` passes through. `ResourceGoneException` (purged original) and `MinioUnavailableException` (breaker open) therefore reach the client as 500. `controller/ImageServeController.java:101` and `:138`. Same shape in `controller/SlideshowRecordingController.java:160`.
 
-### Smaller bugs (not fixed)
+### Smaller bugs
 
-- **Upload writes bytes before it checks album ownership.** `storeFile` resolves the album's backend and PUTs, then the insert transaction 404s on ownership. A user can push bytes into another user's S3 bucket; the object is left as an orphan. `service/FileStorageService.java:277`; TUS path at `:490`.
-- **Album delete leaks audio objects.** `deleteAlbum` cleans photo keys, then the SQL cascade drops `slideshow_recordings` rows; their `audio/` keys stay. The nightly orphan sweep only covers `originals/`, so only the manual admin purge ever reaps them. `service/AlbumService.java:271`.
-- **Album delete order is backwards.** Storage is deleted first, rows second, inside one `@Transactional`. If the DB step fails the bytes are gone and the rows point at nothing. Delete rows first; the orphan sweep already covers the other direction.
-- **`purgeOrphanedS3Objects` holds a DB connection for the whole bucket scan.** It is `@Transactional` and does S3 network calls inside. `service/FileStorageService.java:768`.
-- **Two backpressure thresholds disagree.** `web/UploadBackpressureFilter.java:88` rejects at `>=`; `service/TusHookService.java:115` rejects at `>`.
-- **Temp file leak on the multipart path.** If `computeSha256` or the duplicate check throws, the staged `.multipart-tmp` file is not deleted. `service/FileStorageService.java:265-330`.
+**Status 2026-09-05 (second pass): all fixed.**
+
+- ✅ FIXED — **Upload writes bytes before it checks album ownership.** `storeFile` resolves the album's backend and PUTs, then the insert transaction 404s on ownership. A user can push bytes into another user's S3 bucket; the object is left as an orphan. `service/FileStorageService.java:277`; TUS path at `:490`.
+- ✅ FIXED — **Album delete leaks audio objects.** `deleteAlbum` cleans photo keys, then the SQL cascade drops `slideshow_recordings` rows; their `audio/` keys stay. The nightly orphan sweep only covers `originals/`, so only the manual admin purge ever reaps them. `service/AlbumService.java:271`.
+- ✅ FIXED — **Album delete order is backwards.** Storage is deleted first, rows second, inside one `@Transactional`. If the DB step fails the bytes are gone and the rows point at nothing. Delete rows first; the orphan sweep already covers the other direction.
+- ✅ FIXED — **`purgeOrphanedS3Objects` holds a DB connection for the whole bucket scan.** It is `@Transactional` and does S3 network calls inside. `service/FileStorageService.java:768`.
+- ✅ FIXED — **Two backpressure thresholds disagree.** `web/UploadBackpressureFilter.java:88` rejects at `>=`; `service/TusHookService.java:115` rejects at `>`.
+- ✅ FIXED — **Temp file leak on the multipart path.** If `computeSha256` or the duplicate check throws, the staged `.multipart-tmp` file is not deleted. `service/FileStorageService.java:265-330`.
 
 ## Dead code
+
+**Status 2026-09-05 (second pass): removed, except `JobStatus.FAILED` — old rows may still carry that value, so the enum constant has to stay readable.**
 
 - `FileStorageService.listFiles()` (`:548`) — no caller; also has no user filter.
 - `FileStorageService.convertToFileInfoWithId` (`:414`) — one-line wrapper around `convertToFileInfo`.
@@ -39,6 +43,8 @@ Paths are relative to `server/src/main/java/com/oglimmer/photoupload/`.
 
 ## Duplication
 
+**Status 2026-09-05 (second pass): all six done** — `leaseIntoProcessing`/`workdirFor` in `FileProcessingService`, `enqueueSweep`/`resetAndEnqueue`/`findDuplicateByChecksum` in `FileStorageService`, `util/RandomTokens`, `UserContext` in both controllers, `storage/S3Clients`. The duplicate `catch (IOException)` arms were left; they differ per method and cost nothing.
+
 - **`FileProcessingService`** — five job methods repeat the same prologue (flip to PROCESSING, bump attempts), work-dir creation, and catch/finally cleanup. One `runJob(id, label, body)` template would remove roughly 150 lines.
 - **`FileStorageService`** — the four `enqueue*` sweeps (`:1509-1678`) have identical bodies except the query and `JobType`; `rotateImageLeft` repeats the same reset block. `storeFile` and `registerTusUpload` share ~40 lines of insert-transaction code.
 - **Random tokens** — `new SecureRandom()` + hex is written out 8 times (`AlbumService` ×2, `FileProcessingService` ×2, `FileMetadata`, …). One helper.
@@ -47,6 +53,8 @@ Paths are relative to `server/src/main/java/com/oglimmer/photoupload/`.
 - `processFile` has `catch (IOException)` and `catch (Exception)` doing the same thing.
 
 ## Patterns and architecture
+
+**Status 2026-09-05 (second pass):** done — 404 consistency in `SlideshowRecordingService`, the `published` gate moved into `listFilesByAlbumByShareToken`, COUNT + first-image queries on `GET /api/albums`, `@Getter`/`@Setter` on the five entities with collections, the regex hoisted, the Jackson 2 bean replaced by Boot's Jackson 3 `JsonMapper`. **Still open (need a decision or a migration):** `User.createdAt` type, global gallery language names, the local-disk shim, controllers injecting repositories, the twin status enums.
 
 - **Not-found is inconsistent.** `SlideshowRecordingService` throws `IllegalArgumentException` for missing rows (→ 400); everything else uses `ResourceNotFoundException` (→ 404).
 - **The `published` gate lives in callers.** `AlbumController` calls `requirePublishedByShareToken` and then the service; the `hidden` gate is inside the service. Both belong in `listFilesByAlbumByShareToken`.

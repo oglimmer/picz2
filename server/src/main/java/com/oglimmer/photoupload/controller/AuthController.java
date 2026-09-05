@@ -4,10 +4,7 @@ package com.oglimmer.photoupload.controller;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.model.AuthCheckResponse;
-import com.oglimmer.photoupload.repository.UserRepository;
-import jakarta.servlet.http.HttpServletRequest;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import com.oglimmer.photoupload.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
@@ -21,36 +18,21 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AuthController {
 
-  private final UserRepository userRepository;
+  private final UserContext userContext;
 
+  /**
+   * Who am I. Reaching this handler means Spring Security already accepted the credentials, so the
+   * principal is read from the security context rather than re-parsed out of the header.
+   */
   @GetMapping("/check")
-  public ResponseEntity<AuthCheckResponse> checkAuth(HttpServletRequest request) {
-    // If the request reached here, BasicAuthFilter validated credentials already.
-    String authHeader = request.getHeader("Authorization");
-    String email = null;
-    boolean emailVerified = false;
-
-    if (authHeader != null && authHeader.startsWith("Basic ")) {
-      try {
-        String base64Credentials = authHeader.substring("Basic ".length());
-        String credentials =
-            new String(Base64.getDecoder().decode(base64Credentials), StandardCharsets.UTF_8);
-        int idx = credentials.indexOf(":");
-        if (idx > 0) {
-          email = credentials.substring(0, idx);
-          // Look up user to get email verification status
-          User user = userRepository.findByEmail(email).orElse(null);
-          if (user != null) {
-            emailVerified = user.isEmailVerified();
-          }
-        }
-      } catch (Exception ignored) {
-      }
-    }
-
+  public ResponseEntity<AuthCheckResponse> checkAuth() {
+    User user = userContext.getCurrentUser();
     AuthCheckResponse response =
-        AuthCheckResponse.builder().success(true).email(email).emailVerified(emailVerified).build();
-
+        AuthCheckResponse.builder()
+            .success(true)
+            .email(user.getEmail())
+            .emailVerified(user.isEmailVerified())
+            .build();
     return ResponseEntity.ok(response);
   }
 }

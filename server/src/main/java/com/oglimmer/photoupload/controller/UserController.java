@@ -8,10 +8,8 @@ import com.oglimmer.photoupload.model.CreateUserRequest;
 import com.oglimmer.photoupload.model.CreateUserResponse;
 import com.oglimmer.photoupload.model.PasswordResetRequest;
 import com.oglimmer.photoupload.model.PasswordResetRequestRequest;
+import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.service.UserService;
-import jakarta.servlet.http.HttpServletRequest;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -33,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
   private final UserService userService;
+  private final UserContext userContext;
 
   @PostMapping
   public ResponseEntity<CreateUserResponse> createUser(@RequestBody CreateUserRequest req) {
@@ -50,14 +49,12 @@ public class UserController {
     return ResponseEntity.ok().build();
   }
 
+  // The three account-scoped routes below read the principal from the security context: Spring
+  // Security has already authenticated the request, so re-decoding the Basic header here was a
+  // second copy of that logic with its own failure modes.
   @PostMapping("/resend-verification")
-  public ResponseEntity<Void> resendVerificationEmail(HttpServletRequest request) {
-    String email = extractEmailFromAuthHeader(request);
-    if (email == null) {
-      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-    }
-
-    userService.resendVerificationEmail(email);
+  public ResponseEntity<Void> resendVerificationEmail() {
+    userService.resendVerificationEmail(currentEmail());
     return ResponseEntity.ok().build();
   }
 
@@ -74,42 +71,18 @@ public class UserController {
   }
 
   @PostMapping("/change-password")
-  public ResponseEntity<Void> changePassword(
-      @RequestBody ChangePasswordRequest req, HttpServletRequest request) {
-    String email = extractEmailFromAuthHeader(request);
-    if (email == null) {
-      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-    }
-
-    userService.changePassword(email, req.getCurrentPassword(), req.getNewPassword());
+  public ResponseEntity<Void> changePassword(@RequestBody ChangePasswordRequest req) {
+    userService.changePassword(currentEmail(), req.getCurrentPassword(), req.getNewPassword());
     return ResponseEntity.ok().build();
   }
 
   @DeleteMapping("/account")
-  public ResponseEntity<Void> deleteAccount(HttpServletRequest request) {
-    String email = extractEmailFromAuthHeader(request);
-    if (email == null) {
-      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-    }
-
-    userService.deleteAccount(email);
+  public ResponseEntity<Void> deleteAccount() {
+    userService.deleteAccount(currentEmail());
     return ResponseEntity.ok().build();
   }
 
-  private String extractEmailFromAuthHeader(HttpServletRequest request) {
-    String authHeader = request.getHeader("Authorization");
-    if (authHeader != null && authHeader.startsWith("Basic ")) {
-      try {
-        String base64Credentials = authHeader.substring("Basic ".length());
-        String credentials =
-            new String(Base64.getDecoder().decode(base64Credentials), StandardCharsets.UTF_8);
-        int idx = credentials.indexOf(":");
-        if (idx > 0) {
-          return credentials.substring(0, idx);
-        }
-      } catch (Exception ignored) {
-      }
-    }
-    return null;
+  private String currentEmail() {
+    return userContext.getCurrentUser().getEmail();
   }
 }

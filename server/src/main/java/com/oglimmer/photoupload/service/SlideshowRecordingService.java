@@ -11,6 +11,7 @@ import com.oglimmer.photoupload.entity.SlideshowRecording;
 import com.oglimmer.photoupload.entity.SlideshowRecordingImage;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.AudioNotReadyException;
+import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.mapper.RecordingInfoMapper;
 import com.oglimmer.photoupload.model.RecordingAudioInfo;
 import com.oglimmer.photoupload.model.RecordingAudioStatus;
@@ -99,7 +100,8 @@ public class SlideshowRecordingService {
     Album album =
         albumRepository
             .findByUserAndId(currentUser, albumId)
-            .orElseThrow(() -> new IllegalArgumentException("Album not found with id: " + albumId));
+            .orElseThrow(
+                () -> new ResourceNotFoundException("Album not found with id: " + albumId));
 
     // Generate unique filename for audio
     String originalFilename = audioFile.getOriginalFilename();
@@ -139,7 +141,7 @@ public class SlideshowRecordingService {
               .findById(imageData.getFileId())
               .orElseThrow(
                   () ->
-                      new IllegalArgumentException(
+                      new ResourceNotFoundException(
                           "File not found with id: " + imageData.getFileId()));
 
       SlideshowRecordingImage recordingImage = new SlideshowRecordingImage();
@@ -263,7 +265,7 @@ public class SlideshowRecordingService {
 
     // Validate album exists and belongs to current user
     if (albumRepository.findByUserAndId(currentUser, albumId).isEmpty()) {
-      throw new IllegalArgumentException("Album not found with id: " + albumId);
+      throw new ResourceNotFoundException("Album not found with id: " + albumId);
     }
 
     return slideshowRecordingRepository
@@ -286,7 +288,7 @@ public class SlideshowRecordingService {
 
     // Validate album exists and belongs to current user
     if (albumRepository.findByUserAndId(currentUser, albumId).isEmpty()) {
-      throw new IllegalArgumentException("Album not found with id: " + albumId);
+      throw new ResourceNotFoundException("Album not found with id: " + albumId);
     }
 
     return slideshowRecordingRepository
@@ -310,7 +312,7 @@ public class SlideshowRecordingService {
     Album album =
         albumRepository
             .findByShareTokenAndPublishedTrue(shareToken)
-            .orElseThrow(() -> new IllegalArgumentException("Album not found with share token"));
+            .orElseThrow(() -> new ResourceNotFoundException("Album not found with share token"));
 
     // Get all recordings for this album
     List<SlideshowRecording> recordings =
@@ -338,7 +340,7 @@ public class SlideshowRecordingService {
         slideshowRecordingRepository
             .findByPublicToken(publicToken)
             .orElseThrow(
-                () -> new IllegalArgumentException("Recording not found with public token"));
+                () -> new ResourceNotFoundException("Recording not found with public token"));
 
     return convertToRecordingAudioInfo(recording, format);
   }
@@ -350,7 +352,7 @@ public class SlideshowRecordingService {
         slideshowRecordingRepository
             .findByIdAndUserId(recordingId, currentUser.getId())
             .orElseThrow(
-                () -> new IllegalArgumentException("Recording not found with id: " + recordingId));
+                () -> new ResourceNotFoundException("Recording not found with id: " + recordingId));
 
     String audioPath = recording.getAudioPath();
     String aacFilename = StoragePaths.aacFilename(recording.getAudioFilename());
@@ -398,8 +400,7 @@ public class SlideshowRecordingService {
 
     String audioPath = recording.getAudioPath();
     if (StoragePaths.isAudioS3Key(audioPath)) {
-      // S3-backed: pass the key, leave audioPath null so the controller branches to presigned-URL
-      // serving.
+      // S3-backed: pass the key, leave audioPath null so the controller streams from MinIO.
       return new RecordingAudioInfo(
           recording.getAudioFilename(), null, audioPath, recording.getAlbum().getId());
     }
@@ -440,7 +441,7 @@ public class SlideshowRecordingService {
         slideshowRecordingRepository
             .findByPublicToken(publicToken)
             .orElseThrow(
-                () -> new IllegalArgumentException("Recording not found with public token"));
+                () -> new ResourceNotFoundException("Recording not found with public token"));
 
     if (recordingAudioService.isAacReady(recording)) {
       return new RecordingAudioStatus(true, true, false);
