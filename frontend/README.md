@@ -62,6 +62,21 @@ To preview the production build:
 npm run preview
 ```
 
+## Tests
+
+Unit tests run with [vitest](https://vitest.dev) under jsdom. They cover the pure utilities and
+the composables; there is no component mounting yet.
+
+```bash
+npm test                     # run everything once
+npm run test:watch           # re-run on change
+npm run type-check:test      # type-check the test files against vitest's types
+npm run lint                 # eslint
+```
+
+Test files sit next to the code as `src/**/*.test.ts`. They are excluded from the app's
+`tsconfig.json`, so the production type check never needs vitest installed.
+
 ## Build Metadata
 
 During `npm run build`, a prebuild step generates `public/build-info.json` containing:
