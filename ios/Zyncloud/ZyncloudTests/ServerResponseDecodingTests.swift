@@ -258,6 +258,15 @@ struct ServerResponseDecodingTests {
         #expect(response.success)
         #expect(response.email == "user@example.com")
         #expect(response.emailVerified == false)
+        // A server without the admin flag yet: the account is treated as a plain one.
+        #expect(response.isAdmin == false)
+    }
+
+    @Test func decodesTheAdminFlagOnAuthCheck() throws {
+        let response = try decode(AuthCheckResponse.self, """
+        { "success": true, "email": "ops@example.com", "emailVerified": true, "admin": true }
+        """)
+        #expect(response.isAdmin)
     }
 
     @Test func decodesAnErrorResponse() throws {

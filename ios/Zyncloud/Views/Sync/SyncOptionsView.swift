@@ -138,8 +138,13 @@ struct SyncOptionsView: View {
                         NewPhotoVisibilityView()
                     }
 
-                    NavigationLink("Narration Languages") {
-                        NarrationLanguagesView()
+                    // The two language names are instance-wide and only an admin may rename them
+                    // (server D75). Everyone else would only ever see a field that answers 403,
+                    // so the row is not shown to them at all — same as the web app.
+                    if viewModel.isAdmin {
+                        NavigationLink("Narration Languages") {
+                            NarrationLanguagesView()
+                        }
                     }
 
                     NavigationLink("Tags") {
@@ -221,6 +226,7 @@ struct SyncOptionsView: View {
             .alert(state: $viewModel.alertState)
             .onAppear {
                 viewModel.checkPhotoAccess()
+                viewModel.loadAccountRole()
                 if viewModel.albums.isEmpty {
                     viewModel.fetchAlbums()
                 }
