@@ -1,0 +1,49 @@
+name: server
+
+on:
+  push:
+    branches: [main, "renovate/**"]
+    paths:
+      - "server/**"
+      - ".github/workflows/server.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - ".github/workflows/server.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Maven test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      # GitHub's Ubuntu runner has a real Docker daemon, so the
+      # Testcontainers-gated classes run here too.
+      - name: Test
+        run: ./mvnw -B -ntp test -Drun.testcontainers=true
+
+      - name: Upload Surefire reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: surefire-reports
+          path: server/target/surefire-reports/
+          if-no-files-found: ignore
