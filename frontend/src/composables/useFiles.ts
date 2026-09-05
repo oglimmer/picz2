@@ -1,5 +1,6 @@
 import { ref, computed, watch, type Ref, type ComputedRef } from "vue";
 import { useApi, jsonBody } from "./useApi";
+import { useStorageUsage } from "./useStorageUsage";
 import { countTags } from "../utils/tags";
 import type { AlbumFile, TagCount } from "@/types";
 
@@ -46,6 +47,7 @@ export interface FilesComposable {
  */
 export function useFiles(): FilesComposable {
   const { apiUrl, requestJson, requestPublicJson, shareToken } = useApi();
+  const { refresh: refreshStorageUsage } = useStorageUsage();
 
   const files = ref<AlbumFile[]>([]);
   const allFilesUnfiltered = ref<AlbumFile[]>([]);
@@ -140,6 +142,9 @@ export function useFiles(): FilesComposable {
 
   async function deleteFile(fileId: number): Promise<void> {
     await requestJson(`${apiUrl}/api/files/${fileId}`, { method: "DELETE" });
+    // Deleting is the one way a user frees room on the site's storage, so the "storage full"
+    // banner is asked to re-check straight away rather than on its next poll.
+    void refreshStorageUsage();
     const index = files.value.findIndex((f) => f.id === fileId);
     if (index !== -1) {
       const [deleted] = files.value.splice(index, 1);

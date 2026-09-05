@@ -39,3 +39,11 @@ extension APIClient {
         send(.post, path, body: body, expecting: StorageBackendTestResult.self, completion: completion)
     }
 }
+
+extension APIClient {
+    /// The account's standing with the site's own storage, for the "storage full" banner. Cheap
+    /// on the server by design, so it is safe to ask on every return to the foreground.
+    func fetchStorageUsage(completion: @escaping @Sendable (Result<StorageUsage, Error>) -> Void) {
+        send(.get, "api/storage-usage", expecting: StorageUsage.self, completion: completion)
+    }
+}

@@ -1,5 +1,6 @@
 <template>
   <div class="container">
+    <StorageFullBanner v-if="isLoggedIn" />
     <router-view />
     <ToastNotifications />
     <ConfirmDialog />
@@ -26,16 +27,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import { useAuth } from './composables/useAuth'
 import { useTags } from './composables/useTags'
 import { useVersion } from './composables/useVersion'
+import { useStorageUsage } from './composables/useStorageUsage'
 import ToastNotifications from './components/ToastNotifications.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import StorageFullBanner from './components/StorageFullBanner.vue'
 
 const { isLoggedIn } = useAuth()
 const { loadTags } = useTags()
 const { frontendVersion, frontendCommit, backendVersion, backendCommit } = useVersion()
+const { startPolling, stopPolling } = useStorageUsage()
 
 /**
  * Load app data on mount if logged in
@@ -47,4 +51,10 @@ onMounted(async () => {
     await loadTags()
   }
 })
+
+/**
+ * The "storage full" banner follows the session: polling starts on sign-in (or on a hard refresh
+ * with a live session) and stops, taking the banner down, on sign-out.
+ */
+watch(isLoggedIn, (loggedIn) => (loggedIn ? startPolling() : stopPolling()), { immediate: true })
 </script>

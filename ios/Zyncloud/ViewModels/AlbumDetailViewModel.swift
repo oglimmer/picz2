@@ -400,6 +400,9 @@ class AlbumDetailViewModel: ViewModelProtocol {
                 switch result {
                 case .success:
                     self.photos.removeAll { $0.id == photo.id }
+                    // Deleting is the one way to free room on the site's storage, so the
+                    // "storage full" banner re-checks now rather than on its next poll.
+                    StorageUsageMonitor.shared.refreshSoon()
                 case let .failure(error):
                     self.handleError(error)
                 }
@@ -477,6 +480,9 @@ class AlbumDetailViewModel: ViewModelProtocol {
             rotatingPhotoIds.subtract(ids)
             isBulkWorking = false
             endSelecting()
+            if failed < ids.count {
+                StorageUsageMonitor.shared.refreshSoon()
+            }
 
             if failed > 0 {
                 alertState = AlertState(

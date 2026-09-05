@@ -1,6 +1,7 @@
 import { ref, type Ref } from "vue";
 import { useNotifications } from "../useNotifications";
 import { useUpload } from "../useUpload";
+import { useStorageUsage } from "../useStorageUsage";
 import type { Album, AlbumFile } from "@/types";
 
 export interface UploadProgress {
@@ -28,6 +29,7 @@ const idle = (): UploadProgress => ({ current: 0, total: 0, status: "", currentF
 export function useUploadFlow(deps: UploadFlowDeps): UploadFlow {
   const { uploadFile } = useUpload();
   const { success, warning, error } = useNotifications();
+  const { refresh: refreshStorageUsage } = useStorageUsage();
   const uploading = ref(false);
   const progress = ref<UploadProgress>(idle());
 
@@ -92,6 +94,9 @@ export function useUploadFlow(deps: UploadFlowDeps): UploadFlow {
     } finally {
       uploading.value = false;
       progress.value = idle();
+      // Every outcome moves the meter: a success adds bytes, a 507 means the banner should be up
+      // already. Not awaited — the banner is App-level and catches up on its own.
+      void refreshStorageUsage();
     }
   }
 

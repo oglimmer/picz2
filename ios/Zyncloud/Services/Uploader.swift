@@ -302,6 +302,7 @@ final class Uploader: NSObject, URLSessionDelegate, URLSessionTaskDelegate, URLS
                     filename: filename,
                     serverMessage: bufferedBody.flatMap(TusUploader.serverMessage(from:)),
                 )
+                StorageUsageMonitor.reportStorageFull()
                 UploadStore.shared.removeFromUploading(assetId)
                 onTaskFinished?(assetId, .clientError)
             } else if code == 429 || code == 503 {
