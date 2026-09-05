@@ -8,8 +8,8 @@ import org.testcontainers.containers.MinIOContainer;
  * A throwaway MinIO for the Docker-gated Spring context tests. {@code BucketBootstrapper} does a
  * {@code HeadBucket} at startup, so every full context needs a reachable S3 endpoint — without one
  * the S3 client refuses to build ("URI scheme of endpointOverride must not be null") and the
- * context never starts. Declare the container with {@code @Container} and wire its coordinates in
- * a {@code @DynamicPropertySource} method via {@link #register}.
+ * context never starts. Declare the container with {@code @Container} and wire its coordinates in a
+ * {@code @DynamicPropertySource} method via {@link #register}.
  */
 public final class TestObjectStorage {
 
