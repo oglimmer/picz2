@@ -100,7 +100,10 @@
           >
             <span class="menu-item-label">Tags</span>
           </button>
+          <!-- The two language names are instance-wide and only ROLE_ADMIN may rename them
+               (D75), so the entry is hidden rather than shown as a field that answers 403. -->
           <button
+            v-if="isAdmin"
             class="menu-item"
             :class="{ 'menu-item--on': showManageLanguages }"
             role="menuitem"
@@ -309,7 +312,7 @@
       @close="showManageTags = false"
     />
     <LanguageManager
-      v-if="isLoggedIn && showManageLanguages"
+      v-if="isLoggedIn && isAdmin && showManageLanguages"
       @close="showManageLanguages = false"
     />
 
@@ -441,7 +444,7 @@ import { useStorageBackends } from '../composables/useStorageBackends'
 import type { Album } from '@/types'
 
 const router = useRouter()
-const { isLoggedIn } = useAuth()
+const { isLoggedIn, isAdmin } = useAuth()
 const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
 const { availableTags, loadTags } = useTags()
 const { backends: storageBackends, loadBackends } = useStorageBackends()
