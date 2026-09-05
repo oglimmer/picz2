@@ -21,9 +21,9 @@ import lombok.NoArgsConstructor;
 /**
  * A section marker inside the presentation view of one (album, tag) pair. The group starts at
  * {@link #startFile} and — when the tag-filtered file list is walked in {@code display_order} —
- * owns every image up to {@link #endFile} inclusive, or, when no end is set, up to the next
- * group's start. There is deliberately no explicit ordering column: order is derived from the
- * images the user already curates.
+ * owns every image up to {@link #endFile} inclusive, or, when no end is set, up to the next group's
+ * start. There is deliberately no explicit ordering column: order is derived from the images the
+ * user already curates.
  */
 @Entity
 @Table(

@@ -8,6 +8,7 @@ import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.GpsSource;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
+import com.oglimmer.photoupload.entity.SlideshowRecording;
 import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
@@ -18,6 +19,7 @@ import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
 import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
+import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -42,6 +45,7 @@ class AlbumServiceTest {
   @Mock ImageTagRepository imageTagRepository;
   @Mock AlbumEnabledTagRepository albumEnabledTagRepository;
   @Mock StorageBackendRepository storageBackendRepository;
+  @Mock SlideshowRecordingRepository slideshowRecordingRepository;
   @Mock FileStorageService fileStorageService;
   @Mock UserContext userContext;
   @Mock SystemTagProvisioner systemTagProvisioner;
@@ -67,8 +71,6 @@ class AlbumServiceTest {
         .thenReturn(Optional.of(systemBackend()));
     when(albumRepository.findByUserAndName(testUser, "Summer")).thenReturn(Optional.empty());
     when(albumRepository.findMaxDisplayOrderByUser(testUser)).thenReturn(3);
-    when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(anyLong(), eq(1L)))
-        .thenReturn(List.of());
     when(albumRepository.save(any(Album.class)))
         .thenAnswer(
             inv -> {
@@ -95,8 +97,6 @@ class AlbumServiceTest {
     album.setUser(testUser);
     album.setName("Summer");
     when(albumRepository.findByUserAndId(testUser, 10L)).thenReturn(Optional.of(album));
-    when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(10L, 1L))
-        .thenReturn(List.of());
 
     AlbumInfo published = service.setPublished(10L, true);
     assertEquals(Boolean.TRUE, published.getPublished());
@@ -246,5 +246,38 @@ class AlbumServiceTest {
     backend.setName("Default storage");
     backend.setSystemDefault(true);
     return backend;
+  }
+
+  @Test
+  void deleteAlbumRemovesRowsBeforeStorageAndSurvivesAStorageFailure() {
+    StorageBackend backend = systemBackend();
+    Album album = new Album();
+    album.setId(10L);
+    album.setUser(testUser);
+    album.setName("Summer");
+    album.setStorageBackend(backend);
+    FileMetadata photo = new FileMetadata();
+    photo.setId(100L);
+    SlideshowRecording narration = new SlideshowRecording();
+    narration.setId(5L);
+    when(albumRepository.findByUserAndId(testUser, 10L)).thenReturn(Optional.of(album));
+    when(fileMetadataRepository.findByAlbumIdAndUserIdOrderByDisplayOrderAsc(10L, 1L))
+        .thenReturn(List.of(photo));
+    when(slideshowRecordingRepository.findByAlbumIdAndUserIdOrderByCreatedAtDesc(10L, 1L))
+        .thenReturn(List.of(narration));
+    // A storage outage mid-delete must not roll the row deletes back: rows pointing at bytes that
+    // are gone are a permanent 404, while bytes without rows are what the orphan sweep is for.
+    doThrow(new RuntimeException("minio down"))
+        .when(fileStorageService)
+        .bulkDeleteAlbumStorage(10L, backend, List.of(photo), List.of(narration));
+
+    service.deleteAlbum(10L);
+
+    InOrder order = inOrder(fileMetadataRepository, albumRepository, fileStorageService);
+    order.verify(fileMetadataRepository).bulkDeleteByAlbumId(10L);
+    order.verify(albumRepository).bulkDeleteById(10L);
+    order
+        .verify(fileStorageService)
+        .bulkDeleteAlbumStorage(10L, backend, List.of(photo), List.of(narration));
   }
 }

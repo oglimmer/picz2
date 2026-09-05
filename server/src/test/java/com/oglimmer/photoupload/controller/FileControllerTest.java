@@ -6,7 +6,6 @@ import static org.mockito.Mockito.*;
 
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
-import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.service.FileStorageService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -20,7 +19,6 @@ import org.springframework.http.ResponseEntity;
 class FileControllerTest {
 
   @Mock FileStorageService storageService;
-  @Mock FileMetadataRepository fileMetadataRepository;
 
   @InjectMocks FileController controller;
 

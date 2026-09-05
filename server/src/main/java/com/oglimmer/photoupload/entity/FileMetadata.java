@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.entity;
 
+import com.oglimmer.photoupload.util.RandomTokens;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -15,18 +16,18 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import lombok.AllArgsConstructor;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 @Entity
 @Table(name = "file_metadata")
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 public class FileMetadata {
@@ -180,9 +181,7 @@ public class FileMetadata {
       uploadedAt = Instant.now();
     }
     if (publicToken == null || publicToken.isBlank()) {
-      byte[] bytes = new byte[24]; // 48 hex chars
-      new SecureRandom().nextBytes(bytes);
-      publicToken = HexFormat.of().formatHex(bytes);
+      publicToken = RandomTokens.hex(24); // 48 hex chars
     }
   }
 }

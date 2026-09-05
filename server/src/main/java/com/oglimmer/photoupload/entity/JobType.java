@@ -29,11 +29,12 @@ public enum JobType {
    * Produce the AAC ({@code .m4a}) sibling of a slideshow recording's audio, which is the only
    * rendition Apple clients can decode.
    *
-   * <p>Unlike every other job type, {@code asset_id} holds a {@code slideshow_recordings} id, not a
-   * {@code file_metadata} id — the queue table is reused rather than duplicated, and the dispatcher
-   * special-cases the completion check accordingly. Enqueued by the api pod when an iOS client asks
-   * for a recording whose sibling is missing; the transcode runs for about a minute on the Pi,
-   * which is why it must never happen inside the request.
+   * <p>Unlike every other job type it works on a recording, not an asset: {@code asset_id} is null
+   * and {@code recording_id} (V42) names the {@code slideshow_recordings} row — the queue table is
+   * reused rather than duplicated, and the dispatcher special-cases the completion check
+   * accordingly. Enqueued by the api pod when an iOS client asks for a recording whose sibling is
+   * missing; the transcode runs for about a minute on the Pi, which is why it must never happen
+   * inside the request.
    */
   TRANSCODE_AUDIO_AAC
 }

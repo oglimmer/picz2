@@ -4,9 +4,7 @@ package com.oglimmer.photoupload.storage;
 import com.oglimmer.photoupload.exception.MinioUnavailableException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import java.io.InputStream;
-import java.net.URL;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -33,7 +31,6 @@ import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
-import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
 /**
  * Thin wrapper around the S3 SDK, bound to one {@link StorageClients} (one album's backend). Each
@@ -49,11 +46,9 @@ import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignReques
 public class BackendStorage {
 
   private final StorageClients clients;
-  private final long defaultPresignSeconds;
 
-  BackendStorage(StorageClients clients, long defaultPresignSeconds) {
+  BackendStorage(StorageClients clients) {
     this.clients = clients;
-    this.defaultPresignSeconds = defaultPresignSeconds;
   }
 
   private String bucket() {
@@ -126,7 +121,7 @@ public class BackendStorage {
     log.debug("S3 GET s3://{}/{} → {}", bucket(), key, destination);
   }
 
-  /** Stream an object straight to a caller (controller). Closes the {@link ResponseInputStream}. */
+  /** Stream an object straight to a caller (controller), which must close the stream. */
   public ResponseInputStream<GetObjectResponse> openStream(String key) {
     GetObjectRequest req = GetObjectRequest.builder().bucket(bucket()).key(key).build();
     return withBreaker(() -> clients.s3().getObject(req));
@@ -323,32 +318,7 @@ public class BackendStorage {
     log.debug("S3 batch DELETE {} keys from s3://{}", batch.size(), bucket());
   }
 
-  /**
-   * Returns a time-limited URL the client can use to stream the object directly from the backend,
-   * bypassing the API pod. Used by file-serve once a request is authorised.
-   */
-  public URL presignGet(String key) {
-    return presignGet(key, Duration.ofSeconds(defaultPresignSeconds));
-  }
-
-  public URL presignGet(String key, Duration ttl) {
-    GetObjectPresignRequest req =
-        GetObjectPresignRequest.builder()
-            .signatureDuration(ttl)
-            .getObjectRequest(GetObjectRequest.builder().bucket(bucket()).key(key).build())
-            .build();
-    return clients.presigner().presignGetObject(req).url();
-  }
-
-  public String getBucket() {
-    return bucket();
-  }
-
   public Long getBackendId() {
     return clients.backendId();
-  }
-
-  public boolean isSystemDefault() {
-    return clients.systemDefault();
   }
 }

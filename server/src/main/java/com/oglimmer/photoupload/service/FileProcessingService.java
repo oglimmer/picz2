@@ -12,14 +12,13 @@ import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StoragePaths;
 import com.oglimmer.photoupload.util.MimeTypePredicates;
+import com.oglimmer.photoupload.util.RandomTokens;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,19 +48,7 @@ public class FileProcessingService {
 
   public void processFile(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata =
-        tx.execute(
-            status -> {
-              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
-              if (found == null) {
-                return null;
-              }
-              found.setProcessingStatus(ProcessingStatus.PROCESSING);
-              found.setProcessingAttempts(
-                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
-              found.setProcessingError(null);
-              return metadataRepository.save(found);
-            });
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
       log.warn("processFile: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -79,11 +66,7 @@ public class FileProcessingService {
     try {
       if (s3Backed) {
         // Per-job scratch dir on the PVC. Wiped in the finally block so we never accumulate.
-        workdir =
-            Files.createDirectories(
-                fileStorageLocation
-                    .resolve(PROCESSING_TMP)
-                    .resolve(String.valueOf(fileMetadataId)));
+        workdir = workdirFor(fileStorageLocation, fileMetadataId);
         currentFile = workdir.resolve(storedFilename);
         storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
@@ -274,19 +257,7 @@ public class FileProcessingService {
    */
   public void rotateAndReprocess(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata =
-        tx.execute(
-            status -> {
-              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
-              if (found == null) {
-                return null;
-              }
-              found.setProcessingStatus(ProcessingStatus.PROCESSING);
-              found.setProcessingAttempts(
-                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
-              found.setProcessingError(null);
-              return metadataRepository.save(found);
-            });
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
       log.warn("rotateAndReprocess: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -327,9 +298,7 @@ public class FileProcessingService {
 
     Path workdir = null;
     try {
-      workdir =
-          Files.createDirectories(
-              fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
       Path localOriginal = workdir.resolve(metadata.getStoredFilename());
       storageFor(metadata).getToFile(sourceKey, localOriginal);
 
@@ -398,9 +367,7 @@ public class FileProcessingService {
 
       // Cache-bust: the gallery URL keys off publicToken, so every viewer's browser fetches the
       // new derivative bytes after the next gallery reload instead of serving a stale image.
-      byte[] tokenBytes = new byte[24];
-      new SecureRandom().nextBytes(tokenBytes);
-      metadata.setPublicToken(HexFormat.of().formatHex(tokenBytes));
+      metadata.setPublicToken(RandomTokens.hex(24));
 
       metadata.setProcessingStatus(ProcessingStatus.DONE);
       metadata.setProcessingCompletedAt(Instant.now());
@@ -436,19 +403,7 @@ public class FileProcessingService {
    */
   public void regenerateThumbnails(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata =
-        tx.execute(
-            status -> {
-              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
-              if (found == null) {
-                return null;
-              }
-              found.setProcessingStatus(ProcessingStatus.PROCESSING);
-              found.setProcessingAttempts(
-                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
-              found.setProcessingError(null);
-              return metadataRepository.save(found);
-            });
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
       log.warn("regenerateThumbnails: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -486,9 +441,7 @@ public class FileProcessingService {
 
     Path workdir = null;
     try {
-      workdir =
-          Files.createDirectories(
-              fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
       Path localSource = workdir.resolve(metadata.getStoredFilename());
       storageFor(metadata).getToFile(sourceKey, localSource);
 
@@ -532,9 +485,7 @@ public class FileProcessingService {
 
       // Cache-bust like rotate does — viewer browsers fetch the new derivative bytes after the
       // next gallery reload instead of holding the stale ones.
-      byte[] tokenBytes = new byte[24];
-      new SecureRandom().nextBytes(tokenBytes);
-      metadata.setPublicToken(HexFormat.of().formatHex(tokenBytes));
+      metadata.setPublicToken(RandomTokens.hex(24));
 
       metadata.setProcessingStatus(ProcessingStatus.DONE);
       metadata.setProcessingCompletedAt(Instant.now());
@@ -569,19 +520,7 @@ public class FileProcessingService {
    */
   public void reextractCaptureDate(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata =
-        tx.execute(
-            status -> {
-              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
-              if (found == null) {
-                return null;
-              }
-              found.setProcessingStatus(ProcessingStatus.PROCESSING);
-              found.setProcessingAttempts(
-                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
-              found.setProcessingError(null);
-              return metadataRepository.save(found);
-            });
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
       log.warn("reextractCaptureDate: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -606,11 +545,7 @@ public class FileProcessingService {
     try {
       Path currentFile;
       if (s3Backed) {
-        workdir =
-            Files.createDirectories(
-                fileStorageLocation
-                    .resolve(PROCESSING_TMP)
-                    .resolve(String.valueOf(fileMetadataId)));
+        workdir = workdirFor(fileStorageLocation, fileMetadataId);
         currentFile = workdir.resolve(metadata.getStoredFilename());
         storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
@@ -671,19 +606,7 @@ public class FileProcessingService {
    */
   public void reextractGps(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    FileMetadata metadata =
-        tx.execute(
-            status -> {
-              FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
-              if (found == null) {
-                return null;
-              }
-              found.setProcessingStatus(ProcessingStatus.PROCESSING);
-              found.setProcessingAttempts(
-                  found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
-              found.setProcessingError(null);
-              return metadataRepository.save(found);
-            });
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
       log.warn("reextractGps: metadata id {} not found (deleted?)", fileMetadataId);
       return;
@@ -708,11 +631,7 @@ public class FileProcessingService {
     try {
       Path currentFile;
       if (s3Backed) {
-        workdir =
-            Files.createDirectories(
-                fileStorageLocation
-                    .resolve(PROCESSING_TMP)
-                    .resolve(String.valueOf(fileMetadataId)));
+        workdir = workdirFor(fileStorageLocation, fileMetadataId);
         currentFile = workdir.resolve(metadata.getStoredFilename());
         storageFor(metadata).getToFile(metadata.getFilePath(), currentFile);
       } else {
@@ -751,11 +670,34 @@ public class FileProcessingService {
   }
 
   /**
-   * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file to
-   * S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
-   * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
-   * fall back to storing the derivative on the PVC and returning its relative path.
+   * Flip the asset row to PROCESSING and count the attempt, in its own short transaction, before
+   * any heavy work starts. Returns null when the row is gone (asset deleted while queued); every
+   * job method treats that as "nothing to do".
    */
+  private FileMetadata leaseIntoProcessing(TransactionTemplate tx, Long fileMetadataId) {
+    return tx.execute(
+        status -> {
+          FileMetadata found = metadataRepository.findById(fileMetadataId).orElse(null);
+          if (found == null) {
+            return null;
+          }
+          found.setProcessingStatus(ProcessingStatus.PROCESSING);
+          found.setProcessingAttempts(
+              found.getProcessingAttempts() == null ? 1 : found.getProcessingAttempts() + 1);
+          found.setProcessingError(null);
+          return metadataRepository.save(found);
+        });
+  }
+
+  /**
+   * Per-job scratch directory on the PVC ({@code .processing-tmp/<assetId>}). The caller wipes it
+   * in its {@code finally}, so nothing accumulates across jobs.
+   */
+  private static Path workdirFor(Path fileStorageLocation, Long fileMetadataId) throws IOException {
+    return Files.createDirectories(
+        fileStorageLocation.resolve(PROCESSING_TMP).resolve(String.valueOf(fileMetadataId)));
+  }
+
   /**
    * The album's storage backend for this asset. Resolved per call rather than once per job: the
    * lookup is memoised in {@link ObjectStorageService}, and holding a handle across a long
@@ -767,6 +709,12 @@ public class FileProcessingService {
         .forFile(metadata);
   }
 
+  /**
+   * Persist a freshly-generated derivative. When {@code s3Key} is non-null we PUT the local file to
+   * S3 and return the key as the DB pointer; the local file is deleted (it lives in the temp
+   * workdir which is wiped anyway, but we delete eagerly to keep peak disk small). Otherwise we
+   * fall back to storing the derivative on the PVC and returning its relative path.
+   */
   private String storeDerivative(
       FileMetadata metadata, Path fileStorageLocation, Path local, String s3Key, String contentType)
       throws IOException {

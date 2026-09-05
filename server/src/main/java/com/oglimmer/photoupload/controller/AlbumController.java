@@ -107,7 +107,7 @@ public class AlbumController {
 
   @GetMapping("/public/{token}/files")
   public ResponseEntity<FilesResponse> getPublicAlbumFiles(@PathVariable String token) {
-    albumService.requirePublishedByShareToken(token);
+    // Published + hidden gates both live in the service (D70).
     List<FileInfo> files = fileStorageService.listFilesByAlbumByShareToken(token);
 
     long totalSize = files.stream().mapToLong(FileInfo::getSize).sum();

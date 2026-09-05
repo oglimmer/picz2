@@ -9,7 +9,6 @@ import com.oglimmer.photoupload.repository.AlbumRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.storage.BackendStorage;
 import com.oglimmer.photoupload.storage.StorageClientFactory;
-import java.io.InputStream;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -171,11 +170,5 @@ public class ObjectStorageService {
       throw new StorageException(
           "Failed to transfer " + sourceKey + " between storage backends: " + e.getMessage(), e);
     }
-  }
-
-  /** Overload for callers that already hold the stream (used by tests and probe paths). */
-  public void transfer(
-      InputStream in, long length, BackendStorage destination, String key, String contentType) {
-    destination.putStream(key, in, length, contentType);
   }
 }

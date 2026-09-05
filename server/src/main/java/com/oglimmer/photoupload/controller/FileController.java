@@ -10,7 +10,6 @@ import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.ReorderRequest;
 import com.oglimmer.photoupload.model.TagOperationResponse;
 import com.oglimmer.photoupload.model.TagRequest;
-import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.service.FileStorageService;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -37,7 +36,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class FileController {
 
   private final FileStorageService fileStorageService;
-  private final FileMetadataRepository fileMetadataRepository;
 
   @GetMapping()
   public ResponseEntity<FilesResponse> listFiles(

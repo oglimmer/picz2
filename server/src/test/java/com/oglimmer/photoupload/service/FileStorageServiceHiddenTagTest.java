@@ -61,6 +61,7 @@ class FileStorageServiceHiddenTagTest {
     props.setUploadDir(tempDir.toString());
 
     metaRepo = Mockito.mock(FileMetadataRepository.class);
+    AlbumRepository albumRepo = Mockito.mock(AlbumRepository.class);
     FileInfoMapper mapper = Mockito.mock(FileInfoMapper.class);
     UserContext userContext = Mockito.mock(UserContext.class);
 
@@ -73,7 +74,7 @@ class FileStorageServiceHiddenTagTest {
             Mockito.mock(AlbumEnabledTagRepository.class),
             Mockito.mock(LocalFileCleanupService.class),
             Mockito.mock(JdbcTemplate.class),
-            Mockito.mock(AlbumRepository.class),
+            albumRepo,
             Mockito.mock(SlideshowRecordingRepository.class),
             Mockito.mock(StorageBackendRepository.class),
             mapper,
@@ -92,6 +93,9 @@ class FileStorageServiceHiddenTagTest {
     album.setId(7L);
     album.setUser(user);
     album.setShareToken(SHARE_TOKEN);
+    album.setPublished(true);
+    // The published gate lives in the service now: an unpublished or unknown token is a 404.
+    when(albumRepo.findByShareTokenAndPublishedTrue(SHARE_TOKEN)).thenReturn(Optional.of(album));
 
     allTag = tag(10L, SystemTags.ALL);
     hiddenTag = tag(11L, SystemTags.HIDDEN);

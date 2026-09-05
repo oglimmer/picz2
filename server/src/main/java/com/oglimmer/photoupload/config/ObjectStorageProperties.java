@@ -45,9 +45,6 @@ public class ObjectStorageProperties {
    */
   private boolean autoCreateBucket = true;
 
-  /** Default lifetime for presigned GET URLs handed back to clients. */
-  private long presignSeconds = 3600;
-
   /**
    * Per-attempt HTTP timeout in seconds. 2s was too tight for large JPEG PUT-backs from the worker
    * (HEIC→JPEG conversion can produce 10-20 MB files). 30s gives headroom without holding threads

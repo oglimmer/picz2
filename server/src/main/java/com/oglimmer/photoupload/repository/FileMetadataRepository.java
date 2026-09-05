@@ -15,7 +15,15 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long> {
 
-  List<FileMetadata> findAllByOrderByDisplayOrderAsc();
+  /** Album size for the album list — a COUNT, not a load of every row. */
+  long countByAlbumId(Long albumId);
+
+  /**
+   * The album's cover: the first image (never a video) in display order. One row, not the whole
+   * album, for the same reason as {@link #countByAlbumId}.
+   */
+  Optional<FileMetadata> findFirstByAlbumIdAndMimeTypeStartingWithOrderByDisplayOrderAsc(
+      Long albumId, String mimeTypePrefix);
 
   // User-scoped queries via album relationship
   @Query(

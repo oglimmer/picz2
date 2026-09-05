@@ -34,8 +34,8 @@ import org.springframework.transaction.annotation.Transactional;
  * display_order}, so reordering images reshuffles the sections for free.
  *
  * <p>Because order lives in the images and not here, an end that has drifted in front of its own
- * start is not an error the server can see — the clients simply ignore an end they never reach,
- * and the group stays open-ended.
+ * start is not an error the server can see — the clients simply ignore an end they never reach, and
+ * the group stays open-ended.
  */
 @Profile(Profiles.API)
 @Service
