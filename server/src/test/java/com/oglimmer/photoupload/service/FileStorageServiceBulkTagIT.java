@@ -4,6 +4,7 @@ package com.oglimmer.photoupload.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.oglimmer.photoupload.entity.SystemTags;
+import com.oglimmer.photoupload.testsupport.TestObjectStorage;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,9 +18,12 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MariaDBContainer;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mariadb.MariaDBContainer;
 
 /**
  * Album-wide tag add/remove against a real MariaDB. The mock-based {@code
@@ -45,8 +49,14 @@ class FileStorageServiceBulkTagIT {
   private static final String EMAIL = "bulktag-it@example.com";
 
   @Container @ServiceConnection
-  static final MariaDBContainer<?> MARIADB =
-      new MariaDBContainer<>("mariadb:11.8").withReuse(false);
+  static final MariaDBContainer MARIADB = new MariaDBContainer("mariadb:11.8").withReuse(false);
+
+  @Container static final MinIOContainer MINIO = TestObjectStorage.newMinio();
+
+  @DynamicPropertySource
+  static void objectStorage(DynamicPropertyRegistry registry) {
+    TestObjectStorage.register(registry, MINIO);
+  }
 
   @Autowired private FileStorageService fileStorageService;
   @Autowired private JdbcTemplate jdbcTemplate;

@@ -13,10 +13,10 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.MariaDBContainer;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mariadb.MariaDBContainer;
 
 /**
  * Asserts the api profile loads only the upload/serve-side beans. Phase 4a regression guard: any
@@ -39,8 +39,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ApiProfileContextTest {
 
   @Container @ServiceConnection
-  static final MariaDBContainer<?> MARIADB =
-      new MariaDBContainer<>("mariadb:11.8").withReuse(false);
+  static final MariaDBContainer MARIADB = new MariaDBContainer("mariadb:11.8").withReuse(false);
 
   @Container static final MinIOContainer MINIO = TestObjectStorage.newMinio();
 
