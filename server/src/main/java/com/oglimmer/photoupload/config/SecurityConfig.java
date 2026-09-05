@@ -79,6 +79,11 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                     .permitAll()
+                    // Operator-only (D74). These purge buckets, enqueue instance-wide sweeps and
+                    // list other users' failed assets; a login alone must not be enough. The role
+                    // comes from users.is_admin via CustomUserDetailsService.
+                    .requestMatchers("/api/admin/**")
+                    .hasRole(CustomUserDetailsService.ROLE_ADMIN)
                     .anyRequest()
                     .authenticated())
         .httpBasic(basic -> basic.authenticationEntryPoint(silentBasicEntryPoint()));

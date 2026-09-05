@@ -33,9 +33,12 @@ public class AlbumSubscriptionNotificationService {
   private final EmailService emailService;
   private final ApnsService apnsService;
 
-  /** Process all subscriptions and send notifications for updates. Runs every 6 hours. */
-  // @Scheduled(cron = "0 0 */6 * * *") // Run at minute 0 of every 6th hour
-  @Scheduled(cron = "0 * * * * *") // Run at minute 0 of every 6th hour
+  /**
+   * Process all subscriptions and send notifications for updates. Runs at minute 0 of every 6th
+   * hour. It was left on a once-a-minute cron after a debugging session (noted 2026-09-01), which
+   * loaded every file of every subscribed album sixty times an hour.
+   */
+  @Scheduled(cron = "0 0 */6 * * *")
   @Transactional
   public void processSubscriptionNotifications() {
     log.info("Starting subscription notification processing");

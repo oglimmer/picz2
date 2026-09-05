@@ -67,6 +67,14 @@ public class User {
   @Column(name = "email_verified", nullable = false)
   private boolean emailVerified = false;
 
+  /**
+   * Operator flag (D74). Grants {@code ROLE_ADMIN}, which is what {@code /api/admin/**} requires.
+   * Like {@link #storageQuotaBytes} it is set with an {@code UPDATE}; there is deliberately no API,
+   * because promoting yourself is not something a user should be able to do.
+   */
+  @Column(name = "is_admin", nullable = false)
+  private boolean admin = false;
+
   @Column(name = "verification_token", length = 64)
   private String verificationToken;
 

@@ -43,8 +43,14 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
 
   Optional<FileMetadata> findByPublicToken(String publicToken);
 
-  @Query("SELECT f.id FROM FileMetadata f WHERE f.id IN :fileIds")
-  List<Long> findExistingIds(@Param("fileIds") List<Long> fileIds);
+  /**
+   * Of the given ids, those that exist and belong to {@code userId}. The reorder endpoint compares
+   * the size of this list with the size of its input, so a foreign id fails the same way a missing
+   * one does.
+   */
+  @Query("SELECT f.id FROM FileMetadata f WHERE f.id IN :fileIds AND f.album.user.id = :userId")
+  List<Long> findExistingIdsForUser(
+      @Param("fileIds") List<Long> fileIds, @Param("userId") Long userId);
 
   @Query(
       "SELECT DISTINCT f FROM FileMetadata f "

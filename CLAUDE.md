@@ -20,6 +20,7 @@ Backend runs as `api` and `worker` pods sharing the same JAR (different `SPRING_
 - **Retention is irreversible** (`RetentionService` deletes S3 originals + nulls `file_path`). If you change retention logic, set `retention.dryRun: true` for one nightly cycle and read the log first.
 - **All backwards-compatibility shims have been removed** (Phase 4e R3, 2026-04-30). Don't reintroduce them for hypothetical future flexibility.
 - **`hidden` is a privacy boundary, not a filter.** New uploads get the tag named by `users.new_asset_tag` (D70), which defaults to `hidden`. Anything carrying `hidden` must stay out of every public path: the share-token listing, the public single-image page and subscription mails all drop it. `/api/i/{token}` is deliberately NOT gated — the owner's own clients fetch pixels through it — so never hand a hidden asset's `publicToken` to an unauthenticated caller.
+- **`/api/admin/**` needs `ROLE_ADMIN`** (D74), granted from `users.is_admin` in `CustomUserDetailsService`. Everyone else is `ROLE_USER`. Grant admin with SQL, never through an endpoint.
 - **Migrations** (Flyway, MariaDB) live in `server/src/main/resources/db/migration/`. Every entity field must match a migrated column or the app fails to start (`ddl-auto: validate`).
 
 ## Test caveats
