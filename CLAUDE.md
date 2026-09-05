@@ -28,10 +28,10 @@ Backend runs as `api` and `worker` pods sharing the same JAR (different `SPRING_
 
 ## Test caveats
 
-- The **server** suite is green (301 tests, 0 failures, 11 Docker-gated skips, as of 2026-09-05). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours.
+- The **server** suite is green (301 tests, 0 failures, as of 2026-09-05; 11 Docker-gated skips without `-Drun.testcontainers=true`, 1 skip with it). There is no baseline failure to ignore any more — the six stale tests that used to fail were fixed, so any red test is yours. CI (`.github/workflows/server.yml`) runs with the gate open.
 - The **frontend** suite is vitest (70 tests, 0 failures, as of 2026-09-05): pure utils and composables under jsdom, no component mounting yet. Test files are `src/**/*.test.ts` and are excluded from the app's `tsconfig.json`; `npm run type-check:test` checks them against vitest's types.
 - The **iOS** suite is separate and also green (536 tests, 0 failures, as of 2026-09-02). It is `xcodebuild test`, not Maven — see `ios/Zyncloud/README.md` for the invocation and its two traps (`CODE_SIGNING_ALLOWED=NO` breaks the keychain tests; the `StubServer` suites are process-wide).
-- Some IT classes (`ProcessingJobLeaseTest`, `*ProfileContextTest`) are gated by `-Drun.testcontainers=true` because Docker Desktop returns stub responses to docker-java. They run cleanly on a non-Desktop daemon.
+- Some IT classes (`ProcessingJobLeaseTest`, `*ProfileContextTest`) are gated by `-Drun.testcontainers=true` because Docker Desktop returns stub responses to docker-java. They run cleanly on a non-Desktop daemon (GitHub's Ubuntu runner, the sandbox's `dind`). They start their own MariaDB **and MinIO** (`testsupport/TestObjectStorage`) — `BucketBootstrapper` does a `HeadBucket` at startup, so a full context without an S3 endpoint never starts. New `@SpringBootTest` classes need `@ActiveProfiles("api"|"worker")`, `webEnvironment = MOCK` and both containers; copy one of the three.
 
 ## Single-test syntax
 
