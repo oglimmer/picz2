@@ -156,6 +156,7 @@ struct StorageBackendTests {
         ("https://abc123.r2.cloudflarestorage.com", "r2"),
         ("https://fsn1.your-objectstorage.com", "hetzner"),
         ("https://fra1.digitaloceanspaces.com", "digitalocean"),
+        ("https://s3.gra.io.cloud.ovh.net", "ovh"),
     ])
     func `guesses the provider from its endpoint`(endpoint: String, expected: String) {
         #expect(StorageProvider.guess(fromEndpoint: endpoint).id == expected)

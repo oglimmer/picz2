@@ -100,6 +100,18 @@ export const STORAGE_PROVIDERS: StorageProviderPreset[] = [
     keysHint: "Console → Identity and Access Management → API keys → Generate API key.",
   },
   {
+    id: "ovh",
+    label: "OVHcloud Object Storage",
+    endpointTemplate: "https://s3.<region>.io.cloud.ovh.net",
+    region: "",
+    regionHint:
+      'The lowercase region code of your bucket, e.g. "gra" (Gravelines), "rbx" (Roubaix), "sbg" (Strasbourg), "eu-west-par" (Paris) or "eu-south-mil" (Milan). It must match the region in the endpoint URL — read it off the bucket in the OVH control panel.',
+    pathStyleAccess: false,
+    keysHint:
+      "Public Cloud → Object Storage → S3 users → create a user, then generate S3 credentials. Grant it a role or a bucket policy on this bucket as well: a user with no policy gets 403 on everything. The secret is shown once.",
+    note: "Use the io.cloud.ovh.net endpoint, not the older perf.cloud.ovh.net one. OVH answers 501 to conditional writes (If-None-Match), but this app does not use them.",
+  },
+  {
     id: "minio",
     label: "MinIO / self-hosted",
     endpointTemplate: "https://minio.example.com",

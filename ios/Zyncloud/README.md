@@ -45,7 +45,7 @@ Auth is HTTP Basic throughout, credentials in the keychain, shared with the exte
 Every upload goes to tusd or to `/api/upload`, which both write to the instance's own MinIO.
 Where they end up afterwards is the album's choice: `StorageBackendsView` (Settings) registers a
 user's own S3-compatible bucket — AWS, Cloudflare R2, Backblaze B2, Hetzner, Wasabi, DigitalOcean,
-Scaleway or MinIO, with `StorageProvider` presets filling in endpoint shape, region and path-style —
+Scaleway, OVHcloud or MinIO, with `StorageProvider` presets filling in endpoint shape, region and path-style —
 and `AlbumFormView` picks one when the album is created. The choice is permanent, so editing an album shows the
 backend's name instead of the picker. What the user keeps on the instance's own storage is capped by their quota and
 refused with `507`; an album on their own bucket is not metered. See **D59** and **D60** in

@@ -2,7 +2,7 @@
 
 Personal photo / video gallery with iOS background sync, TUS resumable uploads, and S3-backed storage —
 either the instance's own MinIO, under a per-user quota, or a bucket the user brings themselves
-(AWS, Cloudflare R2, Backblaze B2, Hetzner, Wasabi, DigitalOcean, Scaleway, MinIO), chosen per album.
+(AWS, Cloudflare R2, Backblaze B2, Hetzner, Wasabi, DigitalOcean, Scaleway, OVHcloud, MinIO), chosen per album.
 Deployed as a Helm chart to a single-node K3s cluster.
 
 ## Components
