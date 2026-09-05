@@ -253,10 +253,14 @@
           v-for="tag in file.tags"
           :key="tag"
           class="tag"
+          :title="isAssignableTag(tag) ? undefined : 'Hidden until you give this photo a tag'"
           @click.stop="$emit('filter-tag', tag)"
         >
           {{ tag }}
+          <!-- `hidden` has no ×: it comes straight back on a photo with no other tag (D79), so
+               the way out is the "+ Add tag" select, not this button. -->
           <button
+            v-if="isAssignableTag(tag)"
             class="tag-remove"
             title="Remove tag"
             @click.stop="$emit('remove-tag', file.id, tag)"
@@ -313,7 +317,7 @@
             + Add tag
           </option>
           <option
-            v-for="tag in availableTags"
+            v-for="tag in assignableTags(availableTags)"
             :key="tag.id"
             :value="tag.name"
             :disabled="file.tags && file.tags.includes(tag.name)"
@@ -331,6 +335,7 @@ import { computed, nextTick, ref } from 'vue'
 import LazyImage from '@/components/LazyImage.vue'
 import { useApi } from '@/composables/useApi'
 import { formatBytes, formatDate, isVideo } from '@/utils/format'
+import { assignableTags, isAssignableTag } from '@/utils/tags'
 import type { AlbumFile, Tag } from '@/types'
 
 interface Props {

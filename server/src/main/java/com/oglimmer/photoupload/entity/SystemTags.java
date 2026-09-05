@@ -27,6 +27,11 @@ public final class SystemTags {
    * out of the public single-image page and out of subscription notifications, whatever else it is
    * tagged with. The owner sees it normally in their own gallery — that is the point, they are
    * meant to review it and re-tag it.
+   *
+   * <p>Since D79 it is derived, not assigned: a file carries {@code hidden} exactly while it has no
+   * other tag. Giving a file any real tag takes {@code hidden} off in the same transaction; taking
+   * the last real tag off (or deleting that tag) puts it back. {@code FileStorageService} and
+   * {@code TagService} enforce this on every tag edit; nothing rewrites older rows.
    */
   public static final String HIDDEN = "hidden";
 

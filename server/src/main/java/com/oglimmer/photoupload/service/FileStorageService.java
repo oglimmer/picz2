@@ -77,6 +77,11 @@ public class FileStorageService {
    */
   private static final int MAX_CAPTION_LENGTH = 2000;
 
+  /** Why a lone {@code hidden} cannot be taken off a file by hand (D79). */
+  static final String HIDDEN_IS_THE_ONLY_TAG =
+      "'hidden' is the only tag on this photo, so it would come straight back. "
+          + "Give the photo a tag to publish it.";
+
   private static final long ONE_KB = 1024L;
   private static final long ONE_MB = ONE_KB * ONE_KB; // 1_048_576
   private static final long ONE_GB = ONE_KB * ONE_MB; // 1_073_741_824
@@ -332,7 +337,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addNewAssetTagToFile(saved, newAssetTagId, newAssetTag);
+              addTagRowIfMissing(saved, newAssetTagId, newAssetTag);
               // Same TX as the metadata insert → either both visible or neither.
               jobEnqueueService.enqueue(saved.getId());
               return convertToFileInfo(saved);
@@ -502,7 +507,7 @@ public class FileStorageService {
               metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
 
               FileMetadata saved = metadataRepository.save(metadata);
-              addNewAssetTagToFile(saved, newAssetTagId, newAssetTag);
+              addTagRowIfMissing(saved, newAssetTagId, newAssetTag);
               jobEnqueueService.enqueue(saved.getId(), JobType.PROCESS);
               return convertToFileInfo(saved);
             });
@@ -961,8 +966,14 @@ public class FileStorageService {
     metadataRepository.delete(metadata);
   }
 
+  /**
+   * Put {@code tagName} on one file. Any real tag ends the holding pen (D79): if the file carried
+   * {@code hidden}, that row goes in the same transaction. {@code hidden} itself cannot be added by
+   * hand — it is the state of a file with no other tag, not a tag one assigns.
+   */
   @Transactional
   public List<String> addTagToFile(Long fileId, String tagName) {
+    requireAssignable(tagName);
     User currentUser = userContext.getCurrentUser();
     FileMetadata metadata =
         metadataRepository
@@ -993,12 +1004,26 @@ public class FileStorageService {
 
     log.info("Added tag '{}' to file: {}", tagName, metadata.getStoredFilename());
 
-    // Return updated tags list
-    return imageTagRepository.findByFileMetadataId(fileId).stream()
-        .map(it -> it.getTag().getName())
-        .collect(Collectors.toList());
+    // The file has a real tag now, so it leaves the holding pen (D79).
+    tagRepository
+        .findByUserAndName(currentUser, SystemTags.HIDDEN)
+        .flatMap(hidden -> imageTagRepository.findByFileMetadataIdAndTagId(fileId, hidden.getId()))
+        .ifPresent(
+            row -> {
+              imageTagRepository.delete(row);
+              log.info("Took '{}' off file: {}", SystemTags.HIDDEN, metadata.getStoredFilename());
+            });
+
+    return currentTagNames(fileId);
   }
 
+  /**
+   * Take {@code tagName} off one file. Taking the last real tag off puts {@code hidden} back on in
+   * the same transaction (D79), so the file never sits bare on a published album. Taking {@code
+   * hidden} itself off is allowed only while the file has another tag (a state older data can be
+   * in); as the only tag it would come straight back, so that is refused with a message saying how
+   * to publish the photo instead.
+   */
   @Transactional
   public List<String> removeTagFromFile(Long fileId, String tagName) {
     User currentUser = userContext.getCurrentUser();
@@ -1017,21 +1042,40 @@ public class FileStorageService {
             .findByFileMetadataIdAndTagId(fileId, tag.getId())
             .orElseThrow(() -> new ResourceNotFoundException("File does not have this tag"));
 
+    if (SystemTags.HIDDEN.equals(tagName)
+        && imageTagRepository.findByFileMetadataId(fileId).size() <= 1) {
+      throw new ValidationException(HIDDEN_IS_THE_ONLY_TAG);
+    }
+
     imageTagRepository.delete(imageTag);
     log.info("Removed tag '{}' from file: {}", tagName, metadata.getStoredFilename());
 
-    // Return updated tags list
+    List<String> remaining = currentTagNames(fileId);
+    if (remaining.isEmpty()) {
+      // Last real tag gone: back into the holding pen (D79).
+      Long hiddenId = systemTagProvisioner.ensureTag(currentUser, SystemTags.HIDDEN);
+      addTagRowIfMissing(metadata, hiddenId, SystemTags.HIDDEN);
+      remaining = currentTagNames(fileId);
+    }
+    return remaining;
+  }
+
+  /** The file's tag names as the database has them right now. */
+  private List<String> currentTagNames(Long fileId) {
     return imageTagRepository.findByFileMetadataId(fileId).stream()
         .map(it -> it.getTag().getName())
         .collect(Collectors.toList());
   }
 
   /**
-   * Add {@code tagName} to every file in the album, skipping files that already carry it. Returns
-   * the number of files actually changed.
+   * Add {@code tagName} to every file in the album, skipping files that already carry it. Every
+   * file that ends up with the tag also leaves the holding pen (D79), so "add {@code all} to every
+   * photo" is the one-click publish. Returns the number of files actually changed. {@code hidden}
+   * cannot be added this way, see {@link #addTagToFile}.
    */
   @Transactional
   public int addTagToAllFilesInAlbum(Long albumId, String tagName) {
+    requireAssignable(tagName);
     User currentUser = userContext.getCurrentUser();
     Album album = requireOwnedAlbum(currentUser, albumId);
     Tag tag = resolveTagForBulkOperation(currentUser, tagName);
@@ -1045,16 +1089,23 @@ public class FileStorageService {
     int changed = 0;
     for (FileMetadata metadata : albumFilesWithTags(album, currentUser)) {
       List<ImageTag> imageTags = metadata.getImageTags();
-      if (imageTags.stream().anyMatch(it -> it.getTag().getId().equals(tag.getId()))) {
-        continue;
+      boolean touched = false;
+      if (imageTags.stream().noneMatch(it -> it.getTag().getId().equals(tag.getId()))) {
+        ImageTag imageTag = new ImageTag();
+        imageTag.setFileMetadata(metadata);
+        imageTag.setTag(tag);
+        imageTagRepository.save(imageTag);
+        imageTags.add(imageTag);
+        touched = true;
       }
-
-      ImageTag imageTag = new ImageTag();
-      imageTag.setFileMetadata(metadata);
-      imageTag.setTag(tag);
-      imageTagRepository.save(imageTag);
-      imageTags.add(imageTag);
-      changed++;
+      // A real tag ends the holding pen — also on a file that already carried this tag next to
+      // `hidden`, a state only older data can be in.
+      if (removeTagRowFromFetchedFile(metadata, FileStorageService::isHiddenRow)) {
+        touched = true;
+      }
+      if (touched) {
+        changed++;
+      }
     }
 
     log.info(
@@ -1067,8 +1118,10 @@ public class FileStorageService {
   }
 
   /**
-   * Remove {@code tagName} from every file in the album, skipping files that don't carry it.
-   * Returns the number of files actually changed.
+   * Remove {@code tagName} from every file in the album, skipping files that don't carry it. A file
+   * left with no tag goes back into the holding pen (D79). Removing {@code hidden} itself touches
+   * only the files that have another tag; where it is the only tag it would come straight back, so
+   * those are skipped rather than churned. Returns the number of files actually changed.
    */
   @Transactional
   public int removeTagFromAllFilesInAlbum(Long albumId, String tagName) {
@@ -1078,15 +1131,31 @@ public class FileStorageService {
         tagRepository
             .findByUserAndName(currentUser, tagName)
             .orElseThrow(() -> new ResourceNotFoundException("Tag", "name", tagName));
+    boolean removingHidden = SystemTags.HIDDEN.equals(tagName);
 
     int changed = 0;
+    Tag hidden = null; // resolved on first need, so a sweep that empties nothing creates nothing
     for (FileMetadata metadata : albumFilesWithTags(album, currentUser)) {
+      List<ImageTag> imageTags = metadata.getImageTags();
+      if (removingHidden && imageTags.stream().allMatch(FileStorageService::isHiddenRow)) {
+        continue;
+      }
       boolean removed =
           removeTagRowFromFetchedFile(metadata, it -> it.getTag().getId().equals(tag.getId()));
       if (!removed) {
         continue;
       }
       changed++;
+      if (imageTags.isEmpty()) {
+        if (hidden == null) {
+          hidden = resolveTagForBulkOperation(currentUser, SystemTags.HIDDEN);
+        }
+        ImageTag row = new ImageTag();
+        row.setFileMetadata(metadata);
+        row.setTag(hidden);
+        imageTagRepository.save(row);
+        imageTags.add(row);
+      }
     }
 
     log.info(
@@ -1138,6 +1207,23 @@ public class FileStorageService {
    * Look up the tag for a bulk add. System tags are lazily created (same as {@code all} on upload)
    * because a user may never have touched them before; any other tag must already exist.
    */
+  /**
+   * {@code hidden} is not assigned, it is derived: a file carries it exactly while it has no other
+   * tag (D79). Adding it by hand would either be a no-op or create the "hidden next to a real tag"
+   * state the rule exists to remove, so both single and bulk adds refuse it.
+   */
+  private static void requireAssignable(String tagName) {
+    if (SystemTags.HIDDEN.equals(tagName)) {
+      throw new ValidationException(
+          "'hidden' is set automatically while a photo has no other tag. "
+              + "Remove the photo's tags to hide it again.");
+    }
+  }
+
+  private static boolean isHiddenRow(ImageTag row) {
+    return SystemTags.HIDDEN.equals(row.getTag().getName());
+  }
+
   private Tag resolveTagForBulkOperation(User user, String tagName) {
     Optional<Tag> existing = tagRepository.findByUserAndName(user, tagName);
     if (existing.isPresent()) {
@@ -1368,13 +1454,12 @@ public class FileStorageService {
   }
 
   /**
-   * Add the user's new-asset tag to a file (without any checks or side effects). Which tag that is
-   * is a per-user setting (D70): {@code hidden} keeps the asset out of every public listing until
-   * its owner has looked at it, {@code all} is the D68 behaviour of publishing on arrival. Either
-   * way it is an ordinary tag afterwards — removing it is a normal tag edit and nothing puts it
-   * back.
+   * Put one tag row on a file, without any checks or side effects. Used for the user's new-asset
+   * tag on upload — a per-user setting (D70): {@code hidden} keeps the asset out of every public
+   * listing until its owner has looked at it, {@code all} is the D68 behaviour of publishing on
+   * arrival — and for putting {@code hidden} back when a file loses its last real tag (D79).
    */
-  private void addNewAssetTagToFile(FileMetadata metadata, Long tagId, String tagName) {
+  private void addTagRowIfMissing(FileMetadata metadata, Long tagId, String tagName) {
     // getReferenceById, not a fresh lookup: the row may have been committed by a concurrent
     // request after this transaction took its REPEATABLE READ snapshot, so a SELECT could miss it.
     Tag tag = tagRepository.getReferenceById(tagId);

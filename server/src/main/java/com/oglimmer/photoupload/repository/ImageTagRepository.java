@@ -20,4 +20,14 @@ public interface ImageTagRepository extends JpaRepository<ImageTag, Long> {
       @Param("fileMetadataId") Long fileMetadataId, @Param("tagId") Long tagId);
 
   void deleteByTagId(Long tagId);
+
+  /**
+   * Ids of the files for which {@code tagId} is the one and only tag. Deleting that tag would leave
+   * them bare, and a bare file is a hidden one (D79), so the caller re-hides them first.
+   */
+  @Query(
+      "SELECT it.fileMetadata.id FROM ImageTag it WHERE it.tag.id = :tagId AND NOT EXISTS ("
+          + "SELECT o.id FROM ImageTag o WHERE o.fileMetadata.id = it.fileMetadata.id"
+          + " AND o.tag.id <> :tagId)")
+  List<Long> findFileIdsWhereTagIsTheOnlyOne(@Param("tagId") Long tagId);
 }

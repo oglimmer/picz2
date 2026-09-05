@@ -6,7 +6,8 @@ import SwiftUI
 ///
 /// The list offered is the album's, not the account's: the server refuses any tag the album
 /// does not accept, so the others would only ever fail. "Album Tags" at the bottom is the way
-/// to widen that list.
+/// to widen that list. `hidden` is not a row (D79): the server puts it on and takes it off by
+/// itself, so the footer says where the photo stands instead.
 struct PhotoTagsView: View {
     let photo: Photo
 
@@ -22,6 +23,13 @@ struct PhotoTagsView: View {
         viewModel.photos.first { $0.id == photo.id } ?? photo
     }
 
+    private var footerText: String {
+        if current.tags.contains(Tag.hiddenName) {
+            return "This photo is hidden. Tap a tag to publish it — \"hidden\" comes off by itself."
+        }
+        return "Tap a tag to put it on this photo or take it off. With no tag left, the photo goes back to hidden."
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -32,7 +40,7 @@ struct PhotoTagsView: View {
                         Text("This album accepts no tags yet. Add one below.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(viewModel.albumTags) { tag in
+                        ForEach(viewModel.albumTags.filter(\.isAssignable)) { tag in
                             TagToggleRow(
                                 name: tag.name,
                                 isSystem: tag.isSystem,
@@ -46,7 +54,7 @@ struct PhotoTagsView: View {
                 } header: {
                     Text("Tags")
                 } footer: {
-                    Text("Tap a tag to put it on this photo or take it off.")
+                    Text(footerText)
                 }
 
                 NewTagSection(name: $newTagName, viewModel: viewModel)
@@ -122,7 +130,7 @@ struct BulkTagView: View {
     }
 
     private var footerText: String {
-        let rule = "A tag goes on every picked photo or on none of them."
+        let rule = "A tag goes on every picked photo or on none of them. A hidden photo is published by tagging it."
         switch draft.count {
         case 0: return "\(rule) Nothing is saved until you tap Done."
         case 1: return "\(rule) 1 change waiting for Done."
@@ -140,7 +148,9 @@ struct BulkTagView: View {
                         Text("This album accepts no tags yet. Add one below.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(viewModel.albumTags) { tag in
+                        // No `hidden` row (D79): the server refuses to add it and skips a lone
+                        // one on remove, so a tap here could only ever fail.
+                        ForEach(viewModel.albumTags.filter(\.isAssignable)) { tag in
                             TagToggleRow(
                                 name: tag.name,
                                 isSystem: tag.isSystem,

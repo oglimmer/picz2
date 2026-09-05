@@ -4,18 +4,36 @@ import Foundation
 ///
 /// Two names are system tags the gallery relies on, and the server puts one of them on every newly
 /// uploaded asset — which one is the account's ``NewAssetTag`` setting (D68, D70). Both are shown
-/// read-only rather than hidden: a tag that exists but cannot be renamed is less confusing than one
-/// that silently is not listed, and `hidden` in particular has to be visible here, because taking
-/// it off a photo is how the owner publishes that photo.
+/// read-only in the tag manager rather than hidden: a tag that exists but cannot be renamed is
+/// less confusing than one that silently is not listed.
+///
+/// `hidden` is derived, not assigned (D79): the server keeps it on a photo exactly while the photo
+/// has no other tag, refuses to add it by hand and refuses to take a lone one off. So the pickers
+/// that put tags on photos leave it out — giving a photo any tag is what publishes it, and taking
+/// the last tag off hides it again. It still shows on tiles and in the tag filter, so the owner
+/// can find what is waiting in the holding pen.
 struct Tag: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
     let createdAt: String?
 
-    private static let systemNames: Set<String> = ["all", "hidden"]
+    /// The holding pen's name, as the server spells it.
+    static let hiddenName = "hidden"
+
+    private static let systemNames: Set<String> = ["all", hiddenName]
 
     var isSystem: Bool {
         Self.systemNames.contains(name)
+    }
+
+    /// The holding pen (D70). Derived by the server since D79, so no picker offers it.
+    var isHidden: Bool {
+        name == Self.hiddenName
+    }
+
+    /// Whether a picker may offer this tag to put on or take off photos.
+    var isAssignable: Bool {
+        !isHidden
     }
 }
 

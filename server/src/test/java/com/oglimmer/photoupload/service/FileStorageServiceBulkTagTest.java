@@ -137,7 +137,9 @@ class FileStorageServiceBulkTagTest {
   }
 
   @Test
-  void removeSkipsFilesWithoutTheTagAndLeavesTheRestBare() {
+  void removeSkipsFilesWithoutTheTagAndReHidesTheOnesLeftBare() {
+    Tag hiddenTag = tag(11L, SystemTags.HIDDEN);
+    when(tagRepo.findByUserAndName(user, SystemTags.HIDDEN)).thenReturn(Optional.of(hiddenTag));
     FileMetadata onlyAll = file(100L, allTag);
     FileMetadata allPlusBeach = file(101L, allTag, tag(12L, "beach"));
     FileMetadata withoutAll = file(102L, tag(12L, "beach"));
@@ -146,12 +148,12 @@ class FileStorageServiceBulkTagTest {
     int changed = svc.removeTagFromAllFilesInAlbum(ALBUM_ID, SystemTags.ALL);
 
     assertEquals(2, changed);
-    // The tag is gone from the collection, which is what orphanRemoval acts on.
-    assertEquals(List.of(), tagNames(onlyAll));
+    // The tag is gone from the collection, which is what orphanRemoval acts on. A file left with
+    // nothing goes back into the holding pen (D79); the others keep what they had.
+    assertEquals(List.of(SystemTags.HIDDEN), tagNames(onlyAll));
     assertEquals(List.of("beach"), tagNames(allPlusBeach));
     assertEquals(List.of("beach"), tagNames(withoutAll));
-    // Nothing is written back: with `no_tag` retired (D68), a file may simply have no tags.
-    verify(imageTagRepo, never()).save(any());
+    verify(imageTagRepo, times(1)).save(any());
   }
 
   private static List<String> tagNames(FileMetadata metadata) {

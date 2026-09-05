@@ -1,6 +1,8 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.service;
 
+import com.oglimmer.photoupload.config.Profiles;
+import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
@@ -9,22 +11,31 @@ import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.mapper.TagMapper;
 import com.oglimmer.photoupload.model.TagInfo;
+import com.oglimmer.photoupload.repository.FileMetadataRepository;
 import com.oglimmer.photoupload.repository.ImageTagRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * The user's own tag list. API-only: it re-hides files through {@link SystemTagProvisioner}, which
+ * exists on the api pod alone, and nothing on the worker edits tags.
+ */
 @Service
+@Profile(Profiles.API)
 @Slf4j
 @RequiredArgsConstructor
 public class TagService {
 
   private final TagRepository tagRepository;
   private final ImageTagRepository imageTagRepository;
+  private final FileMetadataRepository fileMetadataRepository;
+  private final SystemTagProvisioner systemTagProvisioner;
   private final UserContext userContext;
   private final TagMapper tagMapper;
 
@@ -117,7 +128,28 @@ public class TagService {
           "The '" + tag.getName() + "' tag is a special system tag and cannot be deleted");
     }
 
-    // Delete all associations with files first
+    // A file that carried only this tag would be left bare, and a bare file is a hidden one
+    // (D79): put `hidden` on those before their last row goes, or deleting a tag would quietly
+    // publish every photo that had nothing else.
+    List<Long> leftBare = imageTagRepository.findFileIdsWhereTagIsTheOnlyOne(tagId);
+    if (!leftBare.isEmpty()) {
+      Tag hidden =
+          tagRepository.getReferenceById(
+              systemTagProvisioner.ensureTag(currentUser, SystemTags.HIDDEN));
+      for (Long fileId : leftBare) {
+        ImageTag row = new ImageTag();
+        row.setFileMetadata(fileMetadataRepository.getReferenceById(fileId));
+        row.setTag(hidden);
+        imageTagRepository.save(row);
+      }
+      log.info(
+          "Re-hid {} file(s) that carried only tag '{}' for user: {}",
+          leftBare.size(),
+          tag.getName(),
+          currentUser.getEmail());
+    }
+
+    // Delete all associations with files
     imageTagRepository.deleteByTagId(tagId);
 
     // Delete the tag itself
