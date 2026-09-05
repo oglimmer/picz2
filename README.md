@@ -51,6 +51,18 @@ npm run lint
 
 Open `ios/Zyncloud/Zyncloud.xcodeproj` in Xcode. Requires a paid Apple Developer account (uses background URLSessions + APNS).
 
+## CI
+
+GitHub Actions, one workflow per component under [`.github/workflows/`](.github/workflows/), each path-filtered to its own directory:
+
+| Workflow | Runner | What it runs |
+|---|---|---|
+| `server.yml` | `ubuntu-latest`, Temurin 17 | `./mvnw test -Drun.testcontainers=true` (Docker-gated tests included) |
+| `web.yml` | `ubuntu-latest`, Node 24 | `npm ci`, `lint`, `type-check`, `type-check:test`, `test`, `build` |
+| `ios.yml` | `macos-26`, Xcode 26.6 | `Scripts/check-*.sh`, then `xcodebuild test` on iPhone 17 + iPad Pro 11-inch (M5) |
+
+All three also run on `renovate/**` branch pushes — Renovate's branch automerge waits for these checks.
+
 ## Deploying to the cluster
 
 ```bash

@@ -1,0 +1,54 @@
+name: web
+
+on:
+  push:
+    branches: [main, "renovate/**"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/web.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, type-check, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check app
+        run: npm run type-check
+
+      - name: Type-check tests
+        run: npm run type-check:test
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
