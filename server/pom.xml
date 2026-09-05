@@ -5,7 +5,7 @@
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <version>4.0.5</version>
+    <version>4.1.1</version>
     <relativePath/>
   </parent>
 
@@ -17,8 +17,8 @@
 
   <properties>
     <java.version>17</java.version>
-    <testcontainers.version>1.20.4</testcontainers.version>
-    <awssdk.version>2.31.27</awssdk.version>
+    <testcontainers.version>1.21.4</testcontainers.version>
+    <awssdk.version>2.54.7</awssdk.version>
   </properties>
 
   <dependencyManagement>
@@ -46,7 +46,7 @@
     <dependency>
       <groupId>com.drewnoakes</groupId>
       <artifactId>metadata-extractor</artifactId>
-      <version>2.19.0</version>
+      <version>2.21.0</version>
     </dependency>
 
     <!-- ES256 JWT signing for MapKit JS tokens. Apple only accepts ES256 for these, and the
@@ -55,14 +55,14 @@
     <dependency>
       <groupId>com.nimbusds</groupId>
       <artifactId>nimbus-jose-jwt</artifactId>
-      <version>10.4</version>
+      <version>10.9.1</version>
     </dependency>
 
     <!-- Pushy for Apple Push Notifications -->
     <dependency>
       <groupId>com.eatthepath</groupId>
       <artifactId>pushy</artifactId>
-      <version>0.15.4</version>
+      <version>0.15.6</version>
     </dependency>
 
     <!-- Flyway MariaDB support -->
@@ -96,7 +96,7 @@
     <dependency>
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-      <version>3.0.2</version>
+      <version>3.1.0</version>
     </dependency>
 
     <!-- Spring Boot DevTools for hot reload -->
@@ -126,14 +126,14 @@
     <dependency>
       <groupId>io.github.resilience4j</groupId>
       <artifactId>resilience4j-circuitbreaker</artifactId>
-      <version>2.3.0</version>
+      <version>2.4.0</version>
     </dependency>
     <!-- Binds CircuitBreaker state/calls to the Micrometer registry, surfacing
          `resilience4j_circuitbreaker_state{name="minio",...}` etc. on /actuator/prometheus. -->
     <dependency>
       <groupId>io.github.resilience4j</groupId>
       <artifactId>resilience4j-micrometer</artifactId>
-      <version>2.3.0</version>
+      <version>2.4.0</version>
     </dependency>
 
     <!-- Spring Boot Data JPA -->
@@ -221,7 +221,7 @@
       <plugin>
         <groupId>com.diffplug.spotless</groupId>
         <artifactId>spotless-maven-plugin</artifactId>
-        <version>3.4.0</version>
+        <version>3.10.1</version>
         <configuration>
           <java>
             <googleJavaFormat/>
@@ -296,7 +296,7 @@
       <plugin>
         <groupId>io.github.git-commit-id</groupId>
         <artifactId>git-commit-id-maven-plugin</artifactId>
-        <version>9.0.2</version>
+        <version>9.2.0</version>
         <configuration>
           <!-- write into target/classes so it is on the runtime classpath -->
           <generateGitPropertiesFile>true</generateGitPropertiesFile>
