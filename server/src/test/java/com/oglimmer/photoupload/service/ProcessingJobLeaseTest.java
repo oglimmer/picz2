@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.oglimmer.photoupload.entity.JobStatus;
 import com.oglimmer.photoupload.entity.ProcessingJob;
 import com.oglimmer.photoupload.repository.ProcessingJobRepository;
+import com.oglimmer.photoupload.testsupport.TestObjectStorage;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,7 +24,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MariaDBContainer;
+import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -33,11 +38,21 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * FOR UPDATE SKIP LOCKED} and the lease-expiry recovery actually behave as expected on the engine
  * we deploy to.
  *
- * <p>The dispatcher is disabled here so its scheduled poll does not race with the test harness.
+ * <p>Runs under the {@code worker} profile because {@link JobLeaseService} is worker-only. The
+ * dispatcher's poll interval is pushed to a day so its scheduled poll does not race with the test
+ * harness (it still fires once at startup, before any test seeds a job). MOCK, not NONE, for the
+ * same reason as the profile context tests: SecurityConfig's filter chain needs the WebMvc
+ * infrastructure to find a CorsConfigurationSource.
  */
 @SpringBootTest(
-    webEnvironment = SpringBootTest.WebEnvironment.NONE,
-    properties = {"app.apns.enabled=false", "app.mail.enabled=false", "spring.mail.host=localhost"})
+    webEnvironment = SpringBootTest.WebEnvironment.MOCK,
+    properties = {
+      "app.apns.enabled=false",
+      "app.mail.enabled=false",
+      "spring.mail.host=localhost",
+      "jobs.poll.interval-ms=86400000"
+    })
+@ActiveProfiles("worker")
 @Testcontainers
 @EnabledIfSystemProperty(
     named = "run.testcontainers",
@@ -49,6 +64,13 @@ class ProcessingJobLeaseTest {
   @Container @ServiceConnection
   static final MariaDBContainer<?> MARIADB =
       new MariaDBContainer<>("mariadb:11.8").withReuse(false);
+
+  @Container static final MinIOContainer MINIO = TestObjectStorage.newMinio();
+
+  @DynamicPropertySource
+  static void objectStorage(DynamicPropertyRegistry registry) {
+    TestObjectStorage.register(registry, MINIO);
+  }
 
   @Autowired private JobLeaseService jobLeaseService;
   @Autowired private ProcessingJobRepository jobRepository;
