@@ -32,6 +32,7 @@ public class AuthController {
             .success(true)
             .email(user.getEmail())
             .emailVerified(user.isEmailVerified())
+            .admin(user.isAdmin())
             .build();
     return ResponseEntity.ok(response);
   }

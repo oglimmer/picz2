@@ -8,6 +8,9 @@ const authEmail = ref<string>("");
 const authPassword = ref<string>("");
 const isLoggedIn = ref<boolean>(false);
 const emailVerified = ref<boolean>(false);
+// Operator account (users.is_admin). Gates controls that answer 403 for everyone else, such as
+// renaming the narration languages.
+const isAdmin = ref<boolean>(false);
 const loginError = ref<string>("");
 
 export interface AuthComposable {
@@ -15,6 +18,7 @@ export interface AuthComposable {
   authPassword: Ref<string>;
   isLoggedIn: Ref<boolean>;
   emailVerified: Ref<boolean>;
+  isAdmin: Ref<boolean>;
   loginError: Ref<string>;
   login: () => Promise<boolean>;
   logout: () => void;
@@ -43,6 +47,7 @@ export function useAuth(): AuthComposable {
       const data = await res.json().catch(() => ({}));
       if (data && data.success === true) {
         emailVerified.value = data.emailVerified || false;
+        isAdmin.value = data.admin === true;
         return true;
       }
       return false;
@@ -85,6 +90,7 @@ export function useAuth(): AuthComposable {
     localStorage.removeItem("authPassword");
     isLoggedIn.value = false;
     emailVerified.value = false;
+    isAdmin.value = false;
     loginError.value = "";
   }
 
@@ -124,6 +130,7 @@ export function useAuth(): AuthComposable {
     authPassword,
     isLoggedIn,
     emailVerified,
+    isAdmin,
     loginError,
 
     // Methods

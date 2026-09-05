@@ -28,5 +28,19 @@ class AuthControllerTest {
     assertEquals(true, body.isSuccess());
     assertEquals("user@example.com", body.getEmail());
     assertTrue(body.isEmailVerified());
+    assertFalse(body.isAdmin());
+  }
+
+  @Test
+  void checkAuthReportsTheAdminFlag() {
+    User user = new User();
+    user.setEmail("ops@example.com");
+    user.setAdmin(true);
+    UserContext userContext = Mockito.mock(UserContext.class);
+    Mockito.when(userContext.getCurrentUser()).thenReturn(user);
+
+    AuthCheckResponse body = new AuthController(userContext).checkAuth().getBody();
+    assertNotNull(body);
+    assertTrue(body.isAdmin());
   }
 }

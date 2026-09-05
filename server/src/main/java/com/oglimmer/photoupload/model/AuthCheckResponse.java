@@ -17,4 +17,10 @@ public class AuthCheckResponse {
   private boolean success;
   private String email;
   private boolean emailVerified;
+
+  /**
+   * Whether this account holds {@code ROLE_ADMIN} (D74). Lets a client hide operator-only controls
+   * — the gallery language names, for one — instead of showing a field that answers 403.
+   */
+  private boolean admin;
 }
