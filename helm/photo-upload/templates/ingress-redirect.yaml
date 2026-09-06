@@ -1,0 +1,66 @@
+{{- if and .Values.ingress.enabled .Values.ingress.redirect.enabled -}}
+{{- /*
+  Retired hostnames, answered with a redirect instead of a second copy of the app (D66).
+
+  A second `host:` on the main Ingress would serve everything twice, which breaks two things
+  that are pinned to one name: the MapKit JS token carries a single `origin` claim, so Apple
+  rejects it on any other host, and `backend.baseUrl` writes one canonical URL into share mails
+  and Open Graph tags. Redirecting keeps exactly one address for the app.
+
+  This has to be its own Ingress: the middleware annotation applies to every rule on the object
+  it sits on, so putting it on the main Ingress would redirect the live host to itself.
+*/}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "photo-upload.fullname" . }}-redirect
+  labels:
+    {{- include "photo-upload.labels" . | nindent 4 }}
+spec:
+  redirectRegex:
+    # Matches scheme + any host, keeping the path and query, so /public/album/xyz survives.
+    regex: "^https?://[^/]+/(.*)"
+    replacement: {{ printf "%s/${1}" (trimSuffix "/" .Values.ingress.redirect.to) | quote }}
+    permanent: {{ .Values.ingress.redirect.permanent }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "photo-upload.fullname" . }}-redirect
+  labels:
+    {{- include "photo-upload.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-%s-redirect@kubernetescrd" .Release.Namespace (include "photo-upload.fullname" .) }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.redirect.tls }}
+  tls:
+    {{- range . }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.redirect.hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          {{- /* The middleware answers before the backend is reached; this only has to be a */}}
+          {{- /* Service that exists, or Traefik drops the rule as unresolvable. */}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "photo-upload.frontend.fullname" $ }}
+                port:
+                  number: {{ $.Values.frontend.service.port }}
+    {{- end }}
+{{- end }}
