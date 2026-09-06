@@ -65,6 +65,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 @Profile(Profiles.API)
 @Service
@@ -789,7 +791,10 @@ public class FileStorageService {
       knownDbPaths += knownPaths.size();
 
       for (String key : bucketKeys) {
-        if (key.startsWith(StoragePaths.TUS_UPLOADS_PREFIX)) {
+        if (key.startsWith(StoragePaths.TUS_UPLOADS_PREFIX)
+            || StoragePaths.isEnhancePreviewKey(key)) {
+          // Both are in flight by nature: a TUS upload the hook has not finalised, or an enhance
+          // preview (D82) the owner has not decided on. Neither is referenced from a row.
           skippedInFlight++;
           continue;
         }
@@ -839,6 +844,8 @@ public class FileStorageService {
     deleteS3Key(s3, metadata.getMediumPath(), "medium");
     deleteS3Key(s3, metadata.getLargePath(), "large");
     deleteS3Key(s3, metadata.getTranscodedVideoPath(), "transcoded");
+    // Not a column: an un-decided enhance preview (D82) lives at a deterministic key.
+    deleteS3Key(s3, StoragePaths.derivativeEnhancePreviewKey(metadata.getId()), "enhance preview");
   }
 
   private void deleteS3Key(BackendStorage s3, String key, String label) {
@@ -923,6 +930,7 @@ public class FileStorageService {
       addIfNotBlank(s3KeysToDelete, f.getMediumPath());
       addIfNotBlank(s3KeysToDelete, f.getLargePath());
       addIfNotBlank(s3KeysToDelete, f.getTranscodedVideoPath());
+      s3KeysToDelete.add(StoragePaths.derivativeEnhancePreviewKey(f.getId()));
     }
 
     if (!s3KeysToDelete.isEmpty()) {
@@ -1486,34 +1494,7 @@ public class FileStorageService {
    */
   public void rotateImageLeft(Long fileId) {
     User currentUser = userContext.getCurrentUser();
-
-    FileMetadata metadata =
-        metadataRepository
-            .findByIdAndUserId(fileId, currentUser.getId())
-            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
-
-    if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
-      throw new ValidationException("Only image files can be rotated");
-    }
-    // Original may have been purged by retention — that's fine. The worker will fall back to the
-    // largest available derivative as the rotation source (output is bounded by LARGE=2400px
-    // anyway, so feeding `large` produces pixel-equivalent derivatives to feeding the original).
-    // What we cannot tolerate is a legacy local-disk filePath that has neither been migrated nor
-    // purged — the worker pod has no PVC mount, so it cannot read those bytes.
-    if (metadata.getFilePath() != null && !StoragePaths.isS3Key(metadata.getFilePath())) {
-      throw new ValidationException(
-          "This asset is on legacy local storage. Migrate to object storage before rotating.");
-    }
-    // No usable rotation source at all — original purged AND no S3-backed derivative either.
-    // Should be unreachable in practice (every DONE asset has at least a thumbnail) but explicit
-    // rejection beats a confusing worker-side failure.
-    if (metadata.getFilePath() == null
-        && !StoragePaths.isS3Key(metadata.getLargePath())
-        && !StoragePaths.isS3Key(metadata.getMediumPath())
-        && !StoragePaths.isS3Key(metadata.getThumbnailPath())) {
-      throw new ResourceGoneException(
-          "Original was purged and no derivative is available to rotate.");
-    }
+    FileMetadata metadata = requireRewritableImage(fileId, currentUser, "rotated");
 
     log.info(
         "📸 Enqueuing rotate-left for asset {} ({}, current rotation {}°) by user {}",
@@ -1524,6 +1505,120 @@ public class FileStorageService {
 
     transactionTemplate.executeWithoutResult(
         status -> resetAndEnqueue(fileId, JobType.ROTATE_LEFT));
+  }
+
+  /**
+   * Enqueue a one-tap auto-enhance (D81) for the given asset. Same contract as {@link
+   * #rotateImageLeft(Long)}: 202 now, the worker rewrites the original and the derivatives via
+   * {@link FileProcessingService#enhanceAndReprocess(Long)}, the client polls the status and then
+   * reloads because the {@code publicToken} changes. Like rotate it is irreversible — there is no
+   * copy of the un-enhanced original — and a second run compounds on the first.
+   */
+  public void enhanceImage(Long fileId) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata = requireRewritableImage(fileId, currentUser, "enhanced");
+
+    log.info(
+        "✨ Enqueuing enhance for asset {} ({}) by user {}",
+        fileId,
+        metadata.getOriginalName(),
+        currentUser.getEmail());
+
+    transactionTemplate.executeWithoutResult(status -> resetAndEnqueue(fileId, JobType.ENHANCE));
+  }
+
+  /**
+   * Enqueue the look-before-you-leap half of an enhance (D82): the worker computes the enhanced
+   * image at LARGE size into {@link StoragePaths#derivativeEnhancePreviewKey(Long)} and nothing
+   * else changes. The client waits on the status endpoint, fetches the preview through {@link
+   * #openEnhancePreview(Long)}, and then either calls {@link #enhanceImage(Long)} or {@link
+   * #discardEnhancePreview(Long)}.
+   */
+  public void enqueueEnhancePreview(Long fileId) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata = requireRewritableImage(fileId, currentUser, "enhanced");
+
+    log.info(
+        "👀 Enqueuing enhance preview for asset {} ({}) by user {}",
+        fileId,
+        metadata.getOriginalName(),
+        currentUser.getEmail());
+
+    transactionTemplate.executeWithoutResult(
+        status -> resetAndEnqueue(fileId, JobType.ENHANCE_PREVIEW));
+  }
+
+  /**
+   * The bytes of a finished enhance preview (D82), or 404 when there is none — not yet built,
+   * already decided, or never asked for. Owner-scoped like every other single-file read; the
+   * preview is never reachable through a public token.
+   */
+  public ResponseInputStream<GetObjectResponse> openEnhancePreview(Long fileId) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata =
+        metadataRepository
+            .findByIdAndUserId(fileId, currentUser.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+    String key = StoragePaths.derivativeEnhancePreviewKey(fileId);
+    BackendStorage s3 = objectStorage.forFile(metadata);
+    if (!s3.exists(key)) {
+      throw new ResourceNotFoundException("Enhance preview", "file id", fileId);
+    }
+    return s3.openStream(key);
+  }
+
+  /** Declining (D82): drop the preview key. Idempotent; a missing key is not an error. */
+  public void discardEnhancePreview(Long fileId) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata =
+        metadataRepository
+            .findByIdAndUserId(fileId, currentUser.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+    deleteS3Key(
+        objectStorage.forFile(metadata),
+        StoragePaths.derivativeEnhancePreviewKey(fileId),
+        "enhance preview");
+    log.info("🗑️  Discarded enhance preview for asset {} by user {}", fileId, currentUser.getEmail());
+  }
+
+  /**
+   * The checks shared by every job that rewrites an image's stored bytes in place (rotate,
+   * enhance): the asset must be the caller's, must be an image, and must have some S3-backed
+   * source the worker can read.
+   *
+   * @param verb past participle for the error copy ("rotated", "enhanced")
+   */
+  private FileMetadata requireRewritableImage(Long fileId, User currentUser, String verb) {
+    FileMetadata metadata =
+        metadataRepository
+            .findByIdAndUserId(fileId, currentUser.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+
+    if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
+      throw new ValidationException("Only image files can be " + verb);
+    }
+    // Original may have been purged by retention — that's fine. The worker will fall back to the
+    // largest available derivative as the source (output is bounded by LARGE=2400px anyway, so
+    // feeding `large` produces pixel-equivalent derivatives to feeding the original). What we
+    // cannot tolerate is a legacy local-disk filePath that has neither been migrated nor purged —
+    // the worker pod has no PVC mount, so it cannot read those bytes.
+    if (metadata.getFilePath() != null && !StoragePaths.isS3Key(metadata.getFilePath())) {
+      throw new ValidationException(
+          "This asset is on legacy local storage. Migrate to object storage before it can be "
+              + verb
+              + ".");
+    }
+    // No usable source at all — original purged AND no S3-backed derivative either. Should be
+    // unreachable in practice (every DONE asset has at least a thumbnail) but explicit rejection
+    // beats a confusing worker-side failure.
+    if (metadata.getFilePath() == null
+        && !StoragePaths.isS3Key(metadata.getLargePath())
+        && !StoragePaths.isS3Key(metadata.getMediumPath())
+        && !StoragePaths.isS3Key(metadata.getThumbnailPath())) {
+      throw new ResourceGoneException(
+          "Original was purged and no derivative is available to be " + verb + ".");
+    }
+    return metadata;
   }
 
   /**

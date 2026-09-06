@@ -7,6 +7,7 @@ function deps(overrides: Partial<Parameters<typeof useBulkActions>[0]> = {}) {
   return {
     deleteFile: vi.fn(async () => {}),
     rotateFile: vi.fn(async () => {}),
+    enhanceFile: vi.fn(async () => {}),
     addTag: vi.fn(async () => {}),
     waitForProcessing: vi.fn(async () => []),
     reloadFiles: vi.fn(async () => {}),
@@ -65,6 +66,35 @@ describe("useBulkActions", () => {
     expect(d.waitForProcessing).toHaveBeenCalledWith(expect.any(Array), 600_000);
     await bulk.rotateMany([7]);
     expect(lastToast()?.message).toBe("Image rotated.");
+  });
+
+  it("enhanceMany follows the rotate flow with its own words", async () => {
+    const d = deps({
+      enhanceFile: vi.fn(async (id: number) => {
+        if (id === 3) throw new Error("legacy storage");
+      }),
+    });
+    const bulk = useBulkActions(d);
+    await bulk.enhanceMany([1, 2, 3]);
+    expect(d.enhanceFile).toHaveBeenCalledTimes(3);
+    expect(d.rotateFile).not.toHaveBeenCalled();
+    expect(d.waitForProcessing).toHaveBeenCalledWith([1, 2], 120_000);
+    expect(d.reloadFiles).toHaveBeenCalledTimes(1);
+    expect(lastToast()?.message).toBe("Enhanced 2 images, 1 failed.");
+    await bulk.enhanceMany([7]);
+    expect(lastToast()?.message).toBe("Image enhanced.");
+  });
+
+  it("enhanceMany reports the first failure when nothing went through", async () => {
+    const d = deps({
+      enhanceFile: vi.fn(async () => {
+        throw new Error("Only image files can be enhanced");
+      }),
+    });
+    await useBulkActions(d).enhanceMany([1]);
+    expect(d.waitForProcessing).not.toHaveBeenCalled();
+    expect(lastToast()?.type).toBe("error");
+    expect(lastToast()?.message).toBe("Error enhancing: Only image files can be enhanced");
   });
 
   it("tagMany counts what stuck", async () => {

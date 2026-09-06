@@ -61,6 +61,28 @@
           <button
             class="bulk-action-btn"
             :disabled="busy || rotatableCount === 0"
+            :title="enhanceTitle"
+            @click="$emit('enhance')"
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M15 4l1.2 2.8L19 8l-2.8 1.2L15 12l-1.2-2.8L11 8l2.8-1.2z" />
+              <path d="M6 12l.9 2.1L9 15l-2.1.9L6 18l-.9-2.1L3 15l2.1-.9z" />
+              <path d="M18 15l.6 1.4L20 17l-1.4.6L18 19l-.6-1.4L16 17l1.4-.6z" />
+            </svg>
+            <span>{{ enhanceLabel }}</span>
+          </button>
+          <button
+            class="bulk-action-btn"
+            :disabled="busy || rotatableCount === 0"
             :title="rotateTitle"
             @click="$emit('rotate')"
           >
@@ -129,7 +151,7 @@ const props = defineProps<{
   selectedCount: number
   availableTags: Tag[]
   frequentTags: TagCount[]
-  // Selected files the rotate job can act on — videos are excluded, so this can be 0
+  // Selected files the rotate and enhance jobs can act on — videos are excluded, so this can be 0
   // while selectedCount is not.
   rotatableCount: number
   busy: boolean
@@ -139,6 +161,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'add-tag': [tagName: string]
   rotate: []
+  enhance: []
   'delete-selected': []
   clear: []
 }>()
@@ -160,6 +183,18 @@ const rotateTitle = computed(() =>
   props.rotatableCount === 0
     ? 'Videos cannot be rotated'
     : `Rotate ${props.rotatableCount} selected image${props.rotatableCount !== 1 ? 's' : ''} left 90°`
+)
+
+const enhanceLabel = computed(() =>
+  props.rotatableCount === props.selectedCount
+    ? 'Enhance'
+    : `Enhance (${props.rotatableCount})`
+)
+
+const enhanceTitle = computed(() =>
+  props.rotatableCount === 0
+    ? 'Videos cannot be enhanced'
+    : `Enhance colors, brightness and contrast of ${props.rotatableCount} selected image${props.rotatableCount !== 1 ? 's' : ''} (no preview)`
 )
 
 function applyCustomTag() {

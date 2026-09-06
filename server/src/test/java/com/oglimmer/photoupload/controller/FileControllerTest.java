@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
+import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.service.FileStorageService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -44,5 +45,23 @@ class FileControllerTest {
     assertTrue(body.isSuccess());
     assertEquals(1, body.getFiles().size());
     assertEquals(1, body.getCount());
+  }
+
+  @Test
+  void previewEndpointsDelegateAndAnswerTheRightCodes() {
+    assertEquals(202, controller.requestEnhancePreview(42L).getStatusCode().value());
+    verify(storageService).enqueueEnhancePreview(42L);
+
+    assertEquals(204, controller.discardEnhancePreview(42L).getStatusCode().value());
+    verify(storageService).discardEnhancePreview(42L);
+  }
+
+  @Test
+  void enhanceQueuesTheJobAndAnswers202() {
+    ResponseEntity<MessageResponse> resp = controller.enhanceImage(42L);
+
+    verify(storageService).enhanceImage(42L);
+    assertEquals(202, resp.getStatusCode().value());
+    assertTrue(resp.getBody().isSuccess());
   }
 }

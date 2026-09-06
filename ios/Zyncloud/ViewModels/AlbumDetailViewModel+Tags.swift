@@ -408,10 +408,16 @@ extension AlbumDetailViewModel {
         isSelecting = true
     }
 
-    /// Whether Rotate has anything to work on. Videos cannot be rotated, so a selection of only
-    /// videos leaves the button off rather than failing on every one of them.
+    /// Whether Rotate and Enhance have anything to work on. Videos take neither, so a selection
+    /// of only videos leaves both buttons off rather than failing on every one of them.
     var selectionHasRotatablePhoto: Bool {
         selectedPhotos.contains { !$0.isVideo }
+    }
+
+    /// How many of the picked photos Rotate and Enhance will touch — the number the confirmation
+    /// names, so it is never larger than what happens.
+    var selectedStillCount: Int {
+        selectedPhotos.filter { !$0.isVideo }.count
     }
 
     func endSelecting() {

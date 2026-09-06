@@ -83,6 +83,10 @@ struct AlbumDetailView: View {
     /// the server drops the stored file, not just the row — so it always asks first.
     @State private var pendingDelete: Photo?
 
+    /// The enhance review in progress (D82), presented as a full-screen cover from here so it
+    /// outlives the grid cell or selection bar that started it.
+    @State private var enhanceReview: EnhanceReviewSession?
+
     /// The link handed to the system share sheet, set by the menu's Share entry.
     @State private var sharingLink: ShareableLink?
 
@@ -104,6 +108,9 @@ struct AlbumDetailView: View {
     /// Set when Delete was tapped in the selection bar. Held here rather than in the bar
     /// so the dialog outlives a re-draw of the bar under it.
     @State private var confirmingSelectionDelete = false
+
+    /// A selection is enhanced without a preview, so it asks first, like Delete.
+    @State private var confirmingSelectionEnhance = false
 
     /// The photo whose tag list is open, if any. Held as the photo rather than a flag because
     /// the sheet needs to know which one it is editing.
@@ -261,6 +268,18 @@ struct AlbumDetailView: View {
                 Text("This removes the photo from your server for good. It cannot be undone.")
             }
             .confirmationDialog(
+                viewModel.selectedStillCount == 1
+                    ? "Enhance 1 photo"
+                    : "Enhance \(viewModel.selectedStillCount) photos",
+                isPresented: $confirmingSelectionEnhance,
+                titleVisibility: .visible,
+            ) {
+                Button("Enhance") { viewModel.enhanceSelection() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Colors, brightness and contrast are adjusted on the stored photos, without a preview. It cannot be undone.")
+            }
+            .confirmationDialog(
                 viewModel.selectedPhotoIds.count == 1
                     ? "Delete 1 photo"
                     : "Delete \(viewModel.selectedPhotoIds.count) photos",
@@ -302,6 +321,11 @@ struct AlbumDetailView: View {
             }
             .fullScreenCover(isPresented: $isPresentationPresented) {
                 PresentationView(album: album)
+            }
+            .fullScreenCover(item: $enhanceReview) { session in
+                EnhanceReviewView(session: session, viewModel: viewModel) { accepted in
+                    viewModel.applyEnhance(to: accepted)
+                }
             }
             .confirmationDialog(
                 "Delete album",
@@ -389,7 +413,7 @@ struct AlbumDetailView: View {
         }
 
         switch viewModel.selectedPhotoIds.count {
-        case 0: return "Select photos to tag, rotate or delete"
+        case 0: return "Select photos to tag, enhance, rotate or delete"
         case 1: return "1 photo selected"
         case let count: return "\(count) photos selected"
         }
@@ -426,6 +450,14 @@ struct AlbumDetailView: View {
                     isEnabled: hasSelection && !viewModel.isApplyingTags && !viewModel.isBulkWorking,
                 ) {
                     isBulkTagPresented = true
+                }
+
+                selectionAction(
+                    title: "Enhance",
+                    systemImage: "wand.and.stars",
+                    isEnabled: viewModel.selectionHasRotatablePhoto && !viewModel.isBulkWorking,
+                ) {
+                    confirmingSelectionEnhance = true
                 }
 
                 selectionAction(
@@ -626,6 +658,7 @@ struct AlbumDetailView: View {
             onDelete: { pendingDelete = photo },
             onTag: { taggingPhoto = photo },
             onCaption: { captioningPhoto = photo },
+            onEnhance: { enhanceReview = viewModel.makeEnhanceReview(for: [photo]) },
             onBeginSelecting: { viewModel.beginSelecting(with: photo) },
         )
     }
@@ -862,6 +895,9 @@ struct PhotoThumbnailView: View {
     /// Raised for the same reason as ``onTag`` — the caption sheet outlives this cell.
     let onCaption: () -> Void
 
+    /// Raised too: the enhance review (D82) is a full-screen cover the album screen presents.
+    let onEnhance: () -> Void
+
     /// Long-press entry into picking, with this photo already picked. The second way in, next
     /// to the Select button in the top bar — it is the gesture iPhone users try first.
     let onBeginSelecting: () -> Void
@@ -945,6 +981,7 @@ struct PhotoThumbnailView: View {
                     onDelete: onDelete,
                     onTag: onTag,
                     onCaption: onCaption,
+                    onEnhance: onEnhance,
                 )
 
                 Divider()
@@ -1002,7 +1039,7 @@ private extension PhotoThumbnailView {
 
 // MARK: - Photo Action Buttons
 
-/// Tags, Rotate and Delete, shared by the grid's long-press menu and the full-screen view's
+/// Tags, Enhance, Rotate and Delete, shared by the grid's long-press menu and the full-screen view's
 /// menu so the two cannot drift apart. Delete only *asks* — the owner of the surrounding screen
 /// runs the confirmation, because that is where a dialog can outlive the thing being deleted.
 /// Tags is raised for the same reason: the sheet must outlive the cell.
@@ -1012,6 +1049,9 @@ struct PhotoActionButtons: View {
     let onDelete: () -> Void
     let onTag: () -> Void
     let onCaption: () -> Void
+    /// Raised like the others: the review is a full-screen cover, and only the surrounding
+    /// screen — grid or detail sheet — can present one that shows.
+    let onEnhance: () -> Void
 
     var body: some View {
         Button(action: onCaption) {
@@ -1026,6 +1066,10 @@ struct PhotoActionButtons: View {
         }
 
         if !photo.isVideo {
+            Button(action: onEnhance) {
+                Label("Enhance", systemImage: "wand.and.stars")
+            }
+
             Button {
                 viewModel.rotate(photo)
             } label: {

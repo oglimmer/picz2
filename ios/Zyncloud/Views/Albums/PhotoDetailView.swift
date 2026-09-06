@@ -5,13 +5,13 @@ import Combine
 import SwiftUI
 
 struct PhotoDetailView: View {
-    /// The photo as it was when the sheet opened. A rotate replaces it with a new `publicToken`,
+    /// The photo as it was when the sheet opened. A rotate or enhance replaces it with a new `publicToken`,
     /// so what is actually rendered is ``photo`` — this is only the identity to look it up by,
     /// and the fallback for the moment between a delete and the dismiss.
     let openedWith: Photo
 
-    /// Observed, unlike in the grid: the sheet is the one place a photo can be rotated while
-    /// being looked at, and it has to show the result.
+    /// Observed, unlike in the grid: the sheet is the one place a photo can be rotated or
+    /// enhanced while being looked at, and it has to show the result.
     @ObservedObject var viewModel: AlbumDetailViewModel
 
     private var photo: Photo {
@@ -29,6 +29,10 @@ struct PhotoDetailView: View {
 
     /// True while this photo's caption editor is up, stacked on top of this sheet.
     @State private var isCaptioning = false
+
+    /// The enhance review (D82), presented from this sheet: a cover presented by the album
+    /// screen underneath would never show while this sheet is up.
+    @State private var enhanceReview: EnhanceReviewSession?
 
     /// Owned by the view so the sheet keeps one player across body re-evaluations; the item is
     /// attached in `onAppear` because `photo` is not available at initialiser time here.
@@ -108,6 +112,7 @@ struct PhotoDetailView: View {
                             onDelete: { confirmingDelete = true },
                             onTag: { isTagging = true },
                             onCaption: { isCaptioning = true },
+                            onEnhance: { enhanceReview = viewModel.makeEnhanceReview(for: [photo]) },
                         )
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -126,6 +131,11 @@ struct PhotoDetailView: View {
             }
             .sheet(isPresented: $isCaptioning) {
                 PhotoCaptionView(photo: photo, viewModel: viewModel)
+            }
+            .fullScreenCover(item: $enhanceReview) { session in
+                EnhanceReviewView(session: session, viewModel: viewModel) { accepted in
+                    viewModel.applyEnhance(to: accepted)
+                }
             }
             .confirmationDialog(
                 "Delete photo",

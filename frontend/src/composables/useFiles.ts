@@ -31,6 +31,10 @@ export interface FilesComposable {
   ) => Promise<void>;
   deleteFile: (fileId: number) => Promise<void>;
   rotateFile: (fileId: number) => Promise<void>;
+  enhanceFile: (fileId: number) => Promise<void>;
+  requestEnhancePreview: (fileId: number) => Promise<void>;
+  loadEnhancePreview: (fileId: number) => Promise<string>;
+  discardEnhancePreview: (fileId: number) => Promise<void>;
   addTag: (fileId: number, tagName: string) => Promise<void>;
   removeTag: (fileId: number, tagName: string) => Promise<void>;
   updateCaption: (fileId: number, caption: string) => Promise<void>;
@@ -46,7 +50,7 @@ export interface FilesComposable {
  * the gallery view calls this once and owns the list.
  */
 export function useFiles(): FilesComposable {
-  const { apiUrl, requestJson, requestPublicJson, shareToken } = useApi();
+  const { apiUrl, requestJson, requestPublicJson, fetchWithAuth, shareToken } = useApi();
   const { refresh: refreshStorageUsage } = useStorageUsage();
 
   const files = ref<AlbumFile[]>([]);
@@ -166,6 +170,52 @@ export function useFiles(): FilesComposable {
     });
   }
 
+  /**
+   * Applies the enhance (D81): same 202-then-poll contract as a rotate, same local QUEUED flip so
+   * the tile shows its spinner until the derivatives are rewritten. Normally reached by accepting
+   * a preview (D82), which is why the review flow hands ids to `useBulkActions.enhanceMany`.
+   */
+  async function enhanceFile(fileId: number): Promise<void> {
+    await requestJson(`${apiUrl}/api/files/${fileId}/enhance`, { method: "POST" });
+    patchFile(fileId, (file) => {
+      file.processingStatus = "QUEUED";
+    });
+  }
+
+  /**
+   * Step one of the enhance review (D82): the worker builds the enhanced image at large size
+   * without touching the photo. 202 now; the status poller says when it is there.
+   */
+  async function requestEnhancePreview(fileId: number): Promise<void> {
+    await requestJson(`${apiUrl}/api/files/${fileId}/enhance-preview`, { method: "POST" });
+    patchFile(fileId, (file) => {
+      file.processingStatus = "QUEUED";
+    });
+  }
+
+  /**
+   * The preview bytes as an object URL for an `<img>`. Owner-only on the server, so it cannot go
+   * through the public-token image path like every other picture; it is fetched with the session
+   * and handed to the browser as a blob. The caller revokes the URL when the review moves on.
+   */
+  async function loadEnhancePreview(fileId: number): Promise<string> {
+    const response = await fetchWithAuth(`${apiUrl}/api/files/${fileId}/enhance-preview`);
+    if (!response.ok) {
+      throw new Error(
+        response.status === 404 ? "The preview is not there yet." : `Preview failed (${response.status}).`,
+      );
+    }
+    return URL.createObjectURL(await response.blob());
+  }
+
+  /** Declining (D82): the server drops the preview. Nothing else changes. */
+  async function discardEnhancePreview(fileId: number): Promise<void> {
+    const response = await fetchWithAuth(`${apiUrl}/api/files/${fileId}/enhance-preview`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`Discard failed (${response.status}).`);
+  }
+
   async function addTag(fileId: number, tagName: string): Promise<void> {
     if (!tagName) return;
     const data = await requestJson<TagsResponse>(
@@ -247,6 +297,10 @@ export function useFiles(): FilesComposable {
     loadAlbumFiles,
     deleteFile,
     rotateFile,
+    enhanceFile,
+    requestEnhancePreview,
+    loadEnhancePreview,
+    discardEnhancePreview,
     addTag,
     removeTag,
     updateCaption,

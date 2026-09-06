@@ -126,6 +126,27 @@
         <button
           v-if="!isVideoFile && canRotate"
           class="tile-btn"
+          title="Enhance colors, brightness and contrast"
+          @click.stop="$emit('enhance', file.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M15 4l1.2 2.8L19 8l-2.8 1.2L15 12l-1.2-2.8L11 8l2.8-1.2z" />
+            <path d="M6 12l.9 2.1L9 15l-2.1.9L6 18l-.9-2.1L3 15l2.1-.9z" />
+            <path d="M18 15l.6 1.4L20 17l-1.4.6L18 19l-.6-1.4L16 17l1.4-.6z" />
+          </svg>
+        </button>
+        <button
+          v-if="!isVideoFile && canRotate"
+          class="tile-btn"
           title="Rotate left 90°"
           @click.stop="$emit('rotate', file.id)"
         >
@@ -385,6 +406,7 @@ const emit = defineEmits<{
   click: [file: AlbumFile]
   delete: [fileId: number]
   rotate: [fileId: number]
+  enhance: [fileId: number]
   'add-tag': [fileId: number, tagName: string]
   'update-caption': [fileId: number, caption: string]
   'remove-tag': [fileId: number, tagName: string]
@@ -425,10 +447,10 @@ const processingTitle = computed(() => {
   }
 })
 const isVideoFile = computed(() => isVideo(props.file))
-// Rotation works even on assets whose original has been purged by retention — the worker falls
-// back to the largest available derivative (output is bounded by LARGE=2400px regardless), so
-// we no longer gate the button on originalAvailable. The flag is kept on FileInfo for any
-// future "download original" UI but does not affect rotation.
+// Rotation and enhancement work even on assets whose original has been purged by retention — the
+// worker falls back to the largest available derivative (output is bounded by LARGE=2400px
+// regardless), so neither button is gated on originalAvailable. The flag is kept on FileInfo for
+// any future "download original" UI but does not affect either job.
 const canRotate = computed(() => true)
 const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))

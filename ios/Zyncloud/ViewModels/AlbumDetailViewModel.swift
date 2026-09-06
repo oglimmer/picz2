@@ -38,8 +38,9 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// since fixed only appeared after leaving the album and reopening it.
     @Published private(set) var imageReloadToken: Int = 0
 
-    /// Photos with a rotate in flight. The worker pod does the work, so the tile has to say it
-    /// is busy for the seconds in between — and refuse a second rotate on the same photo.
+    /// Photos with a rotate or an enhance in flight. The worker pod does the work, so the tile
+    /// has to say it is busy for the seconds in between — and refuse a second job on the same
+    /// photo.
     @Published private(set) var rotatingPhotoIds: Set<Int> = []
 
     // The four tag properties below are written only by `AlbumDetailViewModel+Tags.swift`.
@@ -326,12 +327,44 @@ class AlbumDetailViewModel: ViewModelProtocol {
     // MARK: - Single-photo actions
 
     /// Rotates one photo 90° left, the same single direction the web gallery offers.
+    func rotate(_ photo: Photo) {
+        rewrite(photo, job: .rotateLeft)
+    }
+
+    /// Starts the look-first enhance (D82) for these photos: a session the screen presents as a
+    /// full-screen review. Nil, after an alert, when there is nothing it can work on.
+    func makeEnhanceReview(for photos: [Photo]) -> EnhanceReviewSession? {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return nil
+        }
+        let stills = photos.filter { !$0.isVideo }
+        guard !stills.isEmpty else {
+            alertState = AlertState(
+                title: "Cannot Enhance",
+                message: "Videos cannot be enhanced.",
+            )
+            return nil
+        }
+        return EnhanceReviewSession(photos: stills, apiClient: apiClient)
+    }
+
+    /// What a review accepted: the real ENHANCE job for each, waited out and reloaded exactly
+    /// like a bulk rotate. The server drops the previews as it rewrites the photos.
+    func applyEnhance(to ids: [Int]) {
+        rewrite(ids: ids, job: .enhance)
+    }
+
+    /// The flow shared by the jobs that rewrite a photo's stored original — rotate and enhance.
     ///
     /// The server answers 202 and hands the job to the worker pod, so this waits for the
     /// asset to reach a terminal status before reloading. The reload is of the whole file
-    /// list, not just the image: a rotate swaps the asset's `publicToken`, so the old URL
+    /// list, not just the image: the job swaps the asset's `publicToken`, so the old URL
     /// stops being the photo's address.
-    func rotate(_ photo: Photo) {
+    private func rewrite(_ photo: Photo, job: PhotoRewriteJob) {
         guard let apiClient else {
             alertState = AlertState(
                 title: "Error",
@@ -342,8 +375,8 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
         guard !photo.isVideo else {
             alertState = AlertState(
-                title: "Cannot Rotate",
-                message: "Videos cannot be rotated.",
+                title: job.cannotTitle,
+                message: job.videoMessage,
             )
             return
         }
@@ -351,7 +384,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
         guard !rotatingPhotoIds.contains(photo.id) else { return }
         rotatingPhotoIds.insert(photo.id)
 
-        apiClient.rotateImageLeft(id: photo.id) { [weak self] result in
+        job.send(apiClient, id: photo.id) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
 
@@ -369,10 +402,10 @@ class AlbumDetailViewModel: ViewModelProtocol {
                 case .done:
                     break
                 case let .failed(message):
-                    self.alertState = AlertState(title: "Rotation Failed", message: message)
+                    self.alertState = AlertState(title: job.failedTitle, message: message)
                 case .timedOut:
                     self.alertState = AlertState(
-                        title: "Still Rotating",
+                        title: job.stillWorkingTitle,
                         message: "The server is taking longer than usual. Pull down to refresh in a moment.",
                     )
                 }
@@ -440,20 +473,30 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
     // MARK: - Bulk Actions
 
-    /// Rotates every picked still photo 90° left.
-    ///
-    /// One request per photo — the server has no bulk rotate — and each one is waited out to a
-    /// terminal status before the grid is re-read, for the same reason ``rotate(_:)`` does it:
-    /// a rotate swaps the asset's `publicToken`, so the old thumbnail URL stops being the
-    /// photo's address. Videos in the selection are skipped rather than reported, because the
-    /// bar's Rotate button already says it only applies to photos.
+    /// Rotates every picked still photo 90° left. Videos in the selection are skipped rather
+    /// than reported, because the bar's button already says it only applies to photos.
     func rotateSelection() {
+        rewrite(ids: selectedPhotos.filter { !$0.isVideo }.map(\.id), job: .rotateLeft)
+    }
+
+    /// Enhances every picked still photo straight away — no preview, no accept. The look-first
+    /// flow (D82) is for the one photo being looked at; the screen confirms this one instead.
+    func enhanceSelection() {
+        rewrite(ids: selectedPhotos.filter { !$0.isVideo }.map(\.id), job: .enhance)
+    }
+
+    /// The bulk flow shared by rotate and enhance.
+    ///
+    /// One request per photo — the server has no bulk endpoint — and each one is waited out to a
+    /// terminal status before the grid is re-read, for the same reason ``rewrite(_:job:)`` does
+    /// it: the job swaps the asset's `publicToken`, so the old thumbnail URL stops being the
+    /// photo's address.
+    private func rewrite(ids: [Int], job: PhotoRewriteJob) {
         guard let apiClient else {
             reportNotAuthenticatedForBulk()
             return
         }
 
-        let ids = selectedPhotos.filter { !$0.isVideo }.map(\.id)
         guard !ids.isEmpty, !isBulkWorking else { return }
 
         isBulkWorking = true
@@ -464,7 +507,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
             for id in ids {
                 let result: Result<Void, Error> = await withCheckedContinuation { continuation in
-                    apiClient.rotateImageLeft(id: id) { continuation.resume(returning: $0) }
+                    job.send(apiClient, id: id) { continuation.resume(returning: $0) }
                 }
 
                 if case .failure = result {
@@ -486,8 +529,8 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
             if failed > 0 {
                 alertState = AlertState(
-                    title: "Some Photos Not Rotated",
-                    message: "\(failed) of \(ids.count) could not be rotated. Pull down to refresh.",
+                    title: job.someNotDoneTitle,
+                    message: "\(failed) of \(ids.count) could not be \(job.pastParticiple). Pull down to refresh.",
                 )
             }
         }
@@ -570,7 +613,7 @@ class AlbumDetailViewModel: ViewModelProtocol {
                 case .done:
                     return .done
                 default:
-                    return .failed(status.error ?? "The server could not rotate this photo.")
+                    return .failed(status.error ?? "The server could not process this photo.")
                 }
             }
 
@@ -904,5 +947,64 @@ class AlbumDetailViewModel: ViewModelProtocol {
         var components = URLComponents(url: baseURL.appendingPathComponent("api/i/\(photo.publicToken)"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "size", value: "large")]
         return components?.url
+    }
+}
+
+// MARK: - Rewrite jobs
+
+/// The two server-side jobs that rewrite a photo's stored original and rebuild its derivatives:
+/// rotate left (D17) and the one-tap enhance (D81). Same flow in the view model, same waits;
+/// only the endpoint and the words differ, and this keeps the words in one place.
+enum PhotoRewriteJob {
+    case rotateLeft
+    case enhance
+
+    func send(_ apiClient: APIClient, id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        switch self {
+        case .rotateLeft:
+            apiClient.rotateImageLeft(id: id, completion: completion)
+        case .enhance:
+            apiClient.enhanceImage(id: id, completion: completion)
+        }
+    }
+
+    /// "rotated" / "enhanced", for sentences that say what could not be done.
+    var pastParticiple: String {
+        switch self {
+        case .rotateLeft: return "rotated"
+        case .enhance: return "enhanced"
+        }
+    }
+
+    var cannotTitle: String {
+        switch self {
+        case .rotateLeft: return "Cannot Rotate"
+        case .enhance: return "Cannot Enhance"
+        }
+    }
+
+    var videoMessage: String {
+        "Videos cannot be \(pastParticiple)."
+    }
+
+    var failedTitle: String {
+        switch self {
+        case .rotateLeft: return "Rotation Failed"
+        case .enhance: return "Enhancement Failed"
+        }
+    }
+
+    var stillWorkingTitle: String {
+        switch self {
+        case .rotateLeft: return "Still Rotating"
+        case .enhance: return "Still Enhancing"
+        }
+    }
+
+    var someNotDoneTitle: String {
+        switch self {
+        case .rotateLeft: return "Some Photos Not Rotated"
+        case .enhance: return "Some Photos Not Enhanced"
+        }
     }
 }

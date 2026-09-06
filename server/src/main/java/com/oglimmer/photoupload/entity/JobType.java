@@ -5,6 +5,21 @@ public enum JobType {
   PROCESS,
   ROTATE_LEFT,
   /**
+   * One-tap auto-enhance (D81), the server-side cousin of the phone's "magic wand": a tonal pass
+   * over the stored original — per-channel white/black point, exposure toward mid-grey, midtone
+   * contrast, a little saturation — followed by a rebuild of every derivative. Same bytes flow and
+   * same in-place, irreversible rewrite of {@code originals/} as ROTATE_LEFT; pixel geometry,
+   * {@code rotation} and {@code width}/{@code height} are untouched.
+   */
+  ENHANCE,
+  /**
+   * The look-before-you-leap half of ENHANCE (D82): run the same tonal pass over a large-sized copy
+   * of the asset and store it under {@code derivatives/{id}/enhance-preview.jpg}, touching neither
+   * the original nor the three derivatives nor {@code publicToken}. The owner compares it with the
+   * current image and either accepts — which enqueues ENHANCE — or discards it.
+   */
+  ENHANCE_PREVIEW,
+  /**
    * Phase 4.5 follow-up — regenerate the three image derivatives (thumbnail / medium / large) for
    * an asset whose row says it's DONE but is missing one or more derivative paths. Same fallback
    * chain as ROTATE_LEFT (original → large → medium → thumb), so it works even on retention-purged
