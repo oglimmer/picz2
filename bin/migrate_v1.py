@@ -10,8 +10,12 @@ What it moves
 
 What it does NOT move
   * SECTION (182) and MAP (68) elements -- v2 has no equivalent element type
-  * per-image captions (album_element.description) -- v2 file_metadata has no caption column
   * v1 small/ renditions -- the v2 worker regenerates thumb/medium/large from the original
+
+Captions (phase captions)
+  album_element.description was an accepted loss until D69 gave file_metadata a caption
+  column. It is now carried over by its own phase, run at any time after upload -- nothing in
+  v2 writes caption, so unlike date and GPS there is no ordering constraint against PROCESS.
 
 Why two phases
   v1 strips EXIF from what it stores (ImageResizeService.removeExif), so the v2 PROCESS job
@@ -50,6 +54,9 @@ ORIGINALS_PREFIX = "originals/"
 SYSTEM_STORAGE_BACKEND_ID = 1
 
 EXT_MIME = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
+
+# Mirrors FileStorageService.MAX_CAPTION_LENGTH -- the cap the API enforces on a caption.
+MAX_CAPTION_LENGTH = 2000
 
 
 def env(name, default=None, required=False):
@@ -400,6 +407,70 @@ def phase_finalize(args, v1, v2):
     print(f"backfilled date/GPS on {updated} rows")
 
 
+def phase_captions(args, v1, v2):
+    """Carry v1 album_element.description onto file_metadata.caption (D69).
+
+    Separate from finalize because it has no ordering constraint: nothing in v2 writes
+    caption, so a PROCESS job cannot overwrite it. Only rows whose caption is still NULL are
+    touched, so a caption typed in v2 always wins over the v1 text.
+    """
+    with v2.cursor() as cur:
+        cur.execute(
+            """SELECT f.id, f.content_id
+               FROM file_metadata f
+               JOIN albums a ON a.id = f.album_id
+               JOIN users u ON u.id = a.user_id
+               WHERE u.email = %s AND f.content_id LIKE %s AND f.caption IS NULL""",
+            (args.email, MARKER + "%"),
+        )
+        rows = cur.fetchall()
+
+    print(f"{len(rows)} migrated rows without a caption in v2")
+
+    written = 0
+    empty = 0
+    too_long = []
+    for row in rows:
+        element_id = int(row["content_id"][len(MARKER):])
+        with v1.cursor() as cur:
+            cur.execute(
+                "SELECT description FROM album_element WHERE id = %s", (element_id,)
+            )
+            element = cur.fetchone()
+        if not element:
+            continue
+
+        # Same normalisation the API applies: blank means "no caption", stored as NULL.
+        text = (element["description"] or "").strip()
+        if not text:
+            empty += 1
+            continue
+        if len(text) > MAX_CAPTION_LENGTH:
+            # Never silently cut the owner's words -- report and leave the row alone.
+            too_long.append((row["id"], element_id, len(text)))
+            continue
+
+        if args.dry_run:
+            written += 1
+            continue
+        with v2.cursor() as cur:
+            cur.execute(
+                "UPDATE file_metadata SET caption = %s WHERE id = %s", (text, row["id"])
+            )
+        v2.commit()
+        written += 1
+
+    verb = "would write" if args.dry_run else "wrote"
+    print(f"{verb} {written} captions, {empty} v1 rows had none")
+    for file_id, element_id, length in too_long:
+        print(
+            f"  SKIPPED file {file_id} (v1 element {element_id}): "
+            f"{length} chars, over the {MAX_CAPTION_LENGTH} cap"
+        )
+    if too_long:
+        print(f"{len(too_long)} caption(s) skipped as too long -- shorten them by hand in v2")
+
+
 def phase_status(args, v1, v2):
     with v2.cursor() as cur:
         cur.execute(
@@ -422,6 +493,15 @@ def phase_status(args, v1, v2):
             (args.email, MARKER + "%"),
         )
         print(f"{'un-finalized':>12}  {cur.fetchone()['c']}")
+        cur.execute(
+            """SELECT COUNT(*) AS c FROM file_metadata f
+               JOIN albums a ON a.id = f.album_id
+               JOIN users u ON u.id = a.user_id
+               WHERE u.email = %s AND f.content_id LIKE %s
+                 AND f.caption IS NOT NULL""",
+            (args.email, MARKER + "%"),
+        )
+        print(f"{'captioned':>12}  {cur.fetchone()['c']}")
 
 
 def summarise(totals):
@@ -438,7 +518,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--email", required=True, help="account to migrate, on both sides")
     parser.add_argument(
-        "--phase", choices=("upload", "finalize", "status"), default="upload"
+        "--phase", choices=("upload", "finalize", "captions", "status"), default="upload"
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=0, help="stop after N uploads")
@@ -461,6 +541,8 @@ def main():
             phase_upload(args, v1, v2, s3_source(), s3_target())
         elif args.phase == "finalize":
             phase_finalize(args, v1, v2)
+        elif args.phase == "captions":
+            phase_captions(args, v1, v2)
         else:
             phase_status(args, v1, v2)
     finally:
