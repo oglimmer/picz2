@@ -2,9 +2,9 @@
 
 Runbook for `bin/migrate_v1.py` and its launcher `bin/migrate-v1-run.sh`.
 
-**Status: not run yet.** Only a 5-photo smoke test has been executed (2026-09-01) — see
-[Current state](#current-state) before starting, because those 5 rows are already in
-production and the full run will skip them.
+**Status: run in full on 2026-09-07.** All 3459 photos of `oglimmer@gmail.com` are in v2, both
+phases complete — see [Current state](#current-state). A re-run is a no-op: every element
+already carries its `content_id` marker and is skipped.
 
 ---
 
@@ -123,6 +123,29 @@ bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase upload
 Add `--no-publish` to leave the albums unpublished. The default is **published**, matching
 v1, where any album was reachable by its `secret_id` link.
 
+#### Running it in chunks
+
+`--limit N` stops after N uploads, and the `content_id` marker makes a re-run continue rather
+than duplicate, so chunking needs nothing beyond repeating the same command. This keeps the
+worker queue and the MinIO PVC under control instead of dropping 3454 jobs at once:
+
+```bash
+bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase upload --limit 500
+# wait for the worker to drain, then check space and load
+bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase status
+bash bin/migrate-v1-watch.sh
+# repeat until 'uploaded 0'
+```
+
+**The launcher deletes the existing `picz-migrate` Job before starting a new one.** So
+`--phase status` run while a chunk is still uploading kills that chunk. It is safe — the chunk
+is idempotent and the next run continues — but it is not what you meant. While a chunk is in
+flight, watch with `bin/migrate-v1-watch.sh` (read-only, never touches the Job) or
+`kubectl -n default logs -f job/picz-migrate`.
+
+`bin/migrate-v1-watch.sh` prints the MinIO volume, node CPU/memory, the picz2 pods and the Job
+state. Pass a number of seconds to loop: `bash bin/migrate-v1-watch.sh 30`.
+
 ### 2. Wait for the worker — roughly 1–2 hours
 
 ```bash
@@ -131,6 +154,11 @@ bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase status
 
 Repeat until nothing is `QUEUED` or `PROCESSING`. Two worker pods run one job each
 (`FILE_UPLOAD_MAX_CONCURRENT_PROCESSING=1`).
+
+**Ignore the `un-finalized` line.** It counts rows where `gps_source` *and*
+`exif_date_source` are both NULL, and the PROCESS job fills both in itself — so it reads 0 as
+soon as the worker is done, whether or not phase `finalize` has ever run. Only the
+`processing_status` counts above it mean anything here.
 
 ### 3. Finalize
 
@@ -175,20 +203,51 @@ failed migration costs nothing on the v1 side and the old deployment keeps servi
 
 ~5.5 GB in MinIO: ~0.4 GB of originals plus ~5 GB of derivatives (measured at ~1.5 MB of
 thumb+medium+large per photo in the smoke test, against ~100 KB originals — v1's images are
-small and heavily compressed, v2's derivatives are not). MinIO's disk had 679 GB free on
-2026-09-01. The account's `storage_quota_bytes` is 1 PiB, so the quota is not in the way —
-and the script writes rows directly anyway, so `StorageQuotaService` never sees them.
+small and heavily compressed, v2's derivatives are not). The account's `storage_quota_bytes`
+is 1 PiB, so the quota is not in the way — and the script writes rows directly anyway, so
+`StorageQuotaService` never sees them.
+
+**The limit is the MinIO PVC, not the node disk.** The "679 GB free" noted on 2026-09-01 was
+`k8s-node19`'s root filesystem. MinIO writes into a 30 GiB Longhorn PVC (`minio/minio`), which
+held 11.0 GiB used / 18.2 GiB free on 2026-09-06. The migration therefore consumes about a
+third of what is left and lands near 12.7 GiB free. That fits, but it is not roomy — watch the
+volume during the run, and remember that volume has no Longhorn backup.
+
+Read it without exec'ing into anything:
+
+```bash
+kubectl get --raw "/api/v1/nodes/k8s-node19/proxy/stats/summary" \
+  | jq -r '.pods[] | select(.podRef.namespace=="minio") | .volume[]? | select(.name=="export")'
+```
 
 ## Current state
 
-Run on 2026-09-01 as a smoke test, **left in place**:
+**Migration complete, 2026-09-07.** Run in seven chunks of 500 (`--limit 500`), each followed by a
+worker drain and a `--phase status` check.
 
-- v2 album **47** `cooked by Oli` (from v1 album 109), published.
-- v2 `file_metadata` **6905–6909** (v1 elements 1091, 1089, 1087, 1085, 1083), all `DONE`,
-  derivatives built, date and GPS backfilled and verified identical to v1.
+| | |
+| --- | --- |
+| Migrated rows | 3459, all `processing_status = DONE`, 0 queued, 0 dead-lettered |
+| Albums | 19 (v2 ids 47, 50–67), published |
+| Capture date | 3459 / 3459, `exif_date_source = 'EXIF_FALLBACK_ZONE'` |
+| GPS | 3119 / 3459 — the other 340 carry no coordinates in v1 either |
+| Missing in v1 S3 | 0 |
+| MinIO volume after | 6.7 GiB free of 29.3 GiB |
 
-The full upload phase will report these as `already there 5` and carry on with the remaining
-3454. The album row is reused, not duplicated. Nothing needs cleaning up first.
+The 5-photo smoke test of 2026-09-01 (album 47, files 6905–6909) was carried straight into
+this run and needed no cleanup, exactly as planned.
 
-Note `width` and `height` stay `NULL` on the migrated rows — they are `NULL` on all 3155
+Measured cost, against the ~5.5 GB estimate: about **8.2 GiB** of MinIO for the whole set.
+The first two chunks cost ~0.6 GiB each and the rest ~1.9–2.1 GiB each — the later albums hold
+bigger pictures, so do not size a future run from the first chunk alone.
+
+`width` and `height` stay `NULL` on the migrated rows — they are `NULL` on all 3155
 pre-existing v2 rows too. Nothing in v2 populates those columns.
+
+### Still open
+
+- **The 268 per-photo captions were dropped.** They were an accepted loss because
+  `file_metadata` had no caption column. **D69** added one. `album_element.description` could
+  now be backfilled onto the migrated rows through the same `content_id` marker — the data is
+  still in `picz_prod`, and v1 is never written to, so nothing was lost by migrating first.
+- Verify a few albums in the web client and on iOS before retiring the v1 deployment.
