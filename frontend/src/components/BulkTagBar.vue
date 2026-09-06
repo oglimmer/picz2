@@ -14,12 +14,12 @@
         >{{ busyLabel }}</span>
 
         <div
-          v-if="frequentTags.length > 0"
+          v-if="quickTags.length > 0"
           class="bulk-quick-tags"
         >
           <span class="bulk-label">Quick tag:</span>
           <button
-            v-for="tag in assignableTags(frequentTags)"
+            v-for="tag in quickTags"
             :key="tag.name"
             class="bulk-quick-btn"
             :disabled="busy"
@@ -60,7 +60,7 @@
         <div class="bulk-actions">
           <button
             class="bulk-action-btn"
-            :disabled="busy || rotatableCount === 0"
+            :disabled="busy || enhanceableCount === 0"
             :title="enhanceTitle"
             @click="$emit('enhance')"
           >
@@ -151,9 +151,12 @@ const props = defineProps<{
   selectedCount: number
   availableTags: Tag[]
   frequentTags: TagCount[]
-  // Selected files the rotate and enhance jobs can act on — videos are excluded, so this can be 0
-  // while selectedCount is not.
+  // Selected files the rotate job can act on — videos are excluded, so this can be 0 while
+  // selectedCount is not.
   rotatableCount: number
+  // Selected files the enhance job can act on: the rotatable ones minus those already enhanced
+  // (D83). Always <= rotatableCount.
+  enhanceableCount: number
   busy: boolean
   busyLabel: string
 }>()
@@ -171,6 +174,9 @@ const tagInput = ref<HTMLInputElement | null>(null)
 
 // `hidden` is derived by the server (D79) and refused as an add, so it is not offered here.
 // A typed "hidden" still goes through and comes back as "could not be tagged".
+// Filter first, then decide whether to render the group at all — an album whose only tag is
+// `hidden` would otherwise show a bare "Quick tag:" label with no buttons behind it.
+const quickTags = computed(() => assignableTags(props.frequentTags))
 
 // Only spell out the count when it differs from the selection — i.e. when videos were skipped.
 const rotateLabel = computed(() =>
@@ -186,16 +192,28 @@ const rotateTitle = computed(() =>
 )
 
 const enhanceLabel = computed(() =>
-  props.rotatableCount === props.selectedCount
+  props.enhanceableCount === props.selectedCount
     ? 'Enhance'
-    : `Enhance (${props.rotatableCount})`
+    : `Enhance (${props.enhanceableCount})`
 )
 
-const enhanceTitle = computed(() =>
-  props.rotatableCount === 0
-    ? 'Videos cannot be enhanced'
-    : `Enhance colors, brightness and contrast of ${props.rotatableCount} selected image${props.rotatableCount !== 1 ? 's' : ''} (no preview)`
-)
+// Three reasons the count can fall short of the selection, and the owner deserves to know which:
+// videos have no enhance job, and an already-enhanced photo is skipped because a second pass
+// compounds on the first with no way back (D83).
+const enhanceTitle = computed(() => {
+  const skippedVideos = props.selectedCount - props.rotatableCount
+  const skippedEnhanced = props.rotatableCount - props.enhanceableCount
+  if (props.enhanceableCount === 0) {
+    if (props.rotatableCount === 0) return 'Videos cannot be enhanced'
+    return 'Every selected image has already been enhanced'
+  }
+  const skipped = [
+    skippedVideos > 0 ? `${skippedVideos} video${skippedVideos !== 1 ? 's' : ''}` : '',
+    skippedEnhanced > 0 ? `${skippedEnhanced} already enhanced` : ''
+  ].filter(Boolean)
+  const suffix = skipped.length > 0 ? ` — skipping ${skipped.join(' and ')}` : ''
+  return `Enhance colors, brightness and contrast of ${props.enhanceableCount} selected image${props.enhanceableCount !== 1 ? 's' : ''} (no preview)${suffix}`
+})
 
 function applyCustomTag() {
   const name = customTag.value.trim()

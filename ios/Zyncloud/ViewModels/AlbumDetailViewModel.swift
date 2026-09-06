@@ -481,8 +481,11 @@ class AlbumDetailViewModel: ViewModelProtocol {
 
     /// Enhances every picked still photo straight away — no preview, no accept. The look-first
     /// flow (D82) is for the one photo being looked at; the screen confirms this one instead.
+    ///
+    /// Photos that already carry an enhance mark are left out (D83): the job compounds on its own
+    /// result with nothing to undo it, and this is the path where nobody sees the outcome first.
     func enhanceSelection() {
-        rewrite(ids: selectedPhotos.filter { !$0.isVideo }.map(\.id), job: .enhance)
+        rewrite(ids: selectedEnhanceablePhotos.map(\.id), job: .enhance)
     }
 
     /// The bulk flow shared by rotate and enhance.

@@ -3866,6 +3866,28 @@ body.landing-dark { background: #0B1D2E; }
   .item-actions { opacity: 1; transform: none; }
 }
 
+/* Already-enhanced mark (D83). Bottom-left of the thumbnail: the top corners hold the select
+   checkbox and the group badges, and the bottom-right is where the tile actions slide in. Neutral
+   dark rather than accent — it reports a state, it does not ask to be clicked. */
+.enhanced-badge {
+  position: absolute;
+  bottom: var(--sp-2);
+  left: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px var(--sp-2);
+  background: rgba(28,24,22,.72);
+  color: rgba(255,255,255,.92);
+  font-size: .6875rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
 /* === BULK TAG BAR === */
 
 .bulk-tag-bar {
@@ -3880,9 +3902,13 @@ body.landing-dark { background: #0B1D2E; }
   padding: var(--sp-3) var(--sp-5);
   background: var(--c-text);
   color: #fff;
-  border-radius: var(--r-full);
+  /* Not --r-full: on one row it already reads as a pill, and when the bar wraps
+     the full radius turns it into a lozenge with the controls floating inside. */
+  border-radius: 26px;
   box-shadow: var(--sh-xl);
   flex-wrap: wrap;
+  justify-content: center;
+  row-gap: var(--sp-3);
   max-width: calc(100vw - var(--sp-8));
 }
 .bulk-count {
@@ -3929,7 +3955,7 @@ body.landing-dark { background: #0B1D2E; }
   color: #fff;
   font-size: .8125rem;
   outline: none;
-  width: 140px;
+  width: 170px;
   transition: border-color var(--t-fast), background var(--t-fast);
 }
 .bulk-tag-input::placeholder { color: rgba(255,255,255,.45); }

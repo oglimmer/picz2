@@ -435,6 +435,7 @@
       :available-tags="enabledAlbumTags"
       :frequent-tags="frequentTags"
       :rotatable-count="selectedRotatableIds.length"
+      :enhanceable-count="selectedEnhanceableIds.length"
       :busy="bulkBusy"
       :busy-label="bulkLabel"
       @add-tag="handleBulkAddTag"
@@ -485,7 +486,7 @@ import { useAlbumTagAll } from '@/composables/gallery/useAlbumTagAll'
 import { useGroupEditing } from '@/composables/gallery/useGroupEditing'
 import { useRecordingSession } from '@/composables/gallery/useRecordingSession'
 import { useUploadFlow } from '@/composables/gallery/useUploadFlow'
-import { formatBytes, isVideo } from '@/utils/format'
+import { formatBytes, formatDate, isVideo } from '@/utils/format'
 import { albumMapView, type MapView } from '@/types'
 import GalleryItem from '@/components/GalleryItem.vue'
 import Lightbox from '@/components/Lightbox.vue'
@@ -725,6 +726,16 @@ const selectedRotatableIds = computed(() =>
   files.value.filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f)).map((f) => f.id)
 )
 
+// Bulk enhance drops what has already been enhanced (D83) on top of that. The job rewrites the
+// stored original with no copy of the previous bytes, so a second pass compounds on the first and
+// cannot be undone — and a bulk run is the one place nobody looks at the result first. A single
+// photo can still be enhanced again on purpose; that path warns instead of refusing.
+const selectedEnhanceableIds = computed(() =>
+  files.value
+    .filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f) && !f.enhancedAt)
+    .map((f) => f.id)
+)
+
 async function runBulk(label: string, action: () => Promise<void>) {
   if (bulkBusy.value) return
   bulkBusy.value = true
@@ -746,10 +757,17 @@ const handleBulkRotate = () =>
 // A selection is enhanced straight through, like rotate and delete — no preview walk. The
 // preview is for the one photo you are looking at; for twenty it would be twenty decisions.
 async function handleBulkEnhance() {
-  const ids = selectedRotatableIds.value
+  const ids = selectedEnhanceableIds.value
   if (ids.length === 0) return
+  // Say out loud what is being left behind, so "Enhance (3)" over a selection of 5 is not a
+  // surprise. Videos were never eligible; the already-enhanced ones are the new part (D83).
+  const skippedEnhanced = selectedRotatableIds.value.length - ids.length
+  const skippedNote =
+    skippedEnhanced > 0
+      ? ` ${skippedEnhanced} already-enhanced photo${skippedEnhanced !== 1 ? 's are' : ' is'} skipped.`
+      : ''
   const confirmed = await confirm(
-    `Enhance ${ids.length} selected image${ids.length !== 1 ? 's' : ''}? Colors, brightness and contrast are adjusted on the stored photos. This cannot be undone.`,
+    `Enhance ${ids.length} selected image${ids.length !== 1 ? 's' : ''}? Colors, brightness and contrast are adjusted on the stored photos. This cannot be undone.${skippedNote}`,
     { confirmText: 'Enhance' }
   )
   if (!confirmed) return
@@ -782,9 +800,20 @@ async function handleRotateImage(fileId: number) {
   await bulk.rotateMany([fileId])
 }
 
-function handleEnhanceImage(fileId: number) {
+async function handleEnhanceImage(fileId: number) {
   const file = files.value.find((f) => f.id === fileId)
-  if (file) openEnhanceReview([file])
+  if (!file) return
+  // A single photo may be enhanced twice deliberately, but the second pass compounds on the first
+  // and there is no copy of the earlier bytes (D83), so say so before building the preview.
+  if (file.enhancedAt) {
+    const when = formatDate(file.enhancedAt)
+    const confirmed = await confirm(
+      `This photo was already enhanced${when ? ` (${when})` : ''}. Enhancing again builds on that result and cannot be undone. Continue?`,
+      { confirmText: 'Enhance again' }
+    )
+    if (!confirmed) return
+  }
+  openEnhanceReview([file])
 }
 
 async function handleAddTag(fileId: number, tagName: string) {

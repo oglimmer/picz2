@@ -414,10 +414,31 @@ extension AlbumDetailViewModel {
         selectedPhotos.contains { !$0.isVideo }
     }
 
-    /// How many of the picked photos Rotate and Enhance will touch — the number the confirmation
-    /// names, so it is never larger than what happens.
+    /// How many of the picked photos Rotate will touch — the number the confirmation names, so it
+    /// is never larger than what happens.
     var selectedStillCount: Int {
         selectedPhotos.filter { !$0.isVideo }.count
+    }
+
+    /// The picked photos a bulk Enhance will touch: the stills, minus the ones it has already run
+    /// on (D83). Enhance rewrites the stored original with no copy of the earlier bytes, so a
+    /// second pass compounds on the first and cannot be undone — and a selection is enhanced
+    /// without a preview, so nobody sees the damage until afterwards. A single photo can still be
+    /// enhanced twice on purpose; that path goes through the look-first review.
+    var selectedEnhanceablePhotos: [Photo] {
+        selectedPhotos.filter { !$0.isVideo && !$0.isEnhanced }
+    }
+
+    var selectedEnhanceableCount: Int { selectedEnhanceablePhotos.count }
+
+    /// Whether Enhance has anything left to work on. Off for a selection of only videos, and off
+    /// for one where every photo is already enhanced.
+    var selectionHasEnhanceablePhoto: Bool { !selectedEnhanceablePhotos.isEmpty }
+
+    /// Stills in the selection that Enhance steps over because they carry a mark. Named by the
+    /// confirmation so "Enhance 3 photos" over a pick of 5 is not a surprise.
+    var selectedAlreadyEnhancedCount: Int {
+        selectedPhotos.filter { !$0.isVideo && $0.isEnhanced }.count
     }
 
     func endSelecting() {

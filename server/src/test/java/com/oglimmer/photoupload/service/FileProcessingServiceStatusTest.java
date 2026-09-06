@@ -298,6 +298,63 @@ class FileProcessingServiceStatusTest {
     verify(bucket).delete("derivatives/11/enhance-preview.jpg");
   }
 
+  /**
+   * D83. The mark is what keeps a second bulk enhance off this asset, so it has to be written by
+   * the job that did the work — not by the api when it enqueued one, which would claim an enhance
+   * that a dead-lettered job never performed.
+   */
+  @Test
+  void enhanceStampsEnhancedAt() throws IOException {
+    FileMetadata md = seedDoneImage();
+    assertThat(md.getEnhancedAt()).isNull();
+    Instant before = Instant.now();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.enhanceAndReprocess(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.DONE);
+    assertThat(md.getEnhancedAt()).isNotNull().isAfterOrEqualTo(before);
+  }
+
+  /** A tool failure leaves the asset exactly as enhanceable as it was — no mark, no skip. */
+  @Test
+  void failedEnhanceLeavesEnhancedAtUnset() {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(false);
+
+    service.enhanceAndReprocess(11L);
+
+    assertThat(md.getEnhancedAt()).isNull();
+  }
+
+  /** Rotate shares the rewrite flow but is not an enhance, so it must not claim to be one. */
+  @Test
+  void rotateDoesNotStampEnhancedAt() throws IOException {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.rotateImageLeft(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.rotateAndReprocess(11L);
+
+    assertThat(md.getEnhancedAt()).isNull();
+  }
+
+  /** The preview (D82) writes one key and nothing on the row — accepting is what marks it. */
+  @Test
+  void enhancePreviewDoesNotStampEnhancedAt() throws IOException {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+
+    service.buildEnhancePreview(11L);
+
+    assertThat(md.getEnhancedAt()).isNull();
+  }
+
   @Test
   void enhanceDoesNotResurrectAPurgedOriginal() throws IOException {
     FileMetadata md = seedDoneImage();

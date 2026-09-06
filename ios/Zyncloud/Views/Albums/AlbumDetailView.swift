@@ -268,16 +268,16 @@ struct AlbumDetailView: View {
                 Text("This removes the photo from your server for good. It cannot be undone.")
             }
             .confirmationDialog(
-                viewModel.selectedStillCount == 1
+                viewModel.selectedEnhanceableCount == 1
                     ? "Enhance 1 photo"
-                    : "Enhance \(viewModel.selectedStillCount) photos",
+                    : "Enhance \(viewModel.selectedEnhanceableCount) photos",
                 isPresented: $confirmingSelectionEnhance,
                 titleVisibility: .visible,
             ) {
                 Button("Enhance") { viewModel.enhanceSelection() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Colors, brightness and contrast are adjusted on the stored photos, without a preview. It cannot be undone.")
+                Text(selectionEnhanceMessage)
             }
             .confirmationDialog(
                 viewModel.selectedPhotoIds.count == 1
@@ -419,6 +419,20 @@ struct AlbumDetailView: View {
         }
     }
 
+    /// What the bulk enhance confirmation says under its title.
+    ///
+    /// Names the photos it is stepping over (D83) when there are any: the button reads
+    /// "Enhance 3 photos" over a pick of five, and the difference has to be accounted for
+    /// somewhere the finger can see it before it commits.
+    private var selectionEnhanceMessage: String {
+        let base = "Colors, brightness and contrast are adjusted on the stored photos, "
+            + "without a preview. It cannot be undone."
+        let skipped = viewModel.selectedAlreadyEnhancedCount
+        guard skipped > 0 else { return base }
+        let subject = skipped == 1 ? "1 photo is" : "\(skipped) photos are"
+        return base + " \(subject) already enhanced and will be left alone."
+    }
+
     /// Everything the picked photos can be done to, in one place at the bottom of the screen —
     /// including Select All, which used to sit in the top bar and made the eye jump between two
     /// corners for one job.
@@ -455,7 +469,7 @@ struct AlbumDetailView: View {
                 selectionAction(
                     title: "Enhance",
                     systemImage: "wand.and.stars",
-                    isEnabled: viewModel.selectionHasRotatablePhoto && !viewModel.isBulkWorking,
+                    isEnabled: viewModel.selectionHasEnhanceablePhoto && !viewModel.isBulkWorking,
                 ) {
                     confirmingSelectionEnhance = true
                 }
@@ -934,6 +948,25 @@ struct PhotoThumbnailView: View {
                     .shadow(radius: 3)
             }
 
+            // D83: enhance rewrites the stored original and builds on its own result, so a
+            // photo it has already run on must not look like one it has not. Top-left, because
+            // the selection tick owns the top-right and the tags own the bottom.
+            if photo.isEnhanced, photo.isThumbnailReady {
+                VStack {
+                    HStack {
+                        Image(systemName: "wand.and.stars")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(4)
+                            .background(.black.opacity(0.55), in: Circle())
+                            .accessibilityLabel("Already enhanced")
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(6)
+            }
+
             if isRotating {
                 Color.black.opacity(0.55)
                 ProgressView()
@@ -1067,7 +1100,13 @@ struct PhotoActionButtons: View {
 
         if !photo.isVideo {
             Button(action: onEnhance) {
-                Label("Enhance", systemImage: "wand.and.stars")
+                // "Again" is the warning (D83): the second pass builds on the first and there is
+                // no copy of the earlier bytes. The review that follows still shows the result
+                // before anything is written, so one photo is never refused — only labelled.
+                Label(
+                    photo.isEnhanced ? "Enhance Again" : "Enhance",
+                    systemImage: "wand.and.stars",
+                )
             }
 
             Button {

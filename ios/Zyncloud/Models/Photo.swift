@@ -46,6 +46,7 @@ struct FileInfo: Codable, Identifiable {
         case gpsLatitude
         case gpsLongitude
         case caption
+        case enhancedAt
     }
 
     /// When the shutter fired, as the server read it out of the file. An ISO-8601 instant, or
@@ -73,6 +74,18 @@ struct FileInfo: Codable, Identifiable {
     /// `var` for the same reason as ``tags``: saving a caption answers with the updated photo,
     /// and writing that one field back beats reloading the whole album.
     var caption: String?
+
+    /// When this photo was last auto-enhanced (D83), as an ISO-8601 instant, or nil when it
+    /// never was. The enhance job rewrites the stored original and keeps no copy of the previous
+    /// bytes, so a second pass compounds on the first: the grid marks an enhanced photo and a
+    /// bulk enhance steps over it.
+    ///
+    /// Photos enhanced before the server grew the column read as nil — that history was never
+    /// written down, and guessing at it would be worse than saying nothing.
+    var enhancedAt: String?
+
+    /// True when the enhance job has already run on this photo at least once.
+    var isEnhanced: Bool { enhancedAt != nil }
 
     var processing: AssetProcessingStatus? {
         processingStatus.flatMap(AssetProcessingStatus.init(rawValue:))

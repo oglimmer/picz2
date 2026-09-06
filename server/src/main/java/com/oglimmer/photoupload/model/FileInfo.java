@@ -38,6 +38,14 @@ public class FileInfo {
   private String caption;
 
   private Integer rotation;
+
+  /**
+   * When this asset was last auto-enhanced (D83), or null when it never was. Enhance rewrites the
+   * original in place and compounds on itself, so the clients mark an enhanced asset and drop it
+   * from a bulk enhance. Assets enhanced before the column existed read as null.
+   */
+  private Instant enhancedAt;
+
   private Integer displayOrder;
   private List<String> tags = new ArrayList<>();
   private Long albumId;
