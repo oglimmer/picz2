@@ -432,6 +432,24 @@ ingress:
     - secretName: tls-picz2-ingress-dns
       hosts:
         - picz2.oglimmer.com
+  # Retired hostnames, answered with a redirect rather than a second copy of the app (D66).
+  # picz.oglimmer.com served picz v1 until its Deployment was removed; the name still resolves
+  # here, so it is redirected instead of left to 404. Not a second `host:` above on purpose:
+  # the MapKit JS token carries a single `origin` claim and backend.baseUrl writes one canonical
+  # URL into share mails and Open Graph tags, so the app must keep exactly one address.
+  redirect:
+    enabled: true
+    hosts:
+      - picz.oglimmer.com
+    # Where they land. Path and query are preserved, so an old deep link still arrives.
+    to: "https://picz2.oglimmer.com"
+    # 301. These names are retired for good; note that browsers cache a permanent redirect
+    # hard, so set this to false BEFORE serving anything real on them again.
+    permanent: true
+    tls:
+      - secretName: tls-picz-ingress-dns
+        hosts:
+          - picz.oglimmer.com
 
 # Service Account
 serviceAccount:
