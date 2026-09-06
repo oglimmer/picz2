@@ -344,6 +344,7 @@
           @click="openLightbox"
           @delete="handleDeleteFile"
           @rotate="handleRotateImage"
+          @enhance="handleEnhanceImage"
           @add-tag="handleAddTag"
           @update-caption="handleUpdateCaption"
           @remove-tag="handleRemoveTag"
@@ -379,6 +380,7 @@
         @click="openLightbox"
         @delete="handleDeleteFile"
         @rotate="handleRotateImage"
+        @enhance="handleEnhanceImage"
         @add-tag="handleAddTag"
         @update-caption="handleUpdateCaption"
         @remove-tag="handleRemoveTag"
@@ -409,6 +411,12 @@
       @update:controls-visible="controlsVisible = $event"
     />
 
+    <!-- Enhance review (D82): original against enhanced, accept or decline -->
+    <EnhanceReview
+      v-if="enhanceReviewOpen"
+      :review="enhanceReview"
+    />
+
     <!-- Audio player overlay (shown on top of lightbox when playing) -->
     <div
       v-show="isPlaying && selectedFile"
@@ -431,6 +439,7 @@
       :busy-label="bulkLabel"
       @add-tag="handleBulkAddTag"
       @rotate="handleBulkRotate"
+      @enhance="handleBulkEnhance"
       @delete-selected="handleBulkDelete"
       @clear="selection.clear"
     />
@@ -468,6 +477,7 @@ import { useDayRegionView } from '@/composables/useDayRegionView'
 import { useAlbumLoader } from '@/composables/gallery/useAlbumLoader'
 import { useSelection } from '@/composables/gallery/useSelection'
 import { useBulkActions } from '@/composables/gallery/useBulkActions'
+import { useEnhanceReview } from '@/composables/gallery/useEnhanceReview'
 import { useReorderMode } from '@/composables/gallery/useReorderMode'
 import { useDuplicateMode } from '@/composables/gallery/useDuplicateMode'
 import { useAlbumTagPicker } from '@/composables/gallery/useAlbumTagPicker'
@@ -481,6 +491,7 @@ import GalleryItem from '@/components/GalleryItem.vue'
 import Lightbox from '@/components/Lightbox.vue'
 import EditableTitle from '@/components/EditableTitle.vue'
 import BulkTagBar from '@/components/BulkTagBar.vue'
+import EnhanceReview from '@/components/EnhanceReview.vue'
 import PresentationGroupDialog from '@/components/PresentationGroupDialog.vue'
 import PresentationSectionList from '@/components/PresentationSectionList.vue'
 import DayRegionSections from '@/components/DayRegionSections.vue'
@@ -512,6 +523,10 @@ const {
   loadAlbumFiles,
   deleteFile,
   rotateFile,
+  enhanceFile,
+  requestEnhancePreview,
+  loadEnhancePreview,
+  discardEnhancePreview,
   addTag,
   removeTag,
   updateCaption,
@@ -622,9 +637,32 @@ const selection = useSelection(files)
 const bulk = useBulkActions({
   deleteFile,
   rotateFile,
+  enhanceFile,
   addTag,
   waitForProcessing: poller.waitFor,
   reloadFiles: loader.reloadFiles
+})
+// A single photo's enhance is look-first (D82): the preview is built and shown against the
+// current picture; only what the owner accepts goes to `bulk.enhanceMany`, which enqueues the
+// real job. The composable handles a list too, but the bulk bar deliberately does not use it.
+const enhanceReview = useEnhanceReview({
+  requestPreview: requestEnhancePreview,
+  waitForProcessing: poller.waitFor,
+  loadPreview: loadEnhancePreview,
+  discardPreview: discardEnhancePreview
+})
+const enhanceReviewOpen = ref(false)
+function openEnhanceReview(list: typeof files.value) {
+  if (list.length === 0 || enhanceReviewOpen.value) return
+  enhanceReviewOpen.value = true
+  void enhanceReview.start(list)
+}
+watch(enhanceReview.finished, (done) => {
+  if (!done || !enhanceReviewOpen.value) return
+  enhanceReviewOpen.value = false
+  const acceptedIds = [...enhanceReview.accepted.value]
+  if (acceptedIds.length === 0) return
+  void runBulk(`Enhancing ${acceptedIds.length}…`, () => bulk.enhanceMany(acceptedIds))
 })
 const reorder = useReorderMode({
   files,
@@ -682,7 +720,7 @@ function handleGalleryKeydown(e: KeyboardEvent) {
 const bulkBusy = ref(false)
 const bulkLabel = ref('')
 
-// Videos have no rotate job, so the bulk rotate button acts on the image subset only.
+// Videos have no rotate or enhance job, so those bulk buttons act on the image subset only.
 const selectedRotatableIds = computed(() =>
   files.value.filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f)).map((f) => f.id)
 )
@@ -704,6 +742,19 @@ const handleBulkAddTag = (tagName: string) =>
 
 const handleBulkRotate = () =>
   runBulk(`Rotating ${selectedRotatableIds.value.length}…`, () => bulk.rotateMany(selectedRotatableIds.value))
+
+// A selection is enhanced straight through, like rotate and delete — no preview walk. The
+// preview is for the one photo you are looking at; for twenty it would be twenty decisions.
+async function handleBulkEnhance() {
+  const ids = selectedRotatableIds.value
+  if (ids.length === 0) return
+  const confirmed = await confirm(
+    `Enhance ${ids.length} selected image${ids.length !== 1 ? 's' : ''}? Colors, brightness and contrast are adjusted on the stored photos. This cannot be undone.`,
+    { confirmText: 'Enhance' }
+  )
+  if (!confirmed) return
+  await runBulk(`Enhancing ${ids.length}…`, () => bulk.enhanceMany(ids))
+}
 
 const handleBulkDelete = () =>
   runBulk(`Deleting ${selection.selectedFileIds.value.size}…`, async () => {
@@ -729,6 +780,11 @@ async function handleDeleteFile(fileId: number) {
 async function handleRotateImage(fileId: number) {
   info('Rotating image...')
   await bulk.rotateMany([fileId])
+}
+
+function handleEnhanceImage(fileId: number) {
+  const file = files.value.find((f) => f.id === fileId)
+  if (file) openEnhanceReview([file])
 }
 
 async function handleAddTag(fileId: number, tagName: string) {

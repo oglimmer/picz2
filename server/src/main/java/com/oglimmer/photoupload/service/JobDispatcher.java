@@ -91,6 +91,8 @@ public class JobDispatcher {
       switch (jobType) {
         case PROCESS -> fileProcessingService.processFile(job.getAssetId());
         case ROTATE_LEFT -> fileProcessingService.rotateAndReprocess(job.getAssetId());
+        case ENHANCE -> fileProcessingService.enhanceAndReprocess(job.getAssetId());
+        case ENHANCE_PREVIEW -> fileProcessingService.buildEnhancePreview(job.getAssetId());
         case REGEN_THUMBNAILS -> fileProcessingService.regenerateThumbnails(job.getAssetId());
         case EXTRACT_CAPTURE_DATE -> fileProcessingService.reextractCaptureDate(job.getAssetId());
         case EXTRACT_GPS -> fileProcessingService.reextractGps(job.getAssetId());

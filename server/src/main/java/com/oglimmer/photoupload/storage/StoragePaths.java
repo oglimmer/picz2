@@ -73,6 +73,22 @@ public final class StoragePaths {
     return DERIVATIVES_PREFIX + assetId + "/large.jpg";
   }
 
+  /**
+   * The un-applied result of a one-tap enhance (D82): the large derivative with the enhance pass
+   * run over it, kept only while the owner is deciding. Deleted on accept (by the ENHANCE job), on
+   * decline (by the api) and with the asset. Skipped by the admin orphan sweep, which does not know
+   * it from the database.
+   */
+  public static String derivativeEnhancePreviewKey(Long assetId) {
+    return DERIVATIVES_PREFIX + assetId + "/enhance-preview.jpg";
+  }
+
+  public static boolean isEnhancePreviewKey(String key) {
+    return key != null
+        && key.startsWith(DERIVATIVES_PREFIX)
+        && key.endsWith("/enhance-preview.jpg");
+  }
+
   public static String derivativeTranscodedKey(Long assetId) {
     return DERIVATIVES_PREFIX + assetId + "/transcoded.mp4";
   }

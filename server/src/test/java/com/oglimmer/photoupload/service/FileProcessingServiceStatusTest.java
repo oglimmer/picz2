@@ -185,4 +185,133 @@ class FileProcessingServiceStatusTest {
     verify(repository, times(0)).save(any());
     assertThat(saves).isEmpty();
   }
+
+  /**
+   * The two in-place rewrites share one flow (D81). Rotate is the one that changes geometry, so it
+   * is the control: enhance must leave rotation and dimensions exactly where they were.
+   */
+  private FileMetadata seedDoneImage() {
+    FileMetadata md = seedMetadata();
+    md.setProcessingStatus(ProcessingStatus.QUEUED);
+    md.setRotation(90);
+    md.setWidth(4000);
+    md.setHeight(3000);
+    md.setPublicToken("old-token");
+    return md;
+  }
+
+  @Test
+  void enhanceRewritesTheOriginalAndKeepsGeometry() throws IOException {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.enhanceAndReprocess(11L);
+
+    assertThat(saves).hasSize(2);
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.DONE);
+    verify(thumbnailService).enhanceImage(any());
+    verify(bucket).getToFile(eq("originals/photo-stored.jpg"), any());
+    verify(bucket).putFile(eq("originals/photo-stored.jpg"), any(), eq("image/jpeg"));
+    verify(bucket).putFile(eq("derivatives/11/large.jpg"), any(), eq("image/jpeg"));
+    assertThat(md.getRotation()).isEqualTo(90);
+    assertThat(md.getWidth()).isEqualTo(4000);
+    assertThat(md.getHeight()).isEqualTo(3000);
+    assertThat(md.getPublicToken()).isNotEqualTo("old-token");
+  }
+
+  @Test
+  void rotateStillSwapsDimensionsAndAdvancesRotation() throws IOException {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.rotateImageLeft(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.rotateAndReprocess(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.DONE);
+    assertThat(md.getRotation()).isEqualTo(180);
+    assertThat(md.getWidth()).isEqualTo(3000);
+    assertThat(md.getHeight()).isEqualTo(4000);
+  }
+
+  @Test
+  void enhanceToolFailureIsRecordedAndTouchesNoStorage() {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(false);
+
+    service.enhanceAndReprocess(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.FAILED);
+    assertThat(saves.get(1).error()).contains("enhance failed");
+    verify(bucket, times(0)).putFile(any(), any(), any());
+    assertThat(md.getRotation()).isEqualTo(90);
+  }
+
+  @Test
+  void previewWritesOneKeyAndMovesNothingElse() {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.generateLargeCopy(any(), any()))
+        .thenAnswer(
+            inv -> {
+              Files.writeString(inv.getArgument(1), "jpeg-bytes");
+              return true;
+            });
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+
+    service.buildEnhancePreview(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.DONE);
+    verify(bucket).getToFile(eq("originals/photo-stored.jpg"), any());
+    verify(bucket).putFile(eq("derivatives/11/enhance-preview.jpg"), any(), eq("image/jpeg"));
+    verify(bucket, times(1)).putFile(any(), any(), any());
+    verify(thumbnailService, times(0)).generateAllThumbnails(any(), any());
+    assertThat(md.getPublicToken()).isEqualTo("old-token");
+    assertThat(md.getRotation()).isEqualTo(90);
+  }
+
+  @Test
+  void previewFailureIsRecordedAndWritesNothing() {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.generateLargeCopy(any(), any())).thenReturn(false);
+
+    service.buildEnhancePreview(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.FAILED);
+    assertThat(saves.get(1).error()).contains("large copy");
+    verify(bucket, times(0)).putFile(any(), any(), any());
+  }
+
+  @Test
+  void acceptedEnhanceDropsThePreview() throws IOException {
+    FileMetadata md = seedDoneImage();
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.enhanceAndReprocess(11L);
+
+    verify(bucket).delete("derivatives/11/enhance-preview.jpg");
+  }
+
+  @Test
+  void enhanceDoesNotResurrectAPurgedOriginal() throws IOException {
+    FileMetadata md = seedDoneImage();
+    md.setFilePath(null);
+    md.setLargePath("derivatives/11/large.jpg");
+    when(repository.findById(11L)).thenReturn(Optional.of(md));
+    when(thumbnailService.enhanceImage(any())).thenReturn(true);
+    when(thumbnailService.generateAllThumbnails(any(), any())).thenReturn(generatedThumbnails());
+
+    service.enhanceAndReprocess(11L);
+
+    assertThat(saves.get(1).status()).isEqualTo(ProcessingStatus.DONE);
+    verify(bucket).getToFile(eq("derivatives/11/large.jpg"), any());
+    verify(bucket, times(0)).putFile(eq("originals/photo-stored.jpg"), any(), any());
+    assertThat(md.getFilePath()).isNull();
+  }
 }

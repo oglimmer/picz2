@@ -16,7 +16,11 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,6 +31,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 @Profile(Profiles.API)
 @RestController
@@ -140,6 +146,57 @@ public class FileController {
 
     MessageResponse response =
         MessageResponse.builder().success(true).message("Rotation queued").build();
+
+    return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+  }
+
+  /**
+   * Step one of the enhance flow (D82): ask for a preview. 202; the worker builds it, the client
+   * polls {@code GET /api/assets/{id}/status} until DONE and then fetches it below.
+   */
+  @PostMapping("/{id}/enhance-preview")
+  public ResponseEntity<MessageResponse> requestEnhancePreview(@PathVariable Long id) {
+    fileStorageService.enqueueEnhancePreview(id);
+    return ResponseEntity.status(HttpStatus.ACCEPTED)
+        .body(MessageResponse.builder().success(true).message("Preview queued").build());
+  }
+
+  /**
+   * Step two: the preview itself, a LARGE-sized JPEG, owner-only. {@code no-store} because the
+   * same URL answers differently before the job, after it, and after a decision; the client
+   * fetches it exactly once per review anyway.
+   */
+  @GetMapping("/{id}/enhance-preview")
+  public ResponseEntity<Resource> getEnhancePreview(@PathVariable Long id) {
+    ResponseInputStream<GetObjectResponse> stream = fileStorageService.openEnhancePreview(id);
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).cacheControl(CacheControl.noStore());
+    Long contentLength = stream.response().contentLength();
+    if (contentLength != null) {
+      builder.contentLength(contentLength);
+    }
+    return builder.body(new InputStreamResource(stream));
+  }
+
+  /** Declining: throw the preview away. 204 whether or not one existed. */
+  @DeleteMapping("/{id}/enhance-preview")
+  public ResponseEntity<Void> discardEnhancePreview(@PathVariable Long id) {
+    fileStorageService.discardEnhancePreview(id);
+    return ResponseEntity.noContent().build();
+  }
+
+  /**
+   * Accepting (D82), or the one-tap auto-enhance without a look (D81) — the endpoint does not
+   * care. Async like rotate: enqueues an ENHANCE job for the worker pod, which rewrites the
+   * original, rebuilds the derivatives and drops any preview. Clients poll {@code GET
+   * /api/assets/{id}/status} until DONE and then reload, because the {@code publicToken} changes.
+   */
+  @PostMapping("/{id}/enhance")
+  public ResponseEntity<MessageResponse> enhanceImage(@PathVariable Long id) {
+    fileStorageService.enhanceImage(id);
+
+    MessageResponse response =
+        MessageResponse.builder().success(true).message("Enhancement queued").build();
 
     return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
   }

@@ -465,6 +465,46 @@ extension APIClient {
         send(.post, "api/files/\(id)/rotate", completion: completion)
     }
 
+    /// Asks for the one-tap auto-enhance (D81): colours, brightness and contrast, the way the
+    /// phone's magic wand does it, applied to the stored original by the worker. Same contract as
+    /// ``rotateImageLeft(id:completion:)`` — 202 now, poll the status, then reload the list
+    /// because the `publicToken` changes. Irreversible on the server, like a rotate.
+    func enhanceImage(id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.post, "api/files/\(id)/enhance", completion: completion)
+    }
+
+    /// Step one of the enhance review (D82): the worker builds the enhanced picture at large
+    /// size and stores it beside the photo, touching nothing else. 202; poll
+    /// ``getAssetStatus(id:completion:)`` until DONE, then ``fetchEnhancePreview(id:completion:)``.
+    func requestEnhancePreview(id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.post, "api/files/\(id)/enhance-preview", completion: completion)
+    }
+
+    /// Declining: the server drops the preview. 204 whether or not one was there.
+    func discardEnhancePreview(id: Int, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        send(.delete, "api/files/\(id)/enhance-preview", completion: completion)
+    }
+
+    /// The preview bytes. Owner-only on the server, so unlike every other picture it cannot come
+    /// through the public-token image path and ``AuthenticatedImage``; it is fetched with the
+    /// account's credentials and handed over as data for a `UIImage`.
+    func fetchEnhancePreview(id: Int, completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
+        do {
+            let request = try makeRequest(.get, "api/files/\(id)/enhance-preview")
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                switch APIClient.validate(data: data, response: response, error: error) {
+                case let .success(ok):
+                    completion(.success(ok.body))
+                case let .failure(err):
+                    completion(.failure(err))
+                }
+            }
+            task.resume()
+        } catch {
+            completion(.failure(error))
+        }
+    }
+
     /// Writes the owner's caption on one photo (D69), and answers with the photo as it now is.
     ///
     /// Synchronous on the server — nothing is re-rendered — so unlike a rotate there is no

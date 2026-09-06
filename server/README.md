@@ -122,6 +122,8 @@ sequenceDiagram
 |------------------------|-----------------------------------------------------------------------------------|
 | `PROCESS`              | Full first pass: derivatives, capture date, GPS.                                  |
 | `ROTATE_LEFT`          | Turn an asset 90 degrees and rebuild derivatives.                                 |
+| `ENHANCE_PREVIEW`      | The enhance at LARGE size into `derivatives/{id}/enhance-preview.jpg`, nothing else touched (D82). |
+| `ENHANCE`              | Tonal auto-enhance of the original (D81), rebuild derivatives, drop the preview.    |
 | `REGEN_THUMBNAILS`     | Rebuild missing thumbnail / medium / large.                                       |
 | `EXTRACT_CAPTURE_DATE` | Re-read the capture date from the original.                                       |
 | `EXTRACT_GPS`          | Re-read the capture location from the original.                                   |

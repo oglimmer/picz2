@@ -19,6 +19,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -236,10 +238,148 @@ public class FileProcessingService {
    * error instead of corrupting state.
    */
   public void rotateAndReprocess(Long fileMetadataId) {
+    rewriteOriginalAndRegenerate(
+        fileMetadataId,
+        "rotate",
+        "🔄 Rotating asset {} ({}) 90° left (source={})",
+        thumbnailService::rotateImageLeft,
+        metadata -> {
+          int currentRotation = metadata.getRotation() != null ? metadata.getRotation() : 0;
+          metadata.setRotation((currentRotation + 90) % 360);
+          if (metadata.getWidth() != null && metadata.getHeight() != null) {
+            Integer oldWidth = metadata.getWidth();
+            metadata.setWidth(metadata.getHeight());
+            metadata.setHeight(oldWidth);
+          }
+        });
+  }
+
+  /**
+   * Worker-side one-tap auto-enhance (D81). Same bytes flow as {@link #rotateAndReprocess(Long)}
+   * with {@link ThumbnailService#enhanceImage(Path)} in place of the rotate: the tonal pass is
+   * purely per-pixel, so {@code rotation}, {@code width} and {@code height} stay as they are and
+   * only {@code fileSize} and {@code publicToken} move.
+   */
+  public void enhanceAndReprocess(Long fileMetadataId) {
+    rewriteOriginalAndRegenerate(
+        fileMetadataId,
+        "enhance",
+        "✨ Enhancing asset {} ({}) (source={})",
+        thumbnailService::enhanceImage,
+        // Accepting is what got us here, so the preview has served its purpose.
+        this::deleteEnhancePreviewQuietly);
+  }
+
+  /**
+   * Worker-side enhance preview (D82). Downloads the best S3-backed source, makes a LARGE-bounded
+   * JPEG copy of it, runs {@link ThumbnailService#enhanceImage(Path)} over that copy and PUTs the
+   * result to {@link StoragePaths#derivativeEnhancePreviewKey(Long)}. The asset row is leased into
+   * PROCESSING and back to DONE like every other job, so the client can wait on the usual status
+   * endpoint — but nothing else on the row moves: not the original, not the derivatives, not
+   * {@code publicToken}. Declining is a DELETE of one key.
+   *
+   * <p>Computed on the large copy rather than the original because the owner is going to look at
+   * it at screen size anyway, and because the recipe is scale-invariant in everything but the blur
+   * radii, which are relative to the image. The accepted job then runs the same recipe on the
+   * original, so what was approved is what gets applied.
+   */
+  public void buildEnhancePreview(Long fileMetadataId) {
     TransactionTemplate tx = new TransactionTemplate(transactionManager);
     FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
     if (metadata == null) {
-      log.warn("rotateAndReprocess: metadata id {} not found (deleted?)", fileMetadataId);
+      log.warn("buildEnhancePreview: metadata id {} not found (deleted?)", fileMetadataId);
+      return;
+    }
+
+    String originalName = metadata.getOriginalName();
+    Path fileStorageLocation = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+
+    if (!MimeTypePredicates.isImageFile(metadata.getMimeType())) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Cannot preview enhance of non-image asset (mime=" + metadata.getMimeType() + ")"));
+      return;
+    }
+    String sourceKey = pickRotationSource(metadata);
+    if (sourceKey == null) {
+      markFailed(
+          tx,
+          fileMetadataId,
+          new StorageException(
+              "Enhance preview has no S3-backed source for asset " + fileMetadataId));
+      return;
+    }
+
+    Path workdir = null;
+    try {
+      workdir = workdirFor(fileStorageLocation, fileMetadataId);
+      Path localSource = workdir.resolve(metadata.getStoredFilename());
+      storageFor(metadata).getToFile(sourceKey, localSource);
+
+      log.info("👀 Building enhance preview for asset {} ({})", fileMetadataId, originalName);
+      Path preview = workdir.resolve("enhance-preview.jpg");
+      if (!thumbnailService.generateLargeCopy(localSource, preview)) {
+        throw new StorageException("Could not make a large copy of " + originalName);
+      }
+      if (!thumbnailService.enhanceImage(preview)) {
+        throw new StorageException("ImageMagick enhance failed for preview of " + originalName);
+      }
+      storageFor(metadata)
+          .putFile(StoragePaths.derivativeEnhancePreviewKey(fileMetadataId), preview, "image/jpeg");
+
+      metadata.setProcessingStatus(ProcessingStatus.DONE);
+      metadata.setProcessingCompletedAt(Instant.now());
+      metadata.setProcessingError(null);
+      final FileMetadata toSave = metadata;
+      tx.executeWithoutResult(status -> metadataRepository.save(toSave));
+      log.info("✅ Enhance preview ready for asset {} ({})", fileMetadataId, originalName);
+    } catch (IOException e) {
+      log.error("I/O error building enhance preview for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } catch (Exception e) {
+      log.error("Unexpected error building enhance preview for {}", originalName, e);
+      markFailed(tx, fileMetadataId, e);
+    } finally {
+      if (workdir != null) {
+        deleteRecursive(workdir);
+      }
+    }
+  }
+
+  /** Best-effort: a preview left behind costs a few hundred KB, never a failed job. */
+  private void deleteEnhancePreviewQuietly(FileMetadata metadata) {
+    String key = StoragePaths.derivativeEnhancePreviewKey(metadata.getId());
+    try {
+      storageFor(metadata).delete(key);
+    } catch (Exception e) {
+      log.warn("Could not delete enhance preview {}: {}", key, e.getMessage());
+    }
+  }
+
+  /**
+   * The flow shared by every job that rewrites an image's stored bytes in place: lease into
+   * PROCESSING, fetch the best S3-backed source, run {@code rewrite} on the local file, PUT it back
+   * over the original (only if an original still exists — retention-purged keys are never
+   * resurrected), rebuild the three derivatives, let {@code onRewritten} adjust the metadata,
+   * refresh {@code publicToken} so viewer caches miss, and commit DONE in one short TX.
+   *
+   * @param verb what the job does, for error copy ("rotate", "enhance")
+   * @param startLog SLF4J pattern with three placeholders: asset id, original name, source
+   * @param rewrite transforms the local file in place; false means the tool failed
+   * @param onRewritten metadata changes the transform implies (rotate swaps the dimensions)
+   */
+  private void rewriteOriginalAndRegenerate(
+      Long fileMetadataId,
+      String verb,
+      String startLog,
+      Predicate<Path> rewrite,
+      Consumer<FileMetadata> onRewritten) {
+    TransactionTemplate tx = new TransactionTemplate(transactionManager);
+    FileMetadata metadata = leaseIntoProcessing(tx, fileMetadataId);
+    if (metadata == null) {
+      log.warn("{}: metadata id {} not found (deleted?)", verb, fileMetadataId);
       return;
     }
 
@@ -252,19 +392,20 @@ public class FileProcessingService {
       markFailed(
           tx,
           fileMetadataId,
-          new StorageException("Cannot rotate non-image asset (mime=" + mimeType + ")"));
+          new StorageException("Cannot " + verb + " non-image asset (mime=" + mimeType + ")"));
       return;
     }
-    // Source key for the rotation: prefer the original, then fall back through the derivative
-    // ladder for assets whose original has been purged by retention. Output is bounded by
-    // LARGE=2400px anyway, so feeding `large` produces pixel-equivalent derivatives to feeding
-    // the original — see the rationale in FileStorageService.rotateImageLeft.
+    // Source key: prefer the original, then fall back through the derivative ladder for assets
+    // whose original has been purged by retention. Output is bounded by LARGE=2400px anyway, so
+    // feeding `large` produces pixel-equivalent derivatives to feeding the original — see the
+    // rationale in FileStorageService.requireRewritableImage.
     String sourceKey = pickRotationSource(metadata);
     if (sourceKey == null) {
       markFailed(
           tx,
           fileMetadataId,
-          new StorageException("Rotate has no S3-backed source for asset " + fileMetadataId));
+          new StorageException(
+              "Cannot " + verb + ": no S3-backed source for asset " + fileMetadataId));
       return;
     }
     boolean originalRetained = sourceKey.equals(metadata.getFilePath());
@@ -275,17 +416,12 @@ public class FileProcessingService {
       Path localOriginal = workdir.resolve(metadata.getStoredFilename());
       storageFor(metadata).getToFile(sourceKey, localOriginal);
 
-      log.info(
-          "🔄 Rotating asset {} ({}) 90° left (source={})",
-          fileMetadataId,
-          originalName,
-          originalRetained ? "original" : sourceKey);
-      boolean rotated = thumbnailService.rotateImageLeft(localOriginal);
-      if (!rotated) {
-        throw new StorageException("ImageMagick rotate failed for " + originalName);
+      log.info(startLog, fileMetadataId, originalName, originalRetained ? "original" : sourceKey);
+      if (!rewrite.test(localOriginal)) {
+        throw new StorageException("ImageMagick " + verb + " failed for " + originalName);
       }
 
-      // Push the rotated bytes back to originals/ only when an original existed. If retention
+      // Push the rewritten bytes back to originals/ only when an original existed. If retention
       // already purged it, we deliberately don't recreate the key — that would resurrect bytes
       // the operator decided to drop, and would still only contain ≤2400px of pixels.
       if (originalRetained) {
@@ -293,11 +429,11 @@ public class FileProcessingService {
         try {
           metadata.setFileSize(Files.size(localOriginal));
         } catch (IOException sizeError) {
-          log.warn("Could not stat rotated original {}: {}", localOriginal, sizeError.toString());
+          log.warn("Could not stat rewritten original {}: {}", localOriginal, sizeError.toString());
         }
       }
 
-      // Regenerate thumbnails from the rotated original. Derivative keys are deterministic per
+      // Regenerate thumbnails from the rewritten original. Derivative keys are deterministic per
       // assetId, so the PUT overwrites the old derivative bytes — no separate delete needed, and
       // the byte count restarts for the same reason.
       resetDerivativeBytes(metadata);
@@ -327,13 +463,7 @@ public class FileProcessingService {
                 "image/jpeg"));
       }
 
-      int currentRotation = metadata.getRotation() != null ? metadata.getRotation() : 0;
-      metadata.setRotation((currentRotation + 90) % 360);
-      if (metadata.getWidth() != null && metadata.getHeight() != null) {
-        Integer oldWidth = metadata.getWidth();
-        metadata.setWidth(metadata.getHeight());
-        metadata.setHeight(oldWidth);
-      }
+      onRewritten.accept(metadata);
 
       // Cache-bust: the gallery URL keys off publicToken, so every viewer's browser fetches the
       // new derivative bytes after the next gallery reload instead of serving a stale image.
@@ -344,12 +474,17 @@ public class FileProcessingService {
       metadata.setProcessingError(null);
       final FileMetadata toSave = metadata;
       tx.executeWithoutResult(status -> metadataRepository.save(toSave));
-      log.info("✅ Rotated asset {} ({}) → {}°", fileMetadataId, originalName, toSave.getRotation());
+      log.info(
+          "✅ {} done for asset {} ({}, rotation {}°)",
+          verb,
+          fileMetadataId,
+          originalName,
+          toSave.getRotation());
     } catch (IOException e) {
-      log.error("I/O error rotating file {}", originalName, e);
+      log.error("I/O error in {} for file {}", verb, originalName, e);
       markFailed(tx, fileMetadataId, e);
     } catch (Exception e) {
-      log.error("Unexpected error rotating file {}", originalName, e);
+      log.error("Unexpected error in {} for file {}", verb, originalName, e);
       markFailed(tx, fileMetadataId, e);
     } finally {
       if (workdir != null) {

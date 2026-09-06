@@ -553,7 +553,7 @@ The prefix layout below is the same in every backend:
 | Prefix              | Contents                                              | Owner / writer                                |
 | ------------------- | ----------------------------------------------------- | --------------------------------------------- |
 | `originals/`        | Full-resolution upload (or post-HEIC-conversion JPEG) | api `storeFile` + `registerTusUpload`         |
-| `derivatives/{id}/` | `thumb.jpg`, `medium.jpg`, `large.jpg`, `transcoded.mp4`, `video_thumb.jpg` | worker `processFile` / `regenerateThumbnails` / `rotateAndReprocess` |
+| `derivatives/{id}/` | `thumb.jpg`, `medium.jpg`, `large.jpg`, `transcoded.mp4`, `video_thumb.jpg`, transient `enhance-preview.jpg` (D82, not in any row; skipped by the admin orphan sweep) | worker `processFile` / `regenerateThumbnails` / `rotateAndReprocess` / `enhanceAndReprocess` |
 | `audio/`            | Slideshow soundtracks (re-encoded)                    | api `SlideshowRecordingService`               |
 | `tus-uploads/`      | tusd's per-upload staging objects                     | tusd; cleaned by post-finish hook + retention sweep |
 

@@ -55,6 +55,12 @@ public class VipsThumbnailService {
     return result;
   }
 
+  /** One size only — the large one — for callers that need a bounded copy and not the set. */
+  public boolean generateLarge(Path originalFile, Path destination) {
+    destination.getParent().toFile().mkdirs();
+    return runOne(originalFile, destination, ThumbnailSize.LARGE);
+  }
+
   private boolean runOne(Path src, Path dst, ThumbnailSize size) {
     int quality = (int) (size.getJpegQuality() * 100);
     String dim = size.getMaxWidth() + "x" + size.getMaxHeight();
