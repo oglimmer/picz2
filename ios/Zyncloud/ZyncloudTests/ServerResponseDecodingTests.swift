@@ -123,6 +123,32 @@ struct ServerResponseDecodingTests {
         #expect(without.caption == nil)
     }
 
+    /// The enhance mark (D83). Absent on every photo the job never ran on, and on every row that
+    /// predates the column, so both shapes have to decode — and `isEnhanced` is what the grid
+    /// badge and the bulk filter both read, so it is checked rather than the raw string alone.
+    @Test func decodesTheEnhancedMark() throws {
+        let enhanced = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7,
+          "enhancedAt": "2026-09-06T09:12:00Z"
+        }
+        """)
+        #expect(enhanced.enhancedAt == "2026-09-06T09:12:00Z")
+        #expect(enhanced.isEnhanced)
+
+        let never = try decode(FileInfo.self, """
+        {
+          "id": 31, "originalName": "IMG_0001.HEIC", "publicToken": "t",
+          "size": 2048, "uploadedAt": "2024-06-01T10:00:00Z",
+          "tags": [], "albumId": 7
+        }
+        """)
+        #expect(never.enhancedAt == nil)
+        #expect(!never.isEnhanced)
+    }
+
     /// The four fields the "By Day & Place" shelving reads. Their names have to match
     /// `FileInfo.java` exactly — a typo here would silently put every photo in one nameless
     /// place on the wrong day.

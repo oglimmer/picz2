@@ -126,6 +126,15 @@ public class FileMetadata {
   @Column(name = "rotation", nullable = false)
   private Integer rotation = 0;
 
+  /**
+   * When the ENHANCE job (D81) last rewrote this asset's original, or null when it never has
+   * (D83). Enhance is destructive and compounds on itself, so both clients read this to mark the
+   * asset and to keep a bulk enhance off it. Stamped by the worker inside the TX that commits the
+   * rewrite. Rows enhanced before V53 stay null — that history was never recorded.
+   */
+  @Column(name = "enhanced_at")
+  private Instant enhancedAt;
+
   @Column(name = "display_order", nullable = false)
   private Integer displayOrder = 0;
 

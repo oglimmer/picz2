@@ -266,8 +266,13 @@ public class FileProcessingService {
         "enhance",
         "✨ Enhancing asset {} ({}) (source={})",
         thumbnailService::enhanceImage,
-        // Accepting is what got us here, so the preview has served its purpose.
-        this::deleteEnhancePreviewQuietly);
+        metadata -> {
+          // D83: stamped in the same TX that commits the rewrite, so the mark can never claim an
+          // enhance that did not land. Both clients read it to keep a bulk enhance off this asset.
+          metadata.setEnhancedAt(Instant.now());
+          // Accepting is what got us here, so the preview has served its purpose.
+          deleteEnhancePreviewQuietly(metadata);
+        });
   }
 
   /**

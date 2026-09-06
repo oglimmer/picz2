@@ -105,6 +105,29 @@
           <path d="M8 5v14l11-7z" />
         </svg>
       </div>
+      <!-- D83: enhance rewrites the stored original and compounds on itself, so the one photo it
+           already ran on has to look different from the ones it has not. -->
+      <span
+        v-if="file.enhancedAt"
+        class="enhanced-badge"
+        :title="enhancedTitle"
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M15 4l1.2 2.8L19 8l-2.8 1.2L15 12l-1.2-2.8L11 8l2.8-1.2z" />
+          <path d="M6 12l.9 2.1L9 15l-2.1.9L6 18l-.9-2.1L3 15l2.1-.9z" />
+          <path d="M18 15l.6 1.4L20 17l-1.4.6L18 19l-.6-1.4L16 17l1.4-.6z" />
+        </svg>
+        <span>Enhanced</span>
+      </span>
       <label
         v-if="bulkSelect"
         class="select-checkbox-overlay"
@@ -126,7 +149,7 @@
         <button
           v-if="!isVideoFile && canRotate"
           class="tile-btn"
-          title="Enhance colors, brightness and contrast"
+          :title="file.enhancedAt ? enhancedTitle : 'Enhance colors, brightness and contrast'"
           @click.stop="$emit('enhance', file.id)"
         >
           <svg
@@ -456,6 +479,13 @@ const fileSize = computed(() => formatBytes(props.file.size))
 const fileDate = computed(() => formatDate(props.file.uploadedAt))
 const exifDate = computed(() => props.file.exifDateTimeOriginal ? formatDate(props.file.exifDateTimeOriginal) : null)
 const uploadedTitle = computed(() => fileDate.value ? `Uploaded ${fileDate.value}` : '')
+
+// D83. Serves both the corner badge and the tile button, so the same sentence explains the mark
+// and warns the finger that is about to run it a second time.
+const enhancedTitle = computed(() => {
+  const when = props.file.enhancedAt ? formatDate(props.file.enhancedAt) : ''
+  return `Already enhanced${when ? ` (${when})` : ''} — enhancing again builds on that result`
+})
 
 // Mirrors MAX_CAPTION_LENGTH in FileStorageService — the textarea stops typing at the same
 // point the server would reject, so nobody writes a paragraph and loses it on Save.

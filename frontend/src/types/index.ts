@@ -129,6 +129,10 @@ export interface AlbumFile {
   // next morning for anyone browsing from Europe.
   captureUtcOffsetSeconds?: number | null;
   rotation?: number;
+  // ISO timestamp of the last auto-enhance (D83), absent or null when the photo was never
+  // enhanced. Enhance rewrites the stored original and compounds on itself, so the UI marks an
+  // enhanced photo and leaves it out of a bulk enhance.
+  enhancedAt?: string | null;
   // Free text the album owner wrote about this photo (D69). Shown to public visitors in the
   // grid and in the lightbox. Absent or empty means the photo has no caption.
   caption?: string | null;
