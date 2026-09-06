@@ -45,6 +45,16 @@ public class FfmpegService {
    */
   private static final long TRANSCODE_TIMEOUT_MINUTES = 40;
 
+  /**
+   * Encoder threads for {@link #transcodeVideo(Path, Path)}.
+   *
+   * <p>ffmpeg sizes x264's thread pool from the host's core count, not from the cgroup — a 4-core
+   * node gives it about six threads against a 1500m CPU limit. The cgroup then throttles the lot
+   * every period, so the extra threads buy no throughput and cost context switches and one set of
+   * frame buffers each. Two matches the limit with room for the muxer.
+   */
+  private static final String TRANSCODE_THREADS = "2";
+
   private static final long THUMBNAIL_TIMEOUT_SECONDS = 60;
   private static final long PROBE_TIMEOUT_SECONDS = 30;
   private static final String TAG_CREATION_TIME = "creation_time";
@@ -97,6 +107,11 @@ public class FfmpegService {
             // reach the old footprint again. Quality cost at this bitrate is negligible.
             "-x264-params",
             "rc-lookahead=20",
+            // Match the pod's CPU limit rather than the node's core count — see
+            // TRANSCODE_THREADS. Also caps the per-thread frame buffers, which is the other
+            // half of the memory story alongside rc-lookahead.
+            "-threads",
+            TRANSCODE_THREADS,
             "-preset",
             "medium",
             "-c:a",

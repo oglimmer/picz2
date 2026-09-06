@@ -25,6 +25,7 @@ import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
+import com.oglimmer.photoupload.config.JobsProperties;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
@@ -74,7 +75,9 @@ class FileStorageServiceCaptionTest {
             Mockito.mock(JobEnqueueService.class),
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            Mockito.mock(ObjectStorageService.class));
+            Mockito.mock(ObjectStorageService.class),
+            Mockito.mock(JobQueueDepthService.class),
+            new JobsProperties());
 
     user = new User();
     user.setId(1L);

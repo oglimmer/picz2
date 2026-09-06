@@ -23,6 +23,7 @@ import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.BackendStorage;
+import com.oglimmer.photoupload.config.JobsProperties;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
@@ -83,7 +84,9 @@ class FileStorageServiceOwnershipTest {
             Mockito.mock(JobEnqueueService.class),
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            storage);
+            storage,
+            Mockito.mock(JobQueueDepthService.class),
+            new JobsProperties());
   }
 
   @Test

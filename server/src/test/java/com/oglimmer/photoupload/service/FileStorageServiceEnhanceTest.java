@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -26,6 +27,8 @@ import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.BackendStorage;
+import com.oglimmer.photoupload.config.JobsProperties;
+import com.oglimmer.photoupload.exception.JobQueueSaturatedException;
 import java.nio.file.Path;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +51,7 @@ class FileStorageServiceEnhanceTest {
 
   private FileMetadataRepository metaRepo;
   private JobEnqueueService jobs;
+  private JobQueueDepthService queueDepth;
   private BackendStorage bucket;
   private FileStorageService svc;
 
@@ -59,6 +63,7 @@ class FileStorageServiceEnhanceTest {
     metaRepo = Mockito.mock(FileMetadataRepository.class);
     jobs = Mockito.mock(JobEnqueueService.class);
     bucket = Mockito.mock(BackendStorage.class);
+    queueDepth = Mockito.mock(JobQueueDepthService.class);
     ObjectStorageService storage = Mockito.mock(ObjectStorageService.class);
     when(storage.forFile(any())).thenReturn(bucket);
     UserContext userContext = Mockito.mock(UserContext.class);
@@ -87,7 +92,46 @@ class FileStorageServiceEnhanceTest {
             jobs,
             Mockito.mock(SystemTagProvisioner.class),
             Mockito.mock(StorageQuotaService.class),
-            storage);
+            storage,
+            queueDepth,
+            new JobsProperties());
+  }
+
+  /**
+   * Backpressure on the re-processing paths (2026-09-06). A bulk enhance over a large album used
+   * to enqueue a job per photo with nothing in the way — the ingest paths had a guard on this
+   * same threshold since Phase 4, these did not. Refusing is safe here in a way it is not for an
+   * upload: the asset keeps the derivatives it already has.
+   */
+  @Test
+  void enhanceIsRefusedWhenTheQueueIsAtTheThreshold() {
+    ownImage();
+    when(queueDepth.getDepth()).thenReturn(200L);
+
+    assertThatThrownBy(() -> svc.enhanceImage(OWN_FILE))
+        .isInstanceOf(JobQueueSaturatedException.class);
+    Mockito.verifyNoInteractions(jobs);
+  }
+
+  @Test
+  void enhancePreviewIsRefusedWhenTheQueueIsAtTheThreshold() {
+    ownImage();
+    when(queueDepth.getDepth()).thenReturn(500L);
+
+    assertThatThrownBy(() -> svc.enqueueEnhancePreview(OWN_FILE))
+        .isInstanceOf(JobQueueSaturatedException.class);
+    Mockito.verifyNoInteractions(jobs);
+  }
+
+  /** One under the threshold still goes through — the guard is >=, not >. */
+  @Test
+  void enhanceGoesThroughJustBelowTheThreshold() {
+    ownImage();
+    when(queueDepth.getDepth()).thenReturn(199L);
+
+    svc.enhanceImage(OWN_FILE);
+
+    Mockito.verify(jobs).enqueue(OWN_FILE, JobType.ENHANCE);
   }
 
   private FileMetadata ownImage() {

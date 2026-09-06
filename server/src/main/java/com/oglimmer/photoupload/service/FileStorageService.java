@@ -2,6 +2,7 @@
 package com.oglimmer.photoupload.service;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
@@ -14,6 +15,7 @@ import com.oglimmer.photoupload.entity.SystemTags;
 import com.oglimmer.photoupload.entity.Tag;
 import com.oglimmer.photoupload.entity.User;
 import com.oglimmer.photoupload.exception.DuplicateResourceException;
+import com.oglimmer.photoupload.exception.JobQueueSaturatedException;
 import com.oglimmer.photoupload.exception.ResourceGoneException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.StorageException;
@@ -131,6 +133,11 @@ public class FileStorageService {
   private final JobEnqueueService jobEnqueueService;
   private final SystemTagProvisioner systemTagProvisioner;
   private final StorageQuotaService storageQuotaService;
+  // Backpressure for the re-processing paths (rotate / enhance / regen). The ingest paths have
+  // had their own guard since Phase 4 — UploadBackpressureFilter for POST /api/upload and the
+  // TUS pre-create hook — but nothing stood between a bulk action and the queue.
+  private final JobQueueDepthService queueDepthService;
+  private final JobsProperties jobsProperties;
   // The upload path PUTs the body to the album's backend and stores the object key in file_path;
   // local disk is only Spring's transient .multipart-tmp staging (D77).
   private final ObjectStorageService objectStorage;
@@ -151,7 +158,9 @@ public class FileStorageService {
       JobEnqueueService jobEnqueueService,
       SystemTagProvisioner systemTagProvisioner,
       StorageQuotaService storageQuotaService,
-      ObjectStorageService objectStorage) {
+      ObjectStorageService objectStorage,
+      JobQueueDepthService queueDepthService,
+      JobsProperties jobsProperties) {
     this.properties = properties;
     this.metadataRepository = metadataRepository;
     this.tagRepository = tagRepository;
@@ -169,6 +178,8 @@ public class FileStorageService {
     this.systemTagProvisioner = systemTagProvisioner;
     this.storageQuotaService = storageQuotaService;
     this.objectStorage = objectStorage;
+    this.queueDepthService = queueDepthService;
+    this.jobsProperties = jobsProperties;
   }
 
   @PostConstruct
@@ -1626,7 +1637,34 @@ public class FileStorageService {
    * job in the same unit of work, so the dispatcher never sees a queued job for an asset whose row
    * still says DONE.
    */
+  /**
+   * Refuse to pile more work onto a queue that is already at the backpressure threshold.
+   *
+   * <p>Guards the re-processing jobs only — the ones a user asks for on assets that are already
+   * stored. Rejecting one costs nothing: the asset keeps its current derivatives and the client
+   * can retry. The ingest jobs are deliberately not guarded here, because by the time a PROCESS
+   * job is enqueued the bytes are already in object storage and refusing would strand an asset
+   * with no derivatives at all — those paths refuse earlier instead, before the body is read
+   * ({@code UploadBackpressureFilter}) or before tusd allocates the upload ({@code
+   * TusHookService.handlePreCreate}), against this same threshold.
+   *
+   * <p>What this stops is the stampede: one bulk enhance or rotate over a large album used to
+   * enqueue a job per photo in a single click, and each of those pulls the original onto a
+   * worker's local disk. Two workers cope with the queue; the nodes under them did not
+   * (incident 2026-09-06).
+   */
+  private void requireQueueHeadroom(JobType jobType) {
+    int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();
+    long depth = queueDepthService.getDepth();
+    if (depth >= threshold) {
+      log.info("Rejecting {} — queue depth {} >= threshold {}", jobType, depth, threshold);
+      throw new JobQueueSaturatedException(
+          "Job queue depth " + depth + " is at the threshold of " + threshold);
+    }
+  }
+
   private void resetAndEnqueue(Long fileId, JobType jobType) {
+    requireQueueHeadroom(jobType);
     FileMetadata locked =
         metadataRepository
             .findById(fileId)

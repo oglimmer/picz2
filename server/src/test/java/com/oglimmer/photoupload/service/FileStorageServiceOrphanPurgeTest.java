@@ -20,6 +20,7 @@ import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.BackendStorage;
+import com.oglimmer.photoupload.config.JobsProperties;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.mockito.Mockito;
 
 /**
  * The orphan sweep decides what to delete from a set of keys the DB knows about. It used to build
@@ -85,7 +87,9 @@ class FileStorageServiceOrphanPurgeTest {
             mock(JobEnqueueService.class),
             mock(SystemTagProvisioner.class),
             mock(StorageQuotaService.class),
-            storage);
+            storage,
+            Mockito.mock(JobQueueDepthService.class),
+            new JobsProperties());
   }
 
   @Test
