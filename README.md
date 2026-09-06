@@ -90,7 +90,7 @@ Storage is per album (D59). `storage_backends` holds one credential-free system-
 The previous generation (`picz-api` / `picz-web`, repo `../picz`) still runs in the same
 cluster. **[`bin/migrate-v1.md`](bin/migrate-v1.md)** is the runbook for moving one account's
 albums and photos across. It was **run in full on 2026-09-07**: 3459 photos in 19 albums, all
-`DONE`, date and GPS backfilled. See **D66**.
+`DONE`, date, GPS and 268 captions backfilled. See **D66**.
 
 ## License
 

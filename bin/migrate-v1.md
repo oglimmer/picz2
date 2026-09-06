@@ -32,6 +32,8 @@ different `--email`, provided a v2 account with that address exists first.
   [Why two phases](#why-two-phases)).
 - Photo order within an album: v1's `order_no` (an epoch-ms sort key) becomes v2's
   0-based `display_order`.
+- **Per-photo captions** — `album_element.description` becomes `file_metadata.caption`,
+  in its own phase (see [Captions](#4-captions)).
 
 The object v1 keeps at `s3://picz-images-bucket/images/<filename>` (AWS, `eu-central-1`)
 becomes the v2 *original* at `originals/<stored_filename>` in the cluster MinIO bucket
@@ -48,7 +50,6 @@ cannot recover better pixels than v1 itself can serve. 3448 JPEG, 11 PNG.
 | --- | --- | --- |
 | `SECTION` elements | 182 | v2's nearest equivalent is `presentation_groups`, which is anchored to a *tag* and to a starting image. There is no faithful mapping. |
 | `MAP` elements | 68 | v2 has no per-image map element. It has a per-*album* saved map view (`albums.map_center_lat` …) driven by real GPS. |
-| Per-photo captions | 268 | `album_element.description` has no counterpart — `file_metadata` carries no caption column. |
 | v1 `small/` renditions | — | The worker rebuilds thumb/medium/large; copying v1's would waste the space twice. |
 | The album `New Album` (v1 id 259) | 1 | Empty. Pass `--include-empty-albums` to carry it anyway. |
 | Share links | — | Each migrated album gets a fresh 64-hex `share_token`. Old `secret_id` links die with v1. |
@@ -169,6 +170,22 @@ bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase finalize
 It refuses to run while rows are still processing. `--force` does the finished ones anyway,
 which is safe — the remaining ones are picked up by a later re-run.
 
+### 4. Captions
+
+```bash
+bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase captions --dry-run
+bash bin/migrate-v1-run.sh --email oglimmer@gmail.com --phase captions
+```
+
+Copies `album_element.description` into `file_metadata.caption` (**D69**). Unlike date and
+GPS this has **no ordering constraint** — nothing in v2 writes `caption`, so no PROCESS job
+can overwrite it, and the phase may run at any time after upload.
+
+It touches only rows whose `caption` is still NULL, so **a caption typed in v2 always beats
+the v1 text** and a re-run writes 0. Blank v1 descriptions are normalised to NULL, matching
+`FileStorageService.updateCaption`. A description longer than the API's 2000-character cap is
+reported and skipped, never truncated — none of this account's were.
+
 ## Verifying
 
 ```sql
@@ -195,6 +212,9 @@ DELETE FROM albums WHERE user_id = 1 AND id NOT IN (SELECT DISTINCT album_id FRO
 
 The second statement is blunt — it would also take any *other* empty album the user owns.
 Name the ids explicitly instead if that matters.
+
+A caption backfill is undone with `UPDATE file_metadata SET caption = NULL WHERE content_id
+LIKE 'piczv1:%'` — but that also clears any caption typed in v2 on a migrated photo.
 
 **v1 is never written to.** The script only reads `picz_prod` and `picz-images-bucket`, so a
 failed migration costs nothing on the v1 side and the old deployment keeps serving.
@@ -244,10 +264,10 @@ bigger pictures, so do not size a future run from the first chunk alone.
 `width` and `height` stay `NULL` on the migrated rows — they are `NULL` on all 3155
 pre-existing v2 rows too. Nothing in v2 populates those columns.
 
+**Captions followed on 2026-09-07.** 268 written, longest 213 characters, none over the cap.
+269 migrated rows now carry a caption — the extra one was typed in v2 during the smoke test
+and was left untouched, as the phase intends.
+
 ### Still open
 
-- **The 268 per-photo captions were dropped.** They were an accepted loss because
-  `file_metadata` had no caption column. **D69** added one. `album_element.description` could
-  now be backfilled onto the migrated rows through the same `content_id` marker — the data is
-  still in `picz_prod`, and v1 is never written to, so nothing was lost by migrating first.
 - Verify a few albums in the web client and on iOS before retiring the v1 deployment.
