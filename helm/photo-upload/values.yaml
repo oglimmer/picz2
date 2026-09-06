@@ -134,6 +134,21 @@ worker:
   # leaving the worker unschedulable. Anti-affinity tracks MinIO/MariaDB wherever they move.
   #
   # The CPU limit above is the primary control; this is secondary hardening.
+  #
+  # The third rule keeps the replicas off *each other* (added 2026-09-06). The two existing
+  # rules only steer the worker away from MinIO and MariaDB; nothing stopped both replicas
+  # landing on the same node, and on 2026-09-06 both sat on node26. Two concurrent transcodes
+  # write their originals into the workdir emptyDir, which lives on the node's root disk, and
+  # the resulting read storm evicted the page cache on an 8 GiB node with no swap: load hit
+  # 79 on 4 cores, processes piled up in D-state, and the kubelet stopped answering, so every
+  # probe on the node failed. Note this is not something the pod's 2 GiB memory limit can
+  # prevent — page cache and block IO are not charged to the container, so a worker inside its
+  # budget can still take the node down. Spreading the replicas halves the per-node footprint.
+  #
+  # This makes `replicas` bounded by the topology: of the four untainted nodes, MinIO holds one
+  # (node19) and MariaDB another (node23), so exactly two slots are left (node26, node27) and a
+  # third replica would sit Pending forever. Raising `replicas` above 2 means relaxing one of
+  # these three rules first — most likely this one, to `preferredDuringScheduling`.
   nodeSelector: {}
   tolerations: []
   affinity:
@@ -149,6 +164,11 @@ worker:
         labelSelector:
           matchLabels:
             app.kubernetes.io/name: mariadb
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: photo-upload-worker
+            app.kubernetes.io/component: worker
   # Worker-side JVM is small — actual encode RAM lives in vipsthumbnail / ffmpeg subprocesses.
   # MaxRAMPercentage=35 caps heap on the small-pod side without us tuning per-pod -Xmx by hand.
   javaOpts: "-Xmx512m -XX:MaxRAMPercentage=35.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"

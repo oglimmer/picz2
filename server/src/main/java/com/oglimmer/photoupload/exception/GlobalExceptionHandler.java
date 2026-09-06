@@ -121,6 +121,25 @@ public class GlobalExceptionHandler {
         .body(error);
   }
 
+  @ExceptionHandler(JobQueueSaturatedException.class)
+  public ResponseEntity<ErrorResponse> handleJobQueueSaturated(
+      JobQueueSaturatedException ex, HttpServletRequest request) {
+    // WARN, not ERROR, for the same reason as the breaker above: a full queue is the system
+    // working as designed under load, not a fault.
+    log.warn("Job queue saturated for {}: {}", request.getRequestURI(), ex.getMessage());
+
+    ErrorResponse error =
+        ErrorResponse.of(
+            HttpStatus.SERVICE_UNAVAILABLE.value(),
+            "Service Unavailable",
+            "Server is currently busy processing earlier work. Please retry shortly.",
+            request.getRequestURI());
+
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header("Retry-After", "30")
+        .body(error);
+  }
+
   @ExceptionHandler(FileProcessingException.class)
   public ResponseEntity<ErrorResponse> handleFileProcessingException(
       FileProcessingException ex, HttpServletRequest request) {
