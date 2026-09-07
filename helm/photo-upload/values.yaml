@@ -98,7 +98,7 @@ worker:
     # Same image as backend; tag falls through to backend.image.tag if left blank.
     repository: registry.oglimmer.com/picz2-be
     pullPolicy: Always
-    tag: ""
+    tag: "@sha256:871118a505e4a4b9fc80d3d5765415af5ac3090ddc954bf0f07ca80ed30cfb1f"
   # Worker pods drain processing_jobs. Each pod has Semaphore(1) and heif-convert is
   # effectively single-threaded, so a pod plateaus near 0.8 cores no matter how high its CPU
   # limit is — replica count, not the limit, is the throughput knob (per D22).
