@@ -337,16 +337,56 @@ private func leaderCluster(_ points: [LatLng], radius: Double) -> [Cluster] {
 
 // MARK: - The grouping itself
 
+/// Gives every text card (D86) the day and the place of the photo it sits in front of.
+///
+/// A card carries no date and no coordinates of its own — it was written, not taken — so without
+/// this it lands in the trailing "unknown day" section and in the "no place recorded" bucket, far
+/// from the chapter it introduces. A card means "the pictures after this one", so the entry it
+/// belongs beside is the next actual picture: the same one it already borrows its blurred
+/// background from.
+///
+/// Copies are returned rather than the rows being changed: the borrowed date is a fact about
+/// where the card is *shelved*, not about the card, and writing it onto the row would leak into
+/// the map, where a card would grow a pin.
+///
+/// A card at the end of the album, or one followed only by other cards, has nothing to inherit
+/// and keeps the trailing bucket — the honest answer, since no chapter follows it.
+func withInheritedDayAndPlace(_ photos: [Photo]) -> [Photo] {
+    var result = photos
+    // Walked backwards so a run of cards all reach the same photo in one pass.
+    var next: Photo?
+    for index in photos.indices.reversed() {
+        guard photos[index].isTextCard else {
+            next = photos[index]
+            continue
+        }
+        guard let next else { continue }
+        // The neighbour's capture instant, resolved the way `captureInstant` resolves one: its
+        // EXIF date, or its upload time when the camera left none. Written into the one field so
+        // the web app can follow the identical rule.
+        result[index].exifDateTimeOriginal = next.exifDateTimeOriginal ?? next.uploadedAt
+        result[index].captureUtcOffsetSeconds = next.captureUtcOffsetSeconds
+        result[index].gpsLatitude = next.gpsLatitude
+        result[index].gpsLongitude = next.gpsLongitude
+    }
+    return result
+}
+
 /// Splits photos into day sections, each split again into places of at most `radiusMeters`.
 ///
 /// Days, the places inside a day, and the photos inside a place all keep the order they had in
 /// `photos` (the album's own order): the grouping re-shelves the album, it does not re-sort it.
 /// Photos with no usable date land in a trailing "unknown" day; photos with no coordinates land
-/// in a trailing bucket of their own day.
+/// in a trailing bucket of their own day. Text cards borrow both from the photo they introduce —
+/// see ``withInheritedDayAndPlace(_:)``.
 func groupByDayAndRegion(
-    _ photos: [Photo],
+    _ input: [Photo],
     radiusMeters: Double = defaultRegionRadiusMeters,
 ) -> [DayGroup] {
+    // D86: before anything is bucketed, every text card takes the day and place of the photo it
+    // introduces. A heading has neither of its own, and the trailing "unknown" bucket is the one
+    // place it must not end up.
+    let photos = withInheritedDayAndPlace(input)
     var order: [String] = []
     var days: [String: (date: Date?, photos: [Photo])] = [:]
     let fallbackOffsetSeconds = dominantOffsetSeconds(photos)

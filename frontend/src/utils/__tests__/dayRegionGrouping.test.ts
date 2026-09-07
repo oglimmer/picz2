@@ -5,6 +5,7 @@ import {
   formatDistance,
   groupByDayAndRegion,
   haversineMeters,
+  withInheritedDayAndPlace,
 } from "../dayRegionGrouping";
 import type { AlbumFile } from "@/types";
 
@@ -117,5 +118,79 @@ describe("labels", () => {
     expect(fileLatLng(photo({ at: MUNICH }))).toEqual({ lat: MUNICH[0], lng: MUNICH[1] });
     expect(fileLatLng(photo({}))).toBeNull();
     expect(fileLatLng(photo({ gpsLatitude: NaN, gpsLongitude: 1 }))).toBeNull();
+  });
+});
+
+describe("withInheritedDayAndPlace (D86)", () => {
+  const card = (overrides: Partial<AlbumFile> = {}) =>
+    photo({ kind: "TEXT_CARD", headline: "Day one", ...overrides });
+
+  it("gives a card the day and place of the photo after it", () => {
+    const [inherited] = withInheritedDayAndPlace([
+      card(),
+      photo({ at: MUNICH, taken: "2026-05-04T09:00:00Z", captureUtcOffsetSeconds: 7200 }),
+    ]);
+
+    expect(inherited.exifDateTimeOriginal).toBe("2026-05-04T09:00:00Z");
+    expect(inherited.captureUtcOffsetSeconds).toBe(7200);
+    expect(inherited.gpsLatitude).toBe(MUNICH[0]);
+    expect(inherited.gpsLongitude).toBe(MUNICH[1]);
+    // Still a card, still carrying its own words.
+    expect(inherited.kind).toBe("TEXT_CARD");
+    expect(inherited.headline).toBe("Day one");
+  });
+
+  it("reaches past other cards to the next picture", () => {
+    const entries = withInheritedDayAndPlace([
+      card(),
+      card(),
+      photo({ at: MUNICH, taken: "2026-05-04T09:00:00Z" }),
+    ]);
+
+    expect(entries[0].gpsLatitude).toBe(MUNICH[0]);
+    expect(entries[1].gpsLatitude).toBe(MUNICH[0]);
+  });
+
+  /**
+   * A photo with no EXIF date still has an upload time, and that is the instant `captureDate`
+   * would use for it — so it is the one the card borrows.
+   */
+  it("borrows the upload time when the camera left no date", () => {
+    const next = photo({ at: MUNICH, uploadedAt: "2026-05-04T07:30:00Z" });
+    const [inherited] = withInheritedDayAndPlace([card(), next]);
+
+    expect(inherited.exifDateTimeOriginal).toBe("2026-05-04T07:30:00Z");
+  });
+
+  it("leaves a card at the end of the album with nothing", () => {
+    const entries = withInheritedDayAndPlace([
+      photo({ at: MUNICH, taken: "2026-05-04T09:00:00Z" }),
+      card(),
+    ]);
+
+    expect(entries[1].exifDateTimeOriginal).toBeUndefined();
+    expect(entries[1].gpsLatitude).toBeUndefined();
+  });
+
+  /** The borrowed place must not reach the map: a card is not somewhere anybody stood. */
+  it("copies rather than writing on the row", () => {
+    const original = card();
+    withInheritedDayAndPlace([original, photo({ at: MUNICH, taken: "2026-05-04T09:00:00Z" })]);
+
+    expect(original.gpsLatitude).toBeUndefined();
+    expect(fileLatLng(original)).toBeNull();
+  });
+
+  it("shelves a card in the day section and place of the chapter it introduces", () => {
+    const groups = groupByDayAndRegion([
+      card(),
+      photo({ at: MUNICH, taken: "2026-05-04T09:00:00Z", captureUtcOffsetSeconds: 7200 }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).not.toBe("unknown");
+    expect(groups[0].clusters).toHaveLength(1);
+    expect(groups[0].clusters[0].located).toBe(true);
+    expect(groups[0].clusters[0].files.map((f) => f.kind)).toEqual(["TEXT_CARD", undefined]);
   });
 });

@@ -146,6 +146,7 @@
       @toggle-reorder="reorder.toggleMode"
       @tag-all="tagAll.run"
       @files-picked="upload.uploadFiles"
+      @add-text-card="openCreateTextCard"
     />
 
     <!-- A mode gets its own strip while it is on, instead of leaving its controls lying around. -->
@@ -315,7 +316,8 @@
           :group-start="Boolean(groupStartingAt(file.id, selectedTag))"
           :can-end-group="canManageGroups && Boolean(section.group)"
           :group-end="Boolean(section.group) && section.group?.endFileId === file.id"
-          @click="openLightbox"
+          :background-file="backgroundForCard(file)"
+          @click="handleTileClick"
           @start-group="groups.openCreate"
           @end-group="groups.toggleEnd(section.group, $event)"
         />
@@ -341,10 +343,12 @@
           :bulk-select="duplicates.active.value || reorder.active.value"
           :select-variant="reorder.active.value ? 'reorder' : 'delete'"
           :move-target="isMoveTarget(file.id)"
-          @click="openLightbox"
+          :background-file="backgroundForCard(file)"
+          @click="handleTileClick"
           @delete="handleDeleteFile"
           @rotate="handleRotateImage"
           @enhance="handleEnhanceImage"
+          @edit-text-card="openEditTextCard"
           @add-tag="handleAddTag"
           @update-caption="handleUpdateCaption"
           @remove-tag="handleRemoveTag"
@@ -377,10 +381,12 @@
         :bulk-select="duplicates.active.value || reorder.active.value"
         :select-variant="reorder.active.value ? 'reorder' : 'delete'"
         :move-target="isMoveTarget(file.id)"
-        @click="openLightbox"
+        :background-file="backgroundForCard(file)"
+        @click="handleTileClick"
         @delete="handleDeleteFile"
         @rotate="handleRotateImage"
         @enhance="handleEnhanceImage"
+        @edit-text-card="openEditTextCard"
         @add-tag="handleAddTag"
         @update-caption="handleUpdateCaption"
         @remove-tag="handleRemoveTag"
@@ -398,6 +404,7 @@
     <!-- Lightbox -->
     <Lightbox
       :file="selectedFile"
+      :background-file="selectedFile ? backgroundForCard(selectedFile) : null"
       :group-context="lightboxGroupContext"
       :is-recording="recording.isInRecordingMode.value"
       :is-saving="recording.savingRecording.value"
@@ -445,6 +452,17 @@
       @clear="selection.clear"
     />
 
+    <!-- Create / edit a text card (D86) -->
+    <TextCardDialog
+      :show="textCard.open.value"
+      :mode="textCard.mode.value"
+      :initial-headline="textCard.headline.value"
+      :initial-body-text="textCard.bodyText.value"
+      :saving="textCard.saving.value"
+      @save="textCard.save"
+      @close="textCard.close"
+    />
+
     <!-- Create / edit an image group -->
     <PresentationGroupDialog
       :show="groups.dialogOpen.value"
@@ -484,10 +502,11 @@ import { useDuplicateMode } from '@/composables/gallery/useDuplicateMode'
 import { useAlbumTagPicker } from '@/composables/gallery/useAlbumTagPicker'
 import { useAlbumTagAll } from '@/composables/gallery/useAlbumTagAll'
 import { useGroupEditing } from '@/composables/gallery/useGroupEditing'
+import { useTextCards } from '@/composables/gallery/useTextCards'
 import { useRecordingSession } from '@/composables/gallery/useRecordingSession'
 import { useUploadFlow } from '@/composables/gallery/useUploadFlow'
-import { formatBytes, formatDate, isVideo } from '@/utils/format'
-import { albumMapView, type MapView } from '@/types'
+import { formatBytes, formatDate, isTextCard, isVideo } from '@/utils/format'
+import { albumMapView, type AlbumFile, type MapView } from '@/types'
 import GalleryItem from '@/components/GalleryItem.vue'
 import Lightbox from '@/components/Lightbox.vue'
 import EditableTitle from '@/components/EditableTitle.vue'
@@ -501,6 +520,7 @@ import AccountMenu from '@/components/AccountMenu.vue'
 import AlbumHeader from '@/components/AlbumHeader.vue'
 import PresentationControls from '@/components/PresentationControls.vue'
 import GalleryShelf, { type ViewMode, type ViewModeOption } from '@/components/GalleryShelf.vue'
+import TextCardDialog from '@/components/TextCardDialog.vue'
 import TagPickerPanel from '@/components/TagPickerPanel.vue'
 import type { GridSize } from '@/components/GridSizePicker.vue'
 
@@ -531,6 +551,8 @@ const {
   addTag,
   removeTag,
   updateCaption,
+  createTextCard,
+  updateTextCard,
   addTagToAllFiles,
   removeTagFromAllFiles,
   reorderFiles,
@@ -722,8 +744,12 @@ const bulkBusy = ref(false)
 const bulkLabel = ref('')
 
 // Videos have no rotate or enhance job, so those bulk buttons act on the image subset only.
+// Text cards (D86) are out for the same reason and then some: they carry no pixels at all, and
+// the server refuses both jobs on one.
 const selectedRotatableIds = computed(() =>
-  files.value.filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f)).map((f) => f.id)
+  files.value
+    .filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f) && !isTextCard(f))
+    .map((f) => f.id)
 )
 
 // Bulk enhance drops what has already been enhanced (D83) on top of that. The job rewrites the
@@ -732,7 +758,13 @@ const selectedRotatableIds = computed(() =>
 // photo can still be enhanced again on purpose; that path warns instead of refusing.
 const selectedEnhanceableIds = computed(() =>
   files.value
-    .filter((f) => selection.selectedFileIds.value.has(f.id) && !isVideo(f) && !f.enhancedAt)
+    .filter(
+      (f) =>
+        selection.selectedFileIds.value.has(f.id) &&
+        !isVideo(f) &&
+        !isTextCard(f) &&
+        !f.enhancedAt
+    )
     .map((f) => f.id)
 )
 
@@ -956,6 +988,25 @@ const groups = useGroupEditing({
   deleteGroup: groupsApi.deleteGroup,
   setGroupEnd: groupsApi.setGroupEnd
 })
+
+// --- Text cards (D86) --------------------------------------------------------------------------
+const textCard = useTextCards({
+  albumId: albumIdNumber,
+  files,
+  createTextCard,
+  updateTextCard
+})
+
+const openCreateTextCard = () => textCard.openCreate()
+const openEditTextCard = (fileId: number) => textCard.openEdit(fileId)
+const backgroundForCard = (file: AlbumFile) => textCard.backgroundFor(file)
+
+/**
+ * A tap on a tile opens it full screen, card or photo — a card is a page of the album, and the
+ * lightbox draws it as one (D86). Editing a card is the pencil on the tile and "Edit text" under
+ * it, not the tile itself: one click, one meaning, and the same meaning a visitor's click has.
+ */
+const handleTileClick = (file: AlbumFile) => openLightbox(file)
 
 // --- Album head actions ------------------------------------------------------------------------
 const upload = useUploadFlow({ album, files, reloadFiles: loader.reloadFiles })

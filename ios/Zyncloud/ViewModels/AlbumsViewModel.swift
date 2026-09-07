@@ -169,6 +169,53 @@ class AlbumsViewModel: ViewModelProtocol {
         }
     }
 
+    /// The shelf with one album moved onto another album's place, or nil when the move is not a
+    /// move at all.
+    ///
+    /// Dropping a tile onto another tile means "take its place": everything from there on shifts
+    /// along. An id that is not on the shelf answers nil — the album was deleted on another device
+    /// while the drag was in flight, or the payload came from somewhere else entirely.
+    static func shelf(_ albums: [Album], moving draggedId: Int, onto targetId: Int) -> [Album]? {
+        guard draggedId != targetId,
+              let from = albums.firstIndex(where: { $0.id == draggedId }),
+              let to = albums.firstIndex(where: { $0.id == targetId })
+        else { return nil }
+
+        var moved = albums
+        let dragged = moved.remove(at: from)
+        moved.insert(dragged, at: to)
+        return moved
+    }
+
+    /// Moves one album onto another album's place and saves the whole order.
+    ///
+    /// The new order is shown at once and then sent. A refused save puts the old order back, so
+    /// the shelf never keeps an order the server did not take.
+    func moveAlbum(draggedId: Int, onto targetId: Int) {
+        guard let next = Self.shelf(albums, moving: draggedId, onto: targetId) else { return }
+
+        let previous = albums
+        albums = next
+
+        guard let apiClient else { return }
+
+        apiClient.reorderAlbums(albumIds: next.map(\.id)) { [weak self] result in
+            guard let self else { return }
+
+            Task { @MainActor in
+                switch result {
+                case let .success(albums):
+                    // The server appends any album this device had not heard of, so its answer is
+                    // the only complete picture of the new order.
+                    self.albums = albums
+                case let .failure(error):
+                    self.albums = previous
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
     /// Patches one row with a newer version of the same album.
     ///
     /// Used by the detail screen, which is pushed with a value: a publish made down there is

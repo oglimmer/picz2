@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.exception.ValidationException;
 import com.oglimmer.photoupload.model.AlbumInfo;
+import com.oglimmer.photoupload.model.AlbumReorderRequest;
 import com.oglimmer.photoupload.model.AlbumRequest;
 import com.oglimmer.photoupload.model.AlbumResponse;
 import com.oglimmer.photoupload.model.AlbumsListResponse;
@@ -75,6 +76,25 @@ public class AlbumController {
     AlbumsListResponse response = AlbumsListResponse.builder().success(true).albums(albums).build();
 
     return ResponseEntity.ok(response);
+  }
+
+  /**
+   * Stores a hand-made album order — the shelf order both clients drag tiles into.
+   *
+   * <p>Mapped on the literal {@code /reorder} rather than under an album id: the order is a
+   * property of the shelf, not of any one album. Spring prefers this over {@code PUT /{id}}, the
+   * same way {@code PUT /api/files/reorder} sits next to the per-file routes.
+   */
+  @PutMapping("/reorder")
+  public ResponseEntity<AlbumsListResponse> reorderAlbums(
+      @RequestBody AlbumReorderRequest reorderRequest) {
+    if (reorderRequest.getAlbumIds() == null || reorderRequest.getAlbumIds().isEmpty()) {
+      throw new ValidationException("Album IDs are required");
+    }
+
+    List<AlbumInfo> albums = albumService.reorderAlbums(reorderRequest.getAlbumIds());
+
+    return ResponseEntity.ok(AlbumsListResponse.builder().success(true).albums(albums).build());
   }
 
   @GetMapping("/{id}")

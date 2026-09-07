@@ -45,6 +45,11 @@ struct Album: Codable, Identifiable, Hashable {
     /// fetching the whole backend list.
     var storageBackendName: String?
 
+    /// When the album's cover photo was taken: the cover's EXIF date, or its upload time when the
+    /// camera left none. Nil while the album holds no image. Server-decided, so the shelf shows a
+    /// date without loading a single file row. Optional `var` for the reason the fields above are.
+    var coverImageDate: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -64,6 +69,7 @@ struct Album: Codable, Identifiable, Hashable {
         case publishedAt
         case storageBackendId
         case storageBackendName
+        case coverImageDate
     }
 
     /// Computed property for backwards compatibility
@@ -76,6 +82,13 @@ struct Album: Codable, Identifiable, Hashable {
     /// public.
     var isPublished: Bool {
         published ?? true
+    }
+
+    /// The cover photo's date as a `Date`, or nil when the album has no image or the server sent
+    /// something unparseable. Uses the shared ``ISO8601`` parser, which tries both shapes the
+    /// server writes (with and without fractional seconds).
+    var coverDate: Date? {
+        ISO8601.parse(coverImageDate)
     }
 
     /// The framing the owner saved for this album's map, or nil to fit every pin.

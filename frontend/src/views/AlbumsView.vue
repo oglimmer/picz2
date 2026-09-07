@@ -125,6 +125,10 @@
           class="shelf-dot"
         >·</span><strong>{{ totalFrames.toLocaleString() }}</strong>&nbsp;{{ totalFrames === 1 ? 'frame' : 'frames' }}
       </p>
+      <span
+        v-if="isLoggedIn && albums.length > 1"
+        class="shelf-hint"
+      >Drag a tile to reorder</span>
       <span class="shelf-rule" />
       <div class="shelf-controls">
         <GridSizePicker v-model="albumSize" />
@@ -334,9 +338,17 @@
         :can-duplicate="isLoggedIn"
         :is-deleting="deletingAlbumId === album.id"
         :is-upload-target="album.id === targetAlbumId"
+        :is-draggable="isLoggedIn"
+        :dragging="shelfOrder.draggingIndex.value === idx"
+        :drag-over="shelfOrder.dragOverIndex.value === idx"
         @click="handleOpenAlbum(album)"
         @delete="handleDeleteAlbum"
         @duplicate="handleDuplicateAlbum"
+        @drag-start="(e) => shelfOrder.onDragStart(e, idx)"
+        @drag-over="(e) => shelfOrder.onDragOver(e, idx)"
+        @drag-enter="(e) => shelfOrder.onDragEnter(e, idx)"
+        @drop="(e) => shelfOrder.onDrop(e, idx)"
+        @drag-end="shelfOrder.onDragEnd"
       />
     </div>
   </div>
@@ -347,6 +359,7 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { useAlbums } from '../composables/useAlbums'
+import { useAlbumShelfOrder } from '../composables/useAlbumShelfOrder'
 import { useTags } from '../composables/useTags'
 import { useSettings } from '../composables/useSettings'
 import { useNotifications } from '../composables/useNotifications'
@@ -362,13 +375,19 @@ import type { Album } from '@/types'
 
 const router = useRouter()
 const { isLoggedIn, isAdmin } = useAuth()
-const { albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum } = useAlbums()
+const {
+  albums, loading, error, loadAlbums, createAlbum, deleteAlbum, duplicateAlbum, reorderAlbums
+} = useAlbums()
 const { availableTags, loadTags } = useTags()
 const { backends: storageBackends, loadBackends } = useStorageBackends()
 const { targetAlbumId, loadTargetAlbum, updateTargetAlbum, clearTargetAlbum } = useSettings()
 const { error: showError, info, success: showSuccess, removeNotification } = useNotifications()
 const deletingAlbumId = ref<number | null>(null)
 const { confirm: confirmDialog } = useConfirm()
+
+// The shelf order the owner drags the tiles into. Saved on every drop, so there is no
+// "save order" button to forget.
+const shelfOrder = useAlbumShelfOrder({ albums, reorderAlbums, reloadAlbums: loadAlbums })
 
 const albumSize = ref<GridSize>((localStorage.getItem('albumGridSize') as GridSize) || 'small')
 watch(albumSize, v => localStorage.setItem('albumGridSize', v))

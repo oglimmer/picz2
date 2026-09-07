@@ -408,16 +408,17 @@ extension AlbumDetailViewModel {
         isSelecting = true
     }
 
-    /// Whether Rotate and Enhance have anything to work on. Videos take neither, so a selection
-    /// of only videos leaves both buttons off rather than failing on every one of them.
+    /// Whether Rotate and Enhance have anything to work on. Videos take neither, and text cards
+    /// (D86) have no pixels at all, so a selection of only those leaves both buttons off rather
+    /// than failing on every one of them.
     var selectionHasRotatablePhoto: Bool {
-        selectedPhotos.contains { !$0.isVideo }
+        selectedPhotos.contains { !$0.isVideo && !$0.isTextCard }
     }
 
     /// How many of the picked photos Rotate will touch — the number the confirmation names, so it
     /// is never larger than what happens.
     var selectedStillCount: Int {
-        selectedPhotos.filter { !$0.isVideo }.count
+        selectedPhotos.filter { !$0.isVideo && !$0.isTextCard }.count
     }
 
     /// The picked photos a bulk Enhance will touch: the stills, minus the ones it has already run
@@ -426,7 +427,8 @@ extension AlbumDetailViewModel {
     /// without a preview, so nobody sees the damage until afterwards. A single photo can still be
     /// enhanced twice on purpose; that path goes through the look-first review.
     var selectedEnhanceablePhotos: [Photo] {
-        selectedPhotos.filter { !$0.isVideo && !$0.isEnhanced }
+        // Text cards (D86) drop out with the videos — no pixels, nothing to enhance.
+        selectedPhotos.filter { !$0.isVideo && !$0.isTextCard && !$0.isEnhanced }
     }
 
     var selectedEnhanceableCount: Int { selectedEnhanceablePhotos.count }

@@ -120,6 +120,16 @@ struct AlbumDetailView: View {
     /// reason as `taggingPhoto`: the sheet has to outlive the grid cell it was opened from.
     @State private var captioningPhoto: Photo?
 
+    /// The text card being written (D86), or nil when no card sheet is up.
+    ///
+    /// Two pieces of state rather than one optional, because "new card" and "no card" are both
+    /// nil: ``isAddingTextCard`` opens the sheet with empty fields, ``editingTextCard`` opens it
+    /// on an existing card. Raised to this screen for the same reason as ``captioningPhoto`` —
+    /// the sheet has to outlive the grid cell it was opened from.
+    @State private var isAddingTextCard = false
+
+    @State private var editingTextCard: Photo?
+
     /// True while the tag sheet for the picked photos is up.
     @State private var isBulkTagPresented = false
 
@@ -299,6 +309,12 @@ struct AlbumDetailView: View {
             }
             .sheet(item: $captioningPhoto) { photo in
                 PhotoCaptionView(photo: photo, viewModel: viewModel)
+            }
+            .sheet(isPresented: $isAddingTextCard) {
+                TextCardEditView(card: nil, viewModel: viewModel)
+            }
+            .sheet(item: $editingTextCard) { card in
+                TextCardEditView(card: card, viewModel: viewModel)
             }
             .sheet(isPresented: $isBulkTagPresented) {
                 BulkTagView(viewModel: viewModel)
@@ -555,6 +571,14 @@ struct AlbumDetailView: View {
             }
             .disabled(viewModel.photos.isEmpty)
 
+            // D86. Next to Present rather than on the "+" button: the "+" is the photo picker,
+            // and a chapter heading is written, not picked.
+            Button {
+                isAddingTextCard = true
+            } label: {
+                Label("Add Text Card", systemImage: "text.alignleft")
+            }
+
             Button {
                 isAlbumTagsPresented = true
             } label: {
@@ -674,6 +698,7 @@ struct AlbumDetailView: View {
             onCaption: { captioningPhoto = photo },
             onEnhance: { enhanceReview = viewModel.makeEnhanceReview(for: [photo]) },
             onBeginSelecting: { viewModel.beginSelecting(with: photo) },
+            onEditTextCard: { editingTextCard = photo },
         )
     }
 
@@ -851,7 +876,11 @@ struct PhotoArrangeRow: View {
             ZStack {
                 Rectangle().fill(Color.black)
 
-                if let thumbnailURL = viewModel.thumbnailURL(for: photo) {
+                // D86: a text card has no thumbnail at any size, so asking for one would put a
+                // red "Failed" icon on the very row the user is dragging into place.
+                if photo.isTextCard {
+                    Image(systemName: "text.alignleft").foregroundColor(.white)
+                } else if let thumbnailURL = viewModel.thumbnailURL(for: photo) {
                     AuthenticatedImage(url: thumbnailURL)
                         .scaledToFill()
                 } else {
@@ -868,7 +897,8 @@ struct PhotoArrangeRow: View {
             .clipped()
             .cornerRadius(4)
 
-            Text(photo.filename ?? photo.originalName)
+            // The headline for a card: its stored filename is a UUID nobody can arrange by.
+            Text(photo.isTextCard ? photo.cardHeadline : (photo.filename ?? photo.originalName))
                 .font(.body)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -916,6 +946,9 @@ struct PhotoThumbnailView: View {
     /// to the Select button in the top bar — it is the gesture iPhone users try first.
     let onBeginSelecting: () -> Void
 
+    /// Raised like the rest: the text-card sheet (D86) outlives this cell being re-made under it.
+    let onEditTextCard: () -> Void
+
     @State private var showingFullImage = false
 
     var body: some View {
@@ -923,7 +956,16 @@ struct PhotoThumbnailView: View {
             Rectangle()
                 .fill(Color.black)
 
-            if !photo.isThumbnailReady {
+            if photo.isTextCard {
+                // D86: a card has no pixels of its own. It is drawn from its text over a blurred
+                // copy of the photo that follows it in the grid.
+                TextCardTileView(
+                    card: photo,
+                    backgroundURL: viewModel.backgroundPhoto(for: photo)
+                        .flatMap { viewModel.thumbnailURL(for: $0) },
+                    reloadToken: reloadToken,
+                )
+            } else if !photo.isThumbnailReady {
                 // Do not even ask for the picture: the server answers 202 with nothing until
                 // the worker has made the thumbnail, and a freshly uploaded photo spends its
                 // first seconds here. Asking anyway is what used to show "Failed".
@@ -941,7 +983,7 @@ struct PhotoThumbnailView: View {
                     .foregroundColor(.gray)
             }
 
-            if photo.isVideo, photo.isThumbnailReady {
+            if photo.isVideo, photo.isThumbnailReady, !photo.isTextCard {
                 Image(systemName: "play.circle.fill")
                     .font(.title)
                     .foregroundColor(.white)
@@ -973,7 +1015,7 @@ struct PhotoThumbnailView: View {
                     .tint(.white)
             }
 
-            if photo.isThumbnailReady, showsTags || hasCaption {
+            if photo.isThumbnailReady, !photo.isTextCard, showsTags || hasCaption {
                 VStack(spacing: 4) {
                     Spacer()
 
@@ -1003,6 +1045,9 @@ struct PhotoThumbnailView: View {
             if isSelecting {
                 viewModel.toggleSelection(of: photo)
             } else {
+                // A card opens full screen like a photo (D86): it is a page of the album, and
+                // the detail sheet draws it as one. Editing is "Edit Text" in the long-press
+                // menu — one tap, one meaning, the same meaning a visitor's tap has.
                 showingFullImage = true
             }
         }
@@ -1015,6 +1060,7 @@ struct PhotoThumbnailView: View {
                     onTag: onTag,
                     onCaption: onCaption,
                     onEnhance: onEnhance,
+                    onEditTextCard: onEditTextCard,
                 )
 
                 Divider()
@@ -1086,19 +1132,30 @@ struct PhotoActionButtons: View {
     /// screen — grid or detail sheet — can present one that shows.
     let onEnhance: () -> Void
 
+    /// Raised too: the text-card sheet (D86) outlives the cell it was opened from.
+    var onEditTextCard: () -> Void = {}
+
     var body: some View {
-        Button(action: onCaption) {
-            Label(
-                (photo.caption ?? "").isEmpty ? "Add Caption" : "Edit Caption",
-                systemImage: "text.bubble",
-            )
+        // D86: a card's words are the card. Everything that acts on pixels is off for one, and
+        // the caption field is off too — two rival texts on one row would be nobody's friend.
+        if photo.isTextCard {
+            Button(action: onEditTextCard) {
+                Label("Edit Text", systemImage: "text.alignleft")
+            }
+        } else {
+            Button(action: onCaption) {
+                Label(
+                    (photo.caption ?? "").isEmpty ? "Add Caption" : "Edit Caption",
+                    systemImage: "text.bubble",
+                )
+            }
         }
 
         Button(action: onTag) {
             Label("Tags", systemImage: "tag")
         }
 
-        if !photo.isVideo {
+        if !photo.isVideo, !photo.isTextCard {
             Button(action: onEnhance) {
                 // "Again" is the warning (D83): the second pass builds on the first and there is
                 // no copy of the earlier bytes. The review that follows still shows the result

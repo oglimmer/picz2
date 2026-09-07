@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.model;
 
+import com.oglimmer.photoupload.entity.AssetKind;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -36,6 +37,19 @@ public class FileInfo {
    * carry it too — it is written for the visitors, not for the owner.
    */
   private String caption;
+
+  /**
+   * What this album entry is (D86) — a photo (or video) with pixels, or a text card that carries a
+   * chapter heading instead. Derived from the stored mime type, so it is never out of step with it.
+   * The clients switch on this rather than sniffing the mime type themselves.
+   */
+  private AssetKind kind;
+
+  /** A text card's heading (D86). Null on a photo. */
+  private String headline;
+
+  /** A text card's body text (D86), or null when the card is a bare heading. */
+  private String bodyText;
 
   private Integer rotation;
 

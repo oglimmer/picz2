@@ -38,6 +38,16 @@ export interface FilesComposable {
   addTag: (fileId: number, tagName: string) => Promise<void>;
   removeTag: (fileId: number, tagName: string) => Promise<void>;
   updateCaption: (fileId: number, caption: string) => Promise<void>;
+  createTextCard: (
+    albumId: number,
+    headline: string,
+    bodyText: string,
+  ) => Promise<AlbumFile>;
+  updateTextCard: (
+    fileId: number,
+    headline: string,
+    bodyText: string,
+  ) => Promise<void>;
   addTagToAllFiles: (albumId: number, tagName: string) => Promise<number>;
   removeTagFromAllFiles: (albumId: number, tagName: string) => Promise<number>;
   reorderFiles: (fileIds: number[]) => Promise<void>;
@@ -246,6 +256,48 @@ export function useFiles(): FilesComposable {
   }
 
   /**
+   * Create a text card at the end of the album (D86) and push it onto the list.
+   *
+   * Appended locally rather than reloaded: the server puts it last in `display_order`, which is
+   * where the list already ends, and a reload would throw away an in-flight tag filter.
+   */
+  async function createTextCard(
+    albumId: number,
+    headline: string,
+    bodyText: string,
+  ): Promise<AlbumFile> {
+    const created = await requestJson<AlbumFile>(
+      `${apiUrl}/api/files/text-cards`,
+      jsonBody("POST", { albumId, headline, bodyText }),
+    );
+    files.value.push(created);
+    if (allFilesUnfiltered.value !== files.value) {
+      allFilesUnfiltered.value.push(created);
+    }
+    return created;
+  }
+
+  /**
+   * Rewrite one card's heading and body (D86). Synchronous on the server — no derivatives, no new
+   * `publicToken` — so both lists are patched in place like a caption.
+   */
+  async function updateTextCard(
+    fileId: number,
+    headline: string,
+    bodyText: string,
+  ): Promise<void> {
+    const updated = await requestJson<AlbumFile>(
+      `${apiUrl}/api/files/${fileId}/text-card`,
+      jsonBody("PUT", { headline, bodyText }),
+    );
+    patchFile(fileId, (file) => {
+      file.headline = updated.headline ?? null;
+      file.bodyText = updated.bodyText ?? null;
+      file.originalName = updated.originalName;
+    });
+  }
+
+  /**
    * Add a tag to every file in an album. Returns how many files actually changed
    * (files that already had the tag are skipped by the backend).
    */
@@ -304,6 +356,8 @@ export function useFiles(): FilesComposable {
     addTag,
     removeTag,
     updateCaption,
+    createTextCard,
+    updateTextCard,
     addTagToAllFiles,
     removeTagFromAllFiles,
     reorderFiles,

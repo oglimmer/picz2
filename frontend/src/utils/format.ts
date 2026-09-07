@@ -46,6 +46,35 @@ export function formatDate(dateString: string): string {
 }
 
 /**
+ * True for a text card (D86) — an album entry that carries a chapter heading instead of pixels.
+ *
+ * Reads the server's `kind`, not the mime type: the server derives one from the other and is the
+ * only place that decision belongs. A row with no `kind` is a photo, which is the safe way round
+ * — mistaking a photo for a card would draw text over a picture that never gets rendered.
+ */
+export function isTextCard(file: AlbumFile | { kind?: string } | null | undefined): boolean {
+  return file?.kind === "TEXT_CARD";
+}
+
+/**
+ * The photo a text card borrows its background from (D86): the next entry after `index` that is
+ * an actual picture. A card at the end of the album, or one followed only by other cards, gets
+ * nothing back and is drawn on a plain ground.
+ *
+ * Videos count. A video has a thumbnail like a photo does, and blurred out it reads the same.
+ */
+export function backgroundPhotoFor<T extends { kind?: string; publicToken?: string }>(
+  files: readonly T[],
+  index: number,
+): T | null {
+  for (let i = index + 1; i < files.length; i++) {
+    const candidate = files[i];
+    if (!isTextCard(candidate) && candidate.publicToken) return candidate;
+  }
+  return null;
+}
+
+/**
  * Check if file is a video based on mimetype
  */
 export function isVideo(file: AlbumFile | { mimetype?: string }): boolean {

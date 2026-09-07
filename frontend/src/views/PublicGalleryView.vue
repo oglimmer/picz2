@@ -145,6 +145,7 @@
       <template #default="{ file }">
         <PublicPhotoTile
           :file="file"
+          :background-file="backgroundForCard(file)"
           @open="openImage"
         />
       </template>
@@ -173,6 +174,7 @@
       <template #default="{ file }">
         <PublicPhotoTile
           :file="file"
+          :background-file="backgroundForCard(file)"
           @open="openImage"
         />
       </template>
@@ -181,6 +183,7 @@
     <!-- Lightbox -->
     <Lightbox
       :file="selectedFile"
+      :background-file="selectedFile ? backgroundForCard(selectedFile) : null"
       :group-context="lightboxGroupContext"
       :is-playing="isPlaying"
       :is-paused="isPaused"
@@ -267,6 +270,7 @@ import { usePlaybackControls } from '@/composables/usePlaybackControls'
 import { useMapViewMode } from '@/composables/useMapViewMode'
 import { useDayRegionView } from '@/composables/useDayRegionView'
 import { countTags } from '@/utils/tags'
+import { backgroundPhotoFor, isTextCard } from '@/utils/format'
 import { readCookie } from '@/utils/cookies'
 import { albumMapView, type Album, type AlbumFile } from '@/types'
 import Lightbox from '@/components/Lightbox.vue'
@@ -329,6 +333,24 @@ const files = computed(() =>
 
 const { selectedFile, open: openImage, next: navigateNext, previous: navigatePrevious } =
   useLightboxNavigation(files)
+
+/**
+ * The photo a text card (D86) is drawn over, blurred: the next actual picture after it in the
+ * list the visitor is looking at. Built as a map so a long album does not walk its own tail once
+ * per card on screen.
+ */
+const cardBackgrounds = computed(() => {
+  const map = new Map<number, AlbumFile>()
+  files.value.forEach((file, index) => {
+    if (!isTextCard(file)) return
+    const behind = backgroundPhotoFor(files.value, index)
+    if (behind) map.set(file.id, behind)
+  })
+  return map
+})
+
+const backgroundForCard = (file: AlbumFile) =>
+  isTextCard(file) ? cardBackgrounds.value.get(file.id) ?? null : null
 
 const audioPlayer = useTemplateRef<HTMLAudioElement>('audioPlayer')
 const {

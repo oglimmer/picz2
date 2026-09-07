@@ -5,6 +5,7 @@ import com.oglimmer.photoupload.config.FileStorageProperties;
 import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
+import com.oglimmer.photoupload.entity.AssetKind;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.JobType;
@@ -80,6 +81,12 @@ public class FileStorageService {
    * caption is rendered under a gallery thumbnail.
    */
   private static final int MAX_CAPTION_LENGTH = 2000;
+
+  /** D86. A card's headline is a chapter title, so it is capped where the column is. */
+  private static final int MAX_HEADLINE_LENGTH = 200;
+
+  /** D86. Same ceiling as a presentation group's body text — the two say the same kind of thing. */
+  private static final int MAX_BODY_TEXT_LENGTH = 4000;
 
   /** Why a lone {@code hidden} cannot be taken off a file by hand (D79). */
   static final String HIDDEN_IS_THE_ONLY_TAG =
@@ -655,6 +662,130 @@ public class FileStorageService {
     return convertToFileInfo(metadata);
   }
 
+  /**
+   * Create a text card in one album (D86): a row that holds a chapter heading instead of pixels.
+   *
+   * <p>It is an ordinary {@code file_metadata} row with {@link AssetKind#TEXT_CARD_MIME_TYPE} as
+   * its mime type, no {@code file_path}, no derivatives, size 0 and {@code DONE} from birth — the
+   * worker has nothing to do with it, so no job is enqueued and the client never has to poll. The
+   * mime type is what keeps it out of the thumbnail, transcode, EXIF, GPS and cover-picker paths,
+   * all of which already narrow on {@code image/%} or {@code video/%}.
+   *
+   * <p>It lands at the end of the album's order like an upload, and it gets the user's new-asset
+   * tag like an upload — which is what keeps the D79 invariant true: a card with no tag at all
+   * would be {@code hidden}, and derived-not-assigned has to hold for every row, not just photos.
+   * Nothing is metered: a card occupies no bytes, so there is no quota check to make.
+   */
+  public FileInfo createTextCard(Long albumId, String headline, String bodyText) {
+    User currentUser = userContext.getCurrentUser();
+    if (albumId == null) {
+      throw new ValidationException("An album is required for a text card");
+    }
+    requireOwnedAlbum(currentUser, albumId);
+
+    final String finalHeadline = requireHeadline(headline);
+    final String finalBodyText = normalizeBodyText(bodyText);
+
+    // Committed before the insert transaction opens, for the REPEATABLE READ reason spelled out
+    // in storeFile: a tags row this transaction cannot see fails the image_tags foreign key.
+    final String newAssetTag = currentUser.getNewAssetTag();
+    final Long newAssetTagId = ensureNewAssetTagExists(currentUser);
+
+    return transactionTemplate.execute(
+        status -> {
+          FileMetadata metadata = new FileMetadata();
+          // The headline doubles as the row's name. Every list, alt text and log line already
+          // prints originalName, and "text-card-9f2c…" would be the wrong thing to read there.
+          metadata.setOriginalName(finalHeadline);
+          metadata.setStoredFilename("text-card-" + UUID.randomUUID());
+          metadata.setFileSize(0L);
+          metadata.setMimeType(AssetKind.TEXT_CARD_MIME_TYPE);
+          metadata.setFilePath(null);
+          metadata.setUploadedAt(Instant.now());
+          metadata.setHeadline(finalHeadline);
+          metadata.setBodyText(finalBodyText);
+          // Nothing to process, ever. Left at QUEUED the clients would show a spinner that never
+          // resolves, because no job exists to move it on.
+          metadata.setProcessingStatus(ProcessingStatus.DONE);
+          metadata.setProcessingCompletedAt(Instant.now());
+
+          Album album =
+              albumRepository
+                  .findByUserAndId(currentUser, albumId)
+                  .orElseThrow(() -> new ResourceNotFoundException("Album", "id", albumId));
+          metadata.setAlbum(album);
+
+          Integer maxOrder =
+              metadataRepository.findMaxDisplayOrderByAlbumIdAndUserId(
+                  albumId, currentUser.getId());
+          metadata.setDisplayOrder(maxOrder != null ? maxOrder + 1 : 0);
+
+          FileMetadata saved = metadataRepository.save(metadata);
+          addTagRowIfMissing(saved, newAssetTagId, newAssetTag);
+          log.info(
+              "\ud83d\udcd6 Created text card {} (\"{}\") in album {} for user {}",
+              saved.getId(),
+              finalHeadline,
+              albumId,
+              currentUser.getEmail());
+          return convertToFileInfo(saved);
+        });
+  }
+
+  /**
+   * Rewrite one text card's heading and body (D86). Synchronous like a caption edit — there are no
+   * derivatives to rebuild and the {@code publicToken} does not change — so the updated row comes
+   * straight back and the client swaps it in place.
+   *
+   * <p>Refuses a photo: there is no such thing as a photo's headline, and silently accepting one
+   * would leave a row that reads as a photo but carries card text.
+   */
+  @Transactional
+  public FileInfo updateTextCard(Long fileId, String headline, String bodyText) {
+    User currentUser = userContext.getCurrentUser();
+    FileMetadata metadata =
+        metadataRepository
+            .findByIdAndUserId(fileId, currentUser.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
+
+    if (AssetKind.ofMimeType(metadata.getMimeType()) != AssetKind.TEXT_CARD) {
+      throw new ValidationException("Only a text card has a headline");
+    }
+
+    String finalHeadline = requireHeadline(headline);
+    metadata.setHeadline(finalHeadline);
+    metadata.setOriginalName(finalHeadline);
+    metadata.setBodyText(normalizeBodyText(bodyText));
+    metadataRepository.save(metadata);
+
+    return convertToFileInfo(metadata);
+  }
+
+  /** A card with no heading is nothing, so a blank one is a 400 rather than a silent empty tile. */
+  private static String requireHeadline(String headline) {
+    String normalized = headline == null ? "" : headline.strip();
+    if (normalized.isEmpty()) {
+      throw new ValidationException("A headline is required");
+    }
+    if (normalized.length() > MAX_HEADLINE_LENGTH) {
+      throw new ValidationException(
+          "Headline must be at most " + MAX_HEADLINE_LENGTH + " characters");
+    }
+    return normalized;
+  }
+
+  /** Blank means "no body", stored as null — the same rule a blank caption follows. */
+  private static String normalizeBodyText(String bodyText) {
+    if (bodyText == null || bodyText.isBlank()) {
+      return null;
+    }
+    String normalized = bodyText.strip();
+    if (normalized.length() > MAX_BODY_TEXT_LENGTH) {
+      throw new ValidationException("Text must be at most " + MAX_BODY_TEXT_LENGTH + " characters");
+    }
+    return normalized;
+  }
+
   private void validateFile(MultipartFile file) {
     if (file.isEmpty()) {
       throw new ValidationException("Cannot upload empty file");
@@ -970,10 +1101,17 @@ public class FileStorageService {
             .findByIdAndUserId(fileId, currentUser.getId())
             .orElseThrow(() -> new ResourceNotFoundException("File", "id", fileId));
 
-    // Check if physical files are shared with other FileMetadata records
-    boolean isShared = metadataRepository.countByFilePath(metadata.getFilePath()) > 1;
+    // D86: a text card owns no object at all — no original, no derivatives, and it can never
+    // have had an enhance preview. Asking S3 to delete six null-or-absent keys is pure noise.
+    boolean ownsNoBytes = AssetKind.ofMimeType(metadata.getMimeType()) == AssetKind.TEXT_CARD;
 
-    if (isShared) {
+    // Check if physical files are shared with other FileMetadata records
+    boolean isShared =
+        !ownsNoBytes && metadataRepository.countByFilePath(metadata.getFilePath()) > 1;
+
+    if (ownsNoBytes) {
+      log.debug("Text card {} has no stored objects to delete", fileId);
+    } else if (isShared) {
       log.info(
           "Skipping physical file deletion for {} — shared with other records",
           metadata.getStoredFilename());
@@ -1299,6 +1437,13 @@ public class FileStorageService {
             .findByPublicToken(publicToken)
             .orElseThrow(() -> new ResourceNotFoundException("File not found"));
 
+    // D86: a text card has no pixels at any size. Both clients draw it from its text and never
+    // ask, so this is only reachable by hand-writing the URL — and a clean 404 beats the 202 the
+    // "derivative not ready" branch below would otherwise answer forever.
+    if (AssetKind.ofMimeType(metadata.getMimeType()) == AssetKind.TEXT_CARD) {
+      throw new ResourceNotFoundException("File not found");
+    }
+
     // Determine which file to serve based on size parameter and file type
     String filePath = metadata.getFilePath(); // Default to original
     String mimeType = metadata.getMimeType(); // Default to original MIME type
@@ -1589,13 +1734,14 @@ public class FileStorageService {
         objectStorage.forFile(metadata),
         StoragePaths.derivativeEnhancePreviewKey(fileId),
         "enhance preview");
-    log.info("🗑️  Discarded enhance preview for asset {} by user {}", fileId, currentUser.getEmail());
+    log.info(
+        "🗑️  Discarded enhance preview for asset {} by user {}", fileId, currentUser.getEmail());
   }
 
   /**
    * The checks shared by every job that rewrites an image's stored bytes in place (rotate,
-   * enhance): the asset must be the caller's, must be an image, and must have some S3-backed
-   * source the worker can read.
+   * enhance): the asset must be the caller's, must be an image, and must have some S3-backed source
+   * the worker can read.
    *
    * @param verb past participle for the error copy ("rotated", "enhanced")
    */
@@ -1641,17 +1787,17 @@ public class FileStorageService {
    * Refuse to pile more work onto a queue that is already at the backpressure threshold.
    *
    * <p>Guards the re-processing jobs only — the ones a user asks for on assets that are already
-   * stored. Rejecting one costs nothing: the asset keeps its current derivatives and the client
-   * can retry. The ingest jobs are deliberately not guarded here, because by the time a PROCESS
-   * job is enqueued the bytes are already in object storage and refusing would strand an asset
-   * with no derivatives at all — those paths refuse earlier instead, before the body is read
-   * ({@code UploadBackpressureFilter}) or before tusd allocates the upload ({@code
+   * stored. Rejecting one costs nothing: the asset keeps its current derivatives and the client can
+   * retry. The ingest jobs are deliberately not guarded here, because by the time a PROCESS job is
+   * enqueued the bytes are already in object storage and refusing would strand an asset with no
+   * derivatives at all — those paths refuse earlier instead, before the body is read ({@code
+   * UploadBackpressureFilter}) or before tusd allocates the upload ({@code
    * TusHookService.handlePreCreate}), against this same threshold.
    *
    * <p>What this stops is the stampede: one bulk enhance or rotate over a large album used to
-   * enqueue a job per photo in a single click, and each of those pulls the original onto a
-   * worker's local disk. Two workers cope with the queue; the nodes under them did not
-   * (incident 2026-09-06).
+   * enqueue a job per photo in a single click, and each of those pulls the original onto a worker's
+   * local disk. Two workers cope with the queue; the nodes under them did not (incident
+   * 2026-09-06).
    */
   private void requireQueueHeadroom(JobType jobType) {
     int threshold = jobsProperties.getBackpressure().getQueueDepthThreshold();

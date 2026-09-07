@@ -4,6 +4,7 @@ package com.oglimmer.photoupload.service;
 import com.oglimmer.photoupload.config.Profiles;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.AlbumSubscription;
+import com.oglimmer.photoupload.entity.AssetKind;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
 import com.oglimmer.photoupload.entity.SystemTags;
@@ -126,6 +127,9 @@ public class AlbumSubscriptionNotificationService {
             .findByAlbumShareTokenWithTagsOrderByDisplayOrderAsc(album.getShareToken())
             .stream()
             .filter(file -> !isHidden(file))
+            // D86: a text card is a chapter heading, not a new picture. Counting one would send
+            // "1 new image" for an album whose photos have not changed.
+            .filter(file -> AssetKind.ofMimeType(file.getMimeType()) != AssetKind.TEXT_CARD)
             .toList();
 
     // Calculate visible image count at the time of last notification

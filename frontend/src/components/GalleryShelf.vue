@@ -163,6 +163,16 @@
         </template>
       </MenuButton>
 
+      <!-- D86: a chapter heading is added from the same corner as the photos, because it is the
+           same kind of act — putting something new into the album. -->
+      <button
+        class="action-link"
+        title="Add a text card: a heading that marks a chapter of this album"
+        @click="$emit('add-text-card')"
+      >
+        Add text card
+      </button>
+
       <button
         class="new-album-btn"
         title="Upload photos to this album"
@@ -248,6 +258,7 @@ const emit = defineEmits<{
   'toggle-reorder': []
   'tag-all': [mode: AlbumTagMode]
   'files-picked': [files: File[]]
+  'add-text-card': []
 }>()
 
 const fileInput = ref<HTMLInputElement | null>(null)

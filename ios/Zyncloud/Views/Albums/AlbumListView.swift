@@ -5,6 +5,20 @@ struct AlbumListView: View {
     @State private var showingCreateSheet = false
     @State private var albumToEdit: Album?
 
+    /// Whether the tiles can be dragged into a different order.
+    ///
+    /// A mode rather than something always on, because a tile carries three long-press gestures'
+    /// worth of behaviour already: tapping opens the album and a long press opens the context
+    /// menu, and a drag that starts the same way as that menu is a coin toss. While this is on the
+    /// tiles neither open nor show their menu — they only move.
+    @State private var isReordering = false
+
+    /// The tile currently under the finger, so it can be dimmed while it travels.
+    @State private var draggedAlbumId: Int?
+
+    /// The tile the dragged one would land on.
+    @State private var dropTargetAlbumId: Int?
+
     /// The link handed to the system share sheet. Owned by this screen, not by the card: a sheet
     /// presented from a context menu goes away with the menu.
     @State private var sharingLink: ShareableLink?
@@ -29,42 +43,29 @@ struct AlbumListView: View {
                 } else if viewModel.albums.isEmpty {
                     emptyStateView
                 } else {
+                    if isReordering {
+                        Text("Drag a tile onto the place it should take. Every move is saved right away.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                    }
+
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(viewModel.albums) { album in
-                            NavigationLink(destination: AlbumDetailView(
-                                album: album,
-                                onDeleted: { viewModel.albums.removeAll { $0.id == album.id } },
-                                onChanged: { viewModel.replace($0) },
-                            )) {
-                                AlbumCardView(
+                            if isReordering {
+                                reorderableTile(for: album)
+                            } else {
+                                NavigationLink(destination: AlbumDetailView(
                                     album: album,
-                                    size: gridSize,
-                                    onEdit: {
-                                        albumToEdit = album
-                                    },
-                                    onTogglePublished: {
-                                        viewModel.setPublished(id: album.id, published: !album.isPublished)
-                                    },
-                                    onShare: {
-                                        if let shareToken = album.shareToken,
-                                           let shareURL = AppConfiguration.publicAlbumURL(shareToken: shareToken)
-                                        {
-                                            sharingLink = ShareableLink(url: shareURL)
-                                        }
-                                    },
-                                    onDuplicate: {
-                                        viewModel.showDuplicateConfirmation(for: album) {
-                                            viewModel.duplicateAlbum(id: album.id)
-                                        }
-                                    },
-                                    onDelete: {
-                                        viewModel.showDeleteConfirmation(for: album) {
-                                            viewModel.deleteAlbum(id: album.id) { _ in }
-                                        }
-                                    },
-                                )
+                                    onDeleted: { viewModel.albums.removeAll { $0.id == album.id } },
+                                    onChanged: { viewModel.replace($0) },
+                                )) {
+                                    card(for: album)
+                                }
+                                .buttonStyle(PlainButtonStyle())
                             }
-                            .buttonStyle(PlainButtonStyle())
                         }
                     }
                     .padding()
@@ -79,6 +80,17 @@ struct AlbumListView: View {
                         label: { Image(systemName: "plus") },
                     )
                 }
+                // Only worth offering once there are two tiles to put in an order.
+                if viewModel.albums.count > 1 {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(isReordering ? "Done" : "Reorder") {
+                            isReordering.toggle()
+                            draggedAlbumId = nil
+                            dropTargetAlbumId = nil
+                        }
+                        .accessibilityLabel(isReordering ? "Finish reordering" : "Reorder albums")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         GridSizePicker(size: $gridSize)
@@ -86,6 +98,7 @@ struct AlbumListView: View {
                         Image(systemName: gridSize.systemImage)
                     }
                     .accessibilityLabel("Card size")
+                    .disabled(isReordering)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(
@@ -132,6 +145,71 @@ struct AlbumListView: View {
         }
     }
 
+    /// One album tile. The context menu is dropped while reordering, so the long press belongs to
+    /// the drag and nothing else.
+    private func card(for album: Album) -> some View {
+        AlbumCardView(
+            album: album,
+            size: gridSize,
+            reordering: isReordering,
+            onEdit: {
+                albumToEdit = album
+            },
+            onTogglePublished: {
+                viewModel.setPublished(id: album.id, published: !album.isPublished)
+            },
+            onShare: {
+                if let shareToken = album.shareToken,
+                   let shareURL = AppConfiguration.publicAlbumURL(shareToken: shareToken)
+                {
+                    sharingLink = ShareableLink(url: shareURL)
+                }
+            },
+            onDuplicate: {
+                viewModel.showDuplicateConfirmation(for: album) {
+                    viewModel.duplicateAlbum(id: album.id)
+                }
+            },
+            onDelete: {
+                viewModel.showDeleteConfirmation(for: album) {
+                    viewModel.deleteAlbum(id: album.id) { _ in }
+                }
+            },
+        )
+    }
+
+    /// A tile that can be picked up and dropped onto another one.
+    ///
+    /// The payload is the album id as text. Anything else dropped on the grid — a word from
+    /// another app, an id from an album that has since been deleted — fails the lookup in
+    /// ``AlbumsViewModel/moveAlbum(draggedId:onto:)`` and is ignored.
+    private func reorderableTile(for album: Album) -> some View {
+        card(for: album)
+            .opacity(draggedAlbumId == album.id ? 0.4 : 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.accentColor, lineWidth: dropTargetAlbumId == album.id ? 3 : 0),
+            )
+            .draggable(String(album.id)) {
+                // The drag preview. Not the whole card: a cover-sized image under the finger
+                // hides the row it is being dropped into.
+                Text(album.name)
+                    .font(.caption)
+                    .padding(8)
+                    .background(.thinMaterial, in: Capsule())
+                    .onAppear { draggedAlbumId = album.id }
+            }
+            .dropDestination(for: String.self) { items, _ in
+                draggedAlbumId = nil
+                dropTargetAlbumId = nil
+                guard let droppedId = items.first.flatMap(Int.init) else { return false }
+                viewModel.moveAlbum(draggedId: droppedId, onto: album.id)
+                return true
+            } isTargeted: { targeted in
+                dropTargetAlbumId = targeted ? album.id : nil
+            }
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 20) {
             Image(systemName: "photo.on.rectangle.angled")
@@ -172,6 +250,10 @@ struct AlbumCardView: View {
     /// barely bigger than its own caption — so the chrome shrinks with the card.
     let size: GridSizeMode
 
+    /// True while the shelf is being reordered. The card then shows a grip instead of offering
+    /// its context menu, so the long press starts a drag rather than a menu.
+    var reordering: Bool = false
+
     let onEdit: () -> Void
 
     /// Opens or closes public access. Kept next to Share in the menu because it is the switch
@@ -196,7 +278,16 @@ struct AlbumCardView: View {
         return components?.url
     }
 
+    @ViewBuilder
     var body: some View {
+        if reordering {
+            cardBody
+        } else {
+            cardBody.contextMenu { menuItems }
+        }
+    }
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Album cover image
             ZStack {
@@ -251,47 +342,63 @@ struct AlbumCardView: View {
                     .foregroundColor(.primary)
                     .lineLimit(1)
 
-                if let imageCount = album.imageCount {
-                    Text("\(imageCount) photo\(imageCount == 1 ? "" : "s")")
-                        .font(size == .small ? .caption2 : .caption)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("0 photos")
-                        .font(size == .small ? .caption2 : .caption)
-                        .foregroundColor(.secondary)
+                // Count and cover date on one line: a third-width tile has no room for two, and
+                // the date is dropped rather than wrapped when the album holds no image.
+                HStack(spacing: 4) {
+                    Text("\(album.imageCount ?? 0) photo\(album.imageCount == 1 ? "" : "s")")
+                    if let coverDate = album.coverDate {
+                        Text("·")
+                        Text(coverDate, format: .dateTime.day().month(.abbreviated).year())
+                    }
                 }
+                .font(size == .small ? .caption2 : .caption)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
             }
         }
         .padding(size == .small ? 6 : 12)
         .background(Color(.systemBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-        .contextMenu {
-            Button(action: onEdit) {
-                Label("Edit", systemImage: "pencil")
+        .overlay(alignment: .bottomTrailing) {
+            // Says the tile can be dragged. Only while that is true.
+            if reordering {
+                Image(systemName: "line.3.horizontal")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(6)
+                    .background(.thinMaterial, in: Circle())
+                    .padding(8)
             }
+        }
+    }
 
-            Button(action: onTogglePublished) {
-                album.isPublished
-                    ? Label("Make Private", systemImage: "eye.slash")
-                    : Label("Make Public", systemImage: "eye")
-            }
+    @ViewBuilder
+    private var menuItems: some View {
+        Button(action: onEdit) {
+            Label("Edit", systemImage: "pencil")
+        }
 
-            // Only when the link actually opens. Handing out a URL that 404s is worse than not
-            // offering to share: the owner would hear about it from whoever it failed for.
-            if album.shareToken != nil, album.isPublished {
-                Button(action: onShare) {
-                    Label("Share Link", systemImage: "square.and.arrow.up")
-                }
-            }
+        Button(action: onTogglePublished) {
+            album.isPublished
+                ? Label("Make Private", systemImage: "eye.slash")
+                : Label("Make Public", systemImage: "eye")
+        }
 
-            Button(action: onDuplicate) {
-                Label("Duplicate", systemImage: "plus.square.on.square")
+        // Only when the link actually opens. Handing out a URL that 404s is worse than not
+        // offering to share: the owner would hear about it from whoever it failed for.
+        if album.shareToken != nil, album.isPublished {
+            Button(action: onShare) {
+                Label("Share Link", systemImage: "square.and.arrow.up")
             }
+        }
 
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
-            }
+        Button(action: onDuplicate) {
+            Label("Duplicate", systemImage: "plus.square.on.square")
+        }
+
+        Button(role: .destructive, action: onDelete) {
+            Label("Delete", systemImage: "trash")
         }
     }
 }

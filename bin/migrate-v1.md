@@ -67,7 +67,7 @@ cannot recover better pixels than v1 itself can serve. 3448 JPEG, 11 PNG.
 Hence the order: upload → let the worker finish → backfill.
 
 ```
-phase upload     create albums, PUT objects, insert QUEUED rows + no_tag + PROCESS jobs
+phase upload     create albums, PUT objects, insert QUEUED rows + the `all` tag + PROCESS jobs
    ↓  (v2 worker builds thumb/medium/large)
 phase finalize   write exif_date_time_original / capture_utc_offset_seconds / gps_* from v1
 ```

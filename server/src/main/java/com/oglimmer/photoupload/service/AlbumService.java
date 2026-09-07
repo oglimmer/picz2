@@ -25,8 +25,11 @@ import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.util.RandomTokens;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -177,9 +180,48 @@ public class AlbumService {
   @Transactional(readOnly = true)
   public List<AlbumInfo> listAlbums() {
     User currentUser = userContext.getCurrentUser();
-    return albumRepository.findByUserOrderByDisplayOrderAsc(currentUser).stream()
+    return albumRepository.findByUserOrderByDisplayOrderAscIdAsc(currentUser).stream()
         .map(this::convertToAlbumInfo)
         .collect(Collectors.toList());
+  }
+
+  /**
+   * Writes a hand-made album order. {@code albumIds} are the caller's albums in the order they
+   * should be listed; each one's {@code display_order} becomes its index.
+   *
+   * <p>A partial list is allowed on purpose. A client whose list is one album out of date (another
+   * device created one meanwhile) would otherwise be told its whole drag was invalid; instead the
+   * albums it did not mention keep their relative order and follow the ones it did, so no two rows
+   * end up sharing an order. An id belonging to somebody else is reported exactly like an unknown
+   * id.
+   *
+   * <p>This bumps {@code updated_at} on every album it renumbers — reordering is an edit of the
+   * album row, and nothing reads that column as "content changed".
+   */
+  @Transactional
+  public List<AlbumInfo> reorderAlbums(List<Long> albumIds) {
+    User currentUser = userContext.getCurrentUser();
+    List<Album> owned = albumRepository.findByUserOrderByDisplayOrderAscIdAsc(currentUser);
+    Map<Long, Album> byId = owned.stream().collect(Collectors.toMap(Album::getId, album -> album));
+
+    List<Long> wanted = albumIds.stream().distinct().collect(Collectors.toList());
+    for (Long albumId : wanted) {
+      if (!byId.containsKey(albumId)) {
+        throw new ResourceNotFoundException("Album", "id", albumId);
+      }
+    }
+
+    List<Album> ordered = wanted.stream().map(byId::get).collect(Collectors.toList());
+    Set<Long> placed = new HashSet<>(wanted);
+    owned.stream().filter(album -> !placed.contains(album.getId())).forEach(ordered::add);
+
+    for (int i = 0; i < ordered.size(); i++) {
+      ordered.get(i).setDisplayOrder(i);
+    }
+    albumRepository.saveAll(ordered);
+    log.info("Reordered {} albums for user: {}", ordered.size(), currentUser.getEmail());
+
+    return ordered.stream().map(this::convertToAlbumInfo).collect(Collectors.toList());
   }
 
   @Transactional(readOnly = true)
@@ -631,6 +673,12 @@ public class AlbumService {
         c -> {
           info.setCoverImageFilename(c.getStoredFilename());
           info.setCoverImageToken(c.getPublicToken());
+          // Falls back to the upload time: a photo without EXIF (a screenshot, a scan, anything
+          // stripped by a messenger) would otherwise leave the shelf tile dateless.
+          info.setCoverImageDate(
+              c.getExifDateTimeOriginal() != null
+                  ? c.getExifDateTimeOriginal()
+                  : c.getUploadedAt());
         });
 
     return info;

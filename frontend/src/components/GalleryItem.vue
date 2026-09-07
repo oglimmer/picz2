@@ -78,8 +78,15 @@
       class="image-container"
       @click="(e) => selectionActive ? $emit('toggle-select', file.id, e.shiftKey) : $emit('click', file)"
     >
+      <!-- D86: a text card has no pixels of its own. It is drawn from its text over a blurred
+           copy of the photo that follows it, which is why the neighbour is a prop. -->
+      <TextCardTile
+        v-if="isCard"
+        :file="file"
+        :background-file="backgroundFile"
+      />
       <LazyImage
-        v-if="thumbnailReady"
+        v-else-if="thumbnailReady"
         :src="thumbnailUrl"
         :alt="file.originalName"
       />
@@ -146,8 +153,30 @@
         class="item-actions"
         @click.stop
       >
+        <!-- A card has nothing to edit or rewrite, so it gets the text button instead of the
+             two image ones. -->
         <button
-          v-if="!isVideoFile && canRotate"
+          v-if="isCard"
+          class="tile-btn"
+          title="Edit this card's heading and text"
+          @click.stop="$emit('edit-text-card', file.id)"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" />
+          </svg>
+        </button>
+        <button
+          v-if="!isCard && !isVideoFile && canRotate"
           class="tile-btn"
           :title="file.enhancedAt ? enhancedTitle : 'Enhance colors, brightness and contrast'"
           @click.stop="$emit('enhance', file.id)"
@@ -168,7 +197,7 @@
           </svg>
         </button>
         <button
-          v-if="!isVideoFile && canRotate"
+          v-if="!isCard && !isVideoFile && canRotate"
           class="tile-btn"
           title="Rotate left 90°"
           @click.stop="$emit('rotate', file.id)"
@@ -187,7 +216,7 @@
         </button>
         <button
           class="tile-btn tile-btn--danger"
-          title="Delete photo"
+          :title="isCard ? 'Delete this card' : 'Delete photo'"
           @click.stop="$emit('delete', file.id)"
         >
           <svg
@@ -264,7 +293,7 @@
          chrome, while the caption is written for the readers and has to survive presentation
          mode, where showFileInfo is false. -->
     <p
-      v-if="file.caption && !editingCaption"
+      v-if="file.caption && !editingCaption && !isCard"
       class="file-caption"
       :title="file.caption"
       @click.stop
@@ -281,14 +310,20 @@
       <!-- When a photo carries its own date, that is the one worth showing; the upload
            date stays available on hover rather than taking a second line on every tile. -->
       <div class="file-meta">
-        <span class="file-size">{{ fileSize }}</span>
+        <!-- A card occupies no bytes, and "0 Bytes" under a chapter heading reads as a fault. -->
         <span
-          v-if="exifDate"
+          v-if="!isCard"
+          class="file-size"
+        >{{ fileSize }}</span>
+        <!-- No date on a card (D86). It was written, not taken — and in the day-and-place view
+             it is handed its neighbour's date to be shelved by, which is not its own. -->
+        <span
+          v-if="!isCard && exifDate"
           class="file-exif-date"
           :title="uploadedTitle"
         >Taken {{ exifDate }}</span>
         <span
-          v-else-if="fileDate"
+          v-else-if="!isCard && fileDate"
           class="file-date"
         >{{ fileDate }}</span>
       </div>
@@ -312,7 +347,7 @@
         </span>
       </div>
       <div
-        v-if="editingCaption"
+        v-if="editingCaption && !isCard"
         class="caption-editor"
         @click.stop
       >
@@ -343,7 +378,18 @@
         </div>
       </div>
       <div class="file-actions">
+        <!-- A card's words are the card. It is edited through its own dialog, not through the
+             photo caption field, so the two never end up as rival texts on one row. -->
         <button
+          v-if="isCard"
+          class="caption-toggle"
+          title="Edit this card's heading and text"
+          @click.stop="$emit('edit-text-card', file.id)"
+        >
+          Edit text
+        </button>
+        <button
+          v-else
           class="caption-toggle"
           :title="file.caption ? 'Edit caption' : 'Add a caption'"
           @click.stop="startEditingCaption"
@@ -377,13 +423,19 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import LazyImage from '@/components/LazyImage.vue'
+import TextCardTile from '@/components/TextCardTile.vue'
 import { useApi } from '@/composables/useApi'
-import { formatBytes, formatDate, isVideo } from '@/utils/format'
+import { formatBytes, formatDate, isTextCard, isVideo } from '@/utils/format'
 import { assignableTags, isAssignableTag } from '@/utils/tags'
 import type { AlbumFile, Tag } from '@/types'
 
 interface Props {
   file: AlbumFile
+  /**
+   * For a text card only (D86): the photo it borrows its blurred background from — the next
+   * actual picture in the list. Null when the card is last, or followed only by other cards.
+   */
+  backgroundFile?: AlbumFile | null
   availableTags?: Tag[]
   isDraggable?: boolean
   showDragHandle?: boolean
@@ -407,6 +459,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  backgroundFile: null,
   availableTags: () => [],
   isDraggable: false,
   showDragHandle: true,
@@ -430,6 +483,7 @@ const emit = defineEmits<{
   delete: [fileId: number]
   rotate: [fileId: number]
   enhance: [fileId: number]
+  'edit-text-card': [fileId: number]
   'add-tag': [fileId: number, tagName: string]
   'update-caption': [fileId: number, caption: string]
   'remove-tag': [fileId: number, tagName: string]
@@ -470,6 +524,9 @@ const processingTitle = computed(() => {
   }
 })
 const isVideoFile = computed(() => isVideo(props.file))
+// D86. Everything that acts on pixels — rotate, enhance, the byte count, the caption field —
+// is off for a card, and the tile draws its text instead of a thumbnail.
+const isCard = computed(() => isTextCard(props.file))
 // Rotation and enhancement work even on assets whose original has been purged by retention — the
 // worker falls back to the largest available derivative (output is bounded by LARGE=2400px
 // regardless), so neither button is gated on originalAvailable. The flag is kept on FileInfo for

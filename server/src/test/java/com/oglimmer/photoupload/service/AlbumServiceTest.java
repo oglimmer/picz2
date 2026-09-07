@@ -64,6 +64,118 @@ class AlbumServiceTest {
     lenient().when(userContext.getCurrentUser()).thenReturn(testUser);
   }
 
+  /** An album that already sits on the shelf, at the given position. */
+  private Album shelved(long id, int displayOrder) {
+    Album album = new Album();
+    album.setId(id);
+    album.setUser(testUser);
+    album.setName("Album " + id);
+    album.setDisplayOrder(displayOrder);
+    return album;
+  }
+
+  @Test
+  void reorderAlbumsWritesTheIndexAsDisplayOrder() {
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(shelved(1L, 0), shelved(2L, 1), shelved(3L, 2))));
+
+    List<AlbumInfo> result = service.reorderAlbums(List.of(3L, 1L, 2L));
+
+    assertEquals(List.of(3L, 1L, 2L), result.stream().map(AlbumInfo::getId).toList());
+    assertEquals(List.of(0, 1, 2), result.stream().map(AlbumInfo::getDisplayOrder).toList());
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<Album>> saved = ArgumentCaptor.forClass(List.class);
+    verify(albumRepository).saveAll(saved.capture());
+    assertEquals(List.of(3L, 1L, 2L), saved.getValue().stream().map(Album::getId).toList());
+  }
+
+  /**
+   * A client one album out of date must not have its whole drag refused: the album it did not
+   * mention follows the ones it did, so no two rows end up sharing a position.
+   */
+  @Test
+  void reorderAlbumsAppendsWhateverTheClientDidNotMention() {
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(shelved(1L, 0), shelved(2L, 1), shelved(3L, 2))));
+
+    List<AlbumInfo> result = service.reorderAlbums(List.of(3L, 1L));
+
+    assertEquals(List.of(3L, 1L, 2L), result.stream().map(AlbumInfo::getId).toList());
+    assertEquals(List.of(0, 1, 2), result.stream().map(AlbumInfo::getDisplayOrder).toList());
+  }
+
+  /** Somebody else's album, or one that no longer exists — the same answer either way. */
+  @Test
+  void reorderAlbumsRejectsAnIdTheCallerDoesNotOwn() {
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(shelved(1L, 0), shelved(2L, 1))));
+
+    assertThrows(
+        ResourceNotFoundException.class, () -> service.reorderAlbums(List.of(2L, 99L, 1L)));
+    verify(albumRepository, never()).saveAll(any());
+  }
+
+  /**
+   * The shelf shows when an album is from, and the cover's EXIF date is that answer. Read off the
+   * one cover row the listing already loads, so no extra query pays for it.
+   */
+  @Test
+  void listAlbumsCarriesTheCoversExifDate() {
+    Album album = shelved(1L, 0);
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(album)));
+
+    FileMetadata cover = new FileMetadata();
+    cover.setStoredFilename("cover.jpg");
+    cover.setExifDateTimeOriginal(Instant.parse("2026-07-04T09:30:00Z"));
+    cover.setUploadedAt(Instant.parse("2026-08-01T12:00:00Z"));
+    when(fileMetadataRepository.findFirstByAlbumIdAndMimeTypeStartingWithOrderByDisplayOrderAsc(
+            1L, "image/"))
+        .thenReturn(Optional.of(cover));
+
+    List<AlbumInfo> result = service.listAlbums();
+
+    assertEquals(Instant.parse("2026-07-04T09:30:00Z"), result.get(0).getCoverImageDate());
+  }
+
+  /**
+   * A screenshot, a scan, anything a messenger stripped: no EXIF date at all. The upload time is
+   * the nearest true thing, and a dateless tile is worse than a slightly wrong one.
+   */
+  @Test
+  void listAlbumsFallsBackToTheCoversUploadTime() {
+    Album album = shelved(1L, 0);
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(album)));
+
+    FileMetadata cover = new FileMetadata();
+    cover.setStoredFilename("screenshot.png");
+    cover.setUploadedAt(Instant.parse("2026-08-01T12:00:00Z"));
+    when(fileMetadataRepository.findFirstByAlbumIdAndMimeTypeStartingWithOrderByDisplayOrderAsc(
+            1L, "image/"))
+        .thenReturn(Optional.of(cover));
+
+    List<AlbumInfo> result = service.listAlbums();
+
+    assertEquals(Instant.parse("2026-08-01T12:00:00Z"), result.get(0).getCoverImageDate());
+  }
+
+  /** An album with no image has no cover and therefore no date; the tile drops the element. */
+  @Test
+  void listAlbumsLeavesTheDateNullWithoutACover() {
+    Album album = shelved(1L, 0);
+    when(albumRepository.findByUserOrderByDisplayOrderAscIdAsc(testUser))
+        .thenReturn(new ArrayList<>(List.of(album)));
+    when(fileMetadataRepository.findFirstByAlbumIdAndMimeTypeStartingWithOrderByDisplayOrderAsc(
+            1L, "image/"))
+        .thenReturn(Optional.empty());
+
+    List<AlbumInfo> result = service.listAlbums();
+
+    assertNull(result.get(0).getCoverImageDate());
+  }
+
   @Test
   void createAlbumGeneratesTokenAndOrder() {
     // No backend id in the request means the instance's own storage — the row V44 seeds.

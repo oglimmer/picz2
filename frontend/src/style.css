@@ -991,6 +991,62 @@ body.landing-page .app-footer { display: none; }
 
 /* Same corner as the "Receiving" pill, and they never appear together: an unpublished album is
    not somewhere the phone is told to upload. */
+/* The grip only announces that the tile can be dragged — the whole tile is the handle. Bottom
+   right, because top left and top right already carry the Private/Receiving badges and the
+   duplicate/delete buttons. Shown on hover so a still shelf stays quiet. */
+.tile-grip {
+  position: absolute;
+  bottom: var(--sp-3);
+  right: var(--sp-3);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: var(--r-full);
+  background: rgba(250,247,242,.92);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: var(--c-text-3);
+  opacity: 0;
+  transition: opacity var(--t-mid);
+  pointer-events: none;
+}
+.album-tile:hover .tile-grip { opacity: 1; }
+
+.album-tile.dragging {
+  cursor: grabbing;
+}
+.album-tile.dragging .tile-frame {
+  opacity: .4;
+  box-shadow: var(--sh-lg);
+  transform: scale(.97);
+}
+/* Where the tile would land: a dashed box over the slot it would take. Drawn as a pseudo-element
+   so it sits above the cover image, and with no pointer events of its own — a drop target that
+   swallows dragover events stops being a drop target. */
+.album-tile.drag-over .tile-frame::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  z-index: 9;
+  border: 2px dashed var(--c-accent);
+  border-radius: calc(var(--r-lg) - 5px);
+  background: rgba(196,98,45,.14);
+  pointer-events: none;
+}
+.album-tile.drag-over .tile-frame {
+  box-shadow: 0 0 0 3px rgba(196,98,45,.22), var(--sh-lg);
+  transform: translateY(-4px);
+}
+
+.shelf-hint {
+  flex: none;
+  font-size: .6875rem;
+  letter-spacing: .04em;
+  color: var(--c-text-3);
+  white-space: nowrap;
+}
+
 .tile-private {
   position: absolute;
   top: var(--sp-3);
@@ -3169,6 +3225,76 @@ body.landing-dark { background: #0B1D2E; }
   display: block;
 }
 
+/* === TEXT CARD, FULL SCREEN (D86) ===
+   The chapter page. Same words as the tile, over the same blurred neighbour, at a size meant to
+   be read. A framed plate rather than an edge-to-edge wash, so it still reads as one page of the
+   album sitting in the same frame the photos sit in. */
+.lightbox-card {
+  position: relative;
+  width: 92vw;
+  max-width: 900px;
+  height: 92vh;
+  max-height: 620px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  box-shadow: 0 24px 80px rgba(0,0,0,.6);
+  cursor: pointer;
+  /* The ground for a card with nothing after it to borrow from. */
+  background: linear-gradient(140deg, #4A3A2C 0%, #241812 100%);
+}
+/* Overrides `.lightbox img`, which caps every image in here to the viewport — this one is a
+   background and has to fill its plate instead. */
+.lightbox-card__bg {
+  position: absolute;
+  /* Bled out past the edges: `filter: blur()` samples nothing outside the element, so an
+     un-inset image blurs to a pale rim all the way round the plate. */
+  inset: -10%;
+  width: 120%;
+  height: 120%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 0;
+  box-shadow: none;
+  filter: blur(26px) saturate(1.15);
+  transform: scale(1.06);
+}
+.lightbox-card__veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20,11,5,.42) 0%, rgba(20,11,5,.68) 100%);
+}
+.lightbox-card__body {
+  position: relative;
+  z-index: 1;
+  padding: var(--sp-10) var(--sp-8);
+  max-width: 42rem;
+  text-align: center;
+}
+.lightbox-card__headline {
+  font-family: var(--f-display);
+  font-size: clamp(1.6rem, 5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.01em;
+  color: #fff;
+  text-shadow: 0 2px 20px rgba(0,0,0,.5);
+}
+.lightbox-card__text {
+  margin-top: var(--sp-5);
+  font-size: clamp(.95rem, 1.7vw, 1.125rem);
+  line-height: 1.7;
+  color: rgba(255,255,255,.93);
+  text-shadow: 0 1px 12px rgba(0,0,0,.45);
+  /* No clamp here, unlike the tile: this is the one place the whole text is meant to be read,
+     and the plate scrolls if a long one needs the room. */
+  overflow-y: auto;
+  max-height: 55vh;
+}
+
 .close-lightbox {
   position: absolute;
   top: var(--sp-5);
@@ -3470,6 +3596,77 @@ body.landing-dark { background: #0B1D2E; }
   display: block;
 }
 .gallery-item:hover .image-container img { transform: scale(1.03); }
+
+/* === TEXT CARD (D86) ===
+   A chapter heading that occupies a tile instead of a photo. It fills `.image-container`, so it
+   inherits the same aspect ratio as every other tile and the grid cannot notice the difference.
+
+   The background is the next photo, blurred well past recognition and scaled up so the blur has
+   no soft edge to give itself away. A dark veil goes over it because the text has to stay
+   readable on top of a picture nobody chose for its contrast. */
+.text-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* The fallback ground for a card with nothing after it. Warm, not grey — a plain grey square
+     would read as a broken image. */
+  background: linear-gradient(140deg, var(--c-surface-alt) 0%, #E6D8C6 100%);
+}
+.text-card__bg {
+  position: absolute;
+  /* Bled out past the edges: `filter: blur()` samples nothing outside the element, so an
+     un-inset image blurs to a pale rim all the way round the tile. */
+  inset: -12%;
+  width: 124%;
+  height: 124%;
+  object-fit: cover;
+  filter: blur(18px) saturate(1.15);
+  transform: scale(1.08);
+}
+.text-card__veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(30,17,8,.34) 0%, rgba(30,17,8,.62) 100%);
+}
+.text-card__body {
+  position: relative;
+  z-index: 1;
+  padding: var(--sp-4);
+  text-align: center;
+  max-width: 100%;
+}
+.text-card__headline {
+  font-family: var(--f-display);
+  font-size: clamp(1rem, 2.2vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.2;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0,0,0,.45);
+  /* Three lines and then stop. A tile is a fixed square: a headline allowed to grow would push
+     its own body text out of the tile rather than get more room. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.text-card__text {
+  margin-top: var(--sp-2);
+  font-size: .8rem;
+  line-height: 1.45;
+  color: rgba(255,255,255,.92);
+  text-shadow: 0 1px 6px rgba(0,0,0,.4);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* A card has no picture to zoom, so it does not get the hover scale the photo tiles get. */
+.gallery-item:hover .text-card__bg { transform: scale(1.08); }
 
 /* Lazy thumbnail: a shimmering block holds the tile until the bytes arrive, so a fast scroll
    lands on "these are coming" rather than on empty squares. See LazyImage.vue for why the

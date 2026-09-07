@@ -20,6 +20,11 @@ public class AlbumInfo {
   private Integer fileCount;
   private String coverImageFilename; // Filename of cover image (first photo in album)
   private String coverImageToken; // Public token of cover image
+
+  // When the cover photo was taken: the cover's EXIF DateTimeOriginal, or its upload time when
+  // the camera left no date. Null only while the album holds no image. The album shelf shows it,
+  // so it answers "when is this album from" without loading a single file row in the client.
+  private Instant coverImageDate;
   private String shareToken; // Public share token for accessing album
 
   // Whether the share link is live. Owner-facing only: the public share-token response never

@@ -30,6 +30,9 @@ struct PhotoDetailView: View {
     /// True while this photo's caption editor is up, stacked on top of this sheet.
     @State private var isCaptioning = false
 
+    /// True while a text card's editor (D86) is up, stacked on top of this sheet.
+    @State private var isEditingTextCard = false
+
     /// The enhance review (D82), presented from this sheet: a cover presented by the album
     /// screen underneath would never show while this sheet is up.
     @State private var enhanceReview: EnhanceReviewSession?
@@ -46,7 +49,15 @@ struct PhotoDetailView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if !photo.isThumbnailReady {
+                if photo.isTextCard {
+                    // D86: read full screen, a card is the chapter page. Same view the
+                    // presentation pager uses, so the owner sees what a visitor sees.
+                    TextCardSlideView(
+                        card: photo,
+                        backgroundURL: viewModel.backgroundPhoto(for: photo)
+                            .flatMap { viewModel.fullImageURL(for: $0) },
+                    )
+                } else if !photo.isThumbnailReady {
                     ProcessingPlaceholder(
                         label: photo.processingFailed
                             ? "The server could not process this file."
@@ -92,7 +103,8 @@ struct PhotoDetailView: View {
                 // nor tags keeps the whole screen for the picture.
                 if !(photo.caption ?? "").isEmpty || !photo.tags.isEmpty {
                     VStack(spacing: 0) {
-                        if let caption = photo.caption, !caption.isEmpty {
+                        // A card is not captioned (D86) — its words are already the page.
+                        if let caption = photo.caption, !caption.isEmpty, !photo.isTextCard {
                             captionBar(caption)
                         }
                         if !photo.tags.isEmpty {
@@ -101,7 +113,7 @@ struct PhotoDetailView: View {
                     }
                 }
             }
-            .navigationTitle(photo.filename ?? photo.originalName)
+            .navigationTitle(photo.isTextCard ? photo.cardHeadline : (photo.filename ?? photo.originalName))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -113,6 +125,7 @@ struct PhotoDetailView: View {
                             onTag: { isTagging = true },
                             onCaption: { isCaptioning = true },
                             onEnhance: { enhanceReview = viewModel.makeEnhanceReview(for: [photo]) },
+                            onEditTextCard: { isEditingTextCard = true },
                         )
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -132,13 +145,16 @@ struct PhotoDetailView: View {
             .sheet(isPresented: $isCaptioning) {
                 PhotoCaptionView(photo: photo, viewModel: viewModel)
             }
+            .sheet(isPresented: $isEditingTextCard) {
+                TextCardEditView(card: photo, viewModel: viewModel)
+            }
             .fullScreenCover(item: $enhanceReview) { session in
                 EnhanceReviewView(session: session, viewModel: viewModel) { accepted in
                     viewModel.applyEnhance(to: accepted)
                 }
             }
             .confirmationDialog(
-                "Delete photo",
+                photo.isTextCard ? "Delete card" : "Delete photo",
                 isPresented: $confirmingDelete,
                 titleVisibility: .visible,
             ) {
@@ -150,7 +166,9 @@ struct PhotoDetailView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This removes the photo from your server for good. It cannot be undone.")
+                Text(photo.isTextCard
+                    ? "This removes the card from the album for good. It cannot be undone."
+                    : "This removes the photo from your server for good. It cannot be undone.")
             }
         }
     }

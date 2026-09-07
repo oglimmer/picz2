@@ -471,12 +471,81 @@ class AlbumDetailViewModel: ViewModelProtocol {
         }
     }
 
+    // MARK: - Text Cards (D86)
+
+    /// Adds a text card at the end of the album and appends it to the grid.
+    ///
+    /// Appended rather than reloaded: the server puts it last in `display_order`, which is where
+    /// the list already ends, and a reload would throw away an in-flight tag filter.
+    func createTextCard(headline: String, bodyText: String) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.createTextCard(albumId: album.id, headline: headline, bodyText: bodyText) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(created):
+                    self.photos.append(created)
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    /// Rewrites one card's heading and body. Patched in place like a caption: the server changes
+    /// no bytes and no `publicToken`, so there is nothing to re-fetch.
+    func updateTextCard(headline: String, bodyText: String, on card: Photo) {
+        guard let apiClient else {
+            alertState = AlertState(
+                title: "Error",
+                message: "Not authenticated. Please log in again.",
+            )
+            return
+        }
+
+        apiClient.updateTextCard(id: card.id, headline: headline, bodyText: bodyText) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case let .success(updated):
+                    if let index = self.photos.firstIndex(where: { $0.id == card.id }) {
+                        self.photos[index].headline = updated.headline
+                        self.photos[index].bodyText = updated.bodyText
+                    }
+                case let .failure(error):
+                    self.handleError(error)
+                }
+            }
+        }
+    }
+
+    /// The photo one text card is drawn over, blurred: the next actual picture after it in the
+    /// grid's own order. Nil for a card that is last, or followed only by other cards.
+    ///
+    /// Worked out from ``photos`` rather than stored on the card, because "next" is a property of
+    /// the list and changes on every reorder and every tag filter.
+    func backgroundPhoto(for card: Photo) -> Photo? {
+        guard card.isTextCard, let index = photos.firstIndex(where: { $0.id == card.id }) else {
+            return nil
+        }
+        return photos[(index + 1)...].first { !$0.isTextCard }
+    }
+
     // MARK: - Bulk Actions
 
     /// Rotates every picked still photo 90° left. Videos in the selection are skipped rather
     /// than reported, because the bar's button already says it only applies to photos.
     func rotateSelection() {
-        rewrite(ids: selectedPhotos.filter { !$0.isVideo }.map(\.id), job: .rotateLeft)
+        // Text cards (D86) go out with the videos: they carry no pixels at all, and the server
+        // refuses both jobs on one.
+        rewrite(ids: selectedPhotos.filter { !$0.isVideo && !$0.isTextCard }.map(\.id), job: .rotateLeft)
     }
 
     /// Enhances every picked still photo straight away — no preview, no accept. The look-first

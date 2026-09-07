@@ -84,13 +84,41 @@
       </button>
     </div>
     <div
-      v-if="isLoading && !isVideoFile"
+      v-if="isLoading && !isVideoFile && !isCard"
       class="loading-indicator"
     >
       <div class="spinner" />
     </div>
+    <!-- A text card (D86) read full screen: the chapter page. Same words as the tile, over the
+         same blurred neighbour, at a size meant to be read rather than glanced at. Clicking it
+         moves on like clicking a photo does — it is a page in the album, not a dialog. -->
+    <div
+      v-if="isCard"
+      class="lightbox-card"
+      @click.stop="$emit('next')"
+    >
+      <img
+        v-if="cardBackgroundUrl"
+        class="lightbox-card__bg"
+        :src="cardBackgroundUrl"
+        alt=""
+        aria-hidden="true"
+      >
+      <span class="lightbox-card__veil" />
+      <div class="lightbox-card__body">
+        <h2 class="lightbox-card__headline">
+          {{ file.headline || file.originalName }}
+        </h2>
+        <p
+          v-if="file.bodyText"
+          class="lightbox-card__text"
+        >
+          {{ file.bodyText }}
+        </p>
+      </div>
+    </div>
     <video
-      v-if="isVideoFile"
+      v-else-if="isVideoFile"
       :src="mediaUrl"
       :muted="shouldMuteVideo"
       controls
@@ -135,12 +163,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useApi } from '@/composables/useApi'
-import { isVideo } from '@/utils/format'
+import { isTextCard, isVideo } from '@/utils/format'
 import type { AlbumFile } from '@/types'
 import type { GroupContext } from '@/composables/usePresentationGroups'
 
 interface Props {
   file: AlbumFile | null
+  /**
+   * When `file` is a text card (D86): the photo it borrows its blurred background from. Handed
+   * in by the surrounding gallery, which is the only thing that knows what follows the card.
+   */
+  backgroundFile?: AlbumFile | null
   isRecording?: boolean
   isSaving?: boolean
   isPlaying?: boolean
@@ -151,6 +184,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  backgroundFile: null,
   isRecording: false,
   isSaving: false,
   isPlaying: false,
@@ -175,6 +209,15 @@ const captionExpanded = ref(false)
 const groupHintDismissed = ref(false)
 
 const isVideoFile = computed(() => (props.file ? isVideo(props.file) : false))
+
+// D86. A card has no pixels at any size, so nothing here may ask the image route for it.
+const isCard = computed(() => isTextCard(props.file))
+
+// `medium`, not `thumb`: this fills the whole viewport, and a 200 px thumbnail blown up to
+// 1400 px shows its own blockiness through the blur.
+const cardBackgroundUrl = computed(() =>
+  props.backgroundFile ? getImageUrl(props.backgroundFile, 'medium') : ''
+)
 
 // Whether the toggle is worth drawing at all. A character count rather than a measured height:
 // the plate's width varies with the viewport, so any exact answer would need a resize observer

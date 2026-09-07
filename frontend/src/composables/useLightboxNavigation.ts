@@ -34,6 +34,9 @@ export function useLightboxNavigation(
     if (direction === 1 && currentIndex === last) info("Starting over");
     if (direction === -1 && currentIndex === 0) info("Jumped to the end");
 
+    // Text cards (D86) are stepped onto like anything else: the lightbox draws one as a
+    // full-screen chapter page, so a reader working through an album zoomed in meets its
+    // headings where they belong instead of only in the grid they came from.
     const nextFile = files.value[(currentIndex + direction + files.value.length) % files.value.length];
     selectedFile.value = nextFile;
     onChange?.(nextFile);

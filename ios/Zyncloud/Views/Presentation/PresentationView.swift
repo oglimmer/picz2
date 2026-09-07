@@ -503,7 +503,16 @@ struct PresentationTile: View {
             Rectangle()
                 .fill(Color.black)
 
-            if !photo.isThumbnailReady {
+            if photo.isTextCard {
+                // D86: read the same way as in the album — a chapter heading over a blurred copy
+                // of the photo that follows it.
+                TextCardTileView(
+                    card: photo,
+                    backgroundURL: viewModel.backgroundPhoto(for: photo)
+                        .flatMap { AssetURLs.thumbnail(for: $0) },
+                    reloadToken: 0,
+                )
+            } else if !photo.isThumbnailReady {
                 ProcessingPlaceholder(
                     label: photo.processingFailed ? "Failed" : "Processing…",
                     isFailure: photo.processingFailed,
@@ -518,7 +527,7 @@ struct PresentationTile: View {
                     .foregroundColor(.gray)
             }
 
-            if photo.isVideo, photo.isThumbnailReady {
+            if photo.isVideo, photo.isThumbnailReady, !photo.isTextCard {
                 Image(systemName: "play.circle.fill")
                     .font(.title)
                     .foregroundColor(.white)

@@ -49,7 +49,9 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 MARKER = "piczv1:"
-NO_TAG = "no_tag"
+# The tag every registered asset carries (D68). This used to be `no_tag`, which V46 retired --
+# a run against a current database re-created the dead marker and left 3453 photos wearing it.
+NEW_ASSET_TAG = "all"
 ORIGINALS_PREFIX = "originals/"
 SYSTEM_STORAGE_BACKEND_ID = 1
 
@@ -146,10 +148,12 @@ def v1_user_ids(v1, email):
     return ids
 
 
-def ensure_no_tag(v2, user_id, dry_run):
+def ensure_new_asset_tag(v2, user_id, dry_run):
+    """The user's `all` row, created if this account has none yet. See D55 for why it is
+    committed before the per-asset transactions open."""
     with v2.cursor() as cur:
         cur.execute(
-            "SELECT id FROM tags WHERE user_id = %s AND name = %s", (user_id, NO_TAG)
+            "SELECT id FROM tags WHERE user_id = %s AND name = %s", (user_id, NEW_ASSET_TAG)
         )
         row = cur.fetchone()
         if row:
@@ -158,11 +162,11 @@ def ensure_no_tag(v2, user_id, dry_run):
             return None
         cur.execute(
             "INSERT INTO tags (user_id, name, created_at) VALUES (%s, %s, UTC_TIMESTAMP(6))",
-            (user_id, NO_TAG),
+            (user_id, NEW_ASSET_TAG),
         )
         tag_id = cur.lastrowid
     v2.commit()
-    print(f"  created '{NO_TAG}' tag id={tag_id} for user {user_id}")
+    print(f"  created '{NEW_ASSET_TAG}' tag id={tag_id} for user {user_id}")
     return tag_id
 
 
@@ -215,7 +219,7 @@ def phase_upload(args, v1, v2, src, dst):
     v1_uids = v1_user_ids(v1, args.email)
     print(f"v1 user ids {v1_uids} -> v2 user id {v2_uid}")
 
-    no_tag_id = ensure_no_tag(v2, v2_uid, args.dry_run)
+    new_asset_tag_id = ensure_new_asset_tag(v2, v2_uid, args.dry_run)
 
     with v1.cursor() as cur:
         cur.execute(
@@ -324,7 +328,7 @@ def phase_upload(args, v1, v2, src, dst):
                 cur.execute(
                     "INSERT INTO image_tags (file_metadata_id, tag_id, tagged_at) "
                     "VALUES (%s, %s, UTC_TIMESTAMP(6))",
-                    (asset_id, no_tag_id),
+                    (asset_id, new_asset_tag_id),
                 )
                 cur.execute(
                     """INSERT INTO processing_jobs

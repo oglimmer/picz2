@@ -123,14 +123,31 @@ public class FileMetadata {
   @Column(name = "caption", columnDefinition = "TEXT")
   private String caption;
 
+  /**
+   * A text card's heading (D86), or null on a photo. Required on a card — a card with no headline
+   * is nothing — and capped at 200 characters because it is a chapter title, not a paragraph.
+   *
+   * <p>Kept apart from {@link #caption}: a caption belongs to a picture, and sharing the column
+   * would put a card's text into the photo caption editor and back out again.
+   */
+  @Column(name = "headline", length = 200)
+  private String headline;
+
+  /**
+   * A text card's body (D86), or null when the card is a bare heading. Optional by design: many
+   * chapters need a title and nothing else.
+   */
+  @Column(name = "body_text", columnDefinition = "TEXT")
+  private String bodyText;
+
   @Column(name = "rotation", nullable = false)
   private Integer rotation = 0;
 
   /**
-   * When the ENHANCE job (D81) last rewrote this asset's original, or null when it never has
-   * (D83). Enhance is destructive and compounds on itself, so both clients read this to mark the
-   * asset and to keep a bulk enhance off it. Stamped by the worker inside the TX that commits the
-   * rewrite. Rows enhanced before V53 stay null — that history was never recorded.
+   * When the ENHANCE job (D81) last rewrote this asset's original, or null when it never has (D83).
+   * Enhance is destructive and compounds on itself, so both clients read this to mark the asset and
+   * to keep a bulk enhance off it. Stamped by the worker inside the TX that commits the rewrite.
+   * Rows enhanced before V53 stay null — that history was never recorded.
    */
   @Column(name = "enhanced_at")
   private Instant enhancedAt;

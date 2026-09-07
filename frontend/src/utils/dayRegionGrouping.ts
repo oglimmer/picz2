@@ -1,3 +1,4 @@
+import { isTextCard } from "@/utils/format";
 import type { AlbumFile } from "@/types";
 
 /**
@@ -307,17 +308,65 @@ function centroid(points: LatLng[]): LatLng {
 }
 
 /**
+ * Gives every text card (D86) the day and the place of the photo it sits in front of.
+ *
+ * A card carries no date and no coordinates of its own — it was written, not taken — so without
+ * this it lands in the trailing "unknown day" section and in the "no place recorded" bucket, far
+ * away from the chapter it introduces. Since a card's whole meaning is "the pictures after this
+ * one", the entry it should be shelved with is the next actual picture, which is the same one it
+ * already borrows its blurred background from.
+ *
+ * Cards are copied, not mutated: the borrowed date is a fact about where the card is *shelved*,
+ * not about the card, and writing it onto the row would leak into the map (a card would grow a
+ * pin) and into anything else that reads a file's coordinates.
+ *
+ * A card at the end of the album, or one followed only by other cards, has nothing to inherit and
+ * keeps the trailing bucket — the honest answer, since there is no chapter after it.
+ */
+export function withInheritedDayAndPlace(files: AlbumFile[]): AlbumFile[] {
+  // Walked backwards so a run of cards all reach the same photo in one pass.
+  let next: AlbumFile | null = null;
+  const result: AlbumFile[] = new Array(files.length);
+  for (let i = files.length - 1; i >= 0; i--) {
+    const file = files[i];
+    if (!isTextCard(file)) {
+      next = file;
+      result[i] = file;
+      continue;
+    }
+    result[i] = next
+      ? {
+          ...file,
+          // The neighbour's capture instant, resolved the same way `captureDate` resolves one —
+          // its EXIF date, or its upload time when the camera left none. Written into the one
+          // field rather than copying both, so iOS can follow the identical rule.
+          exifDateTimeOriginal: next.exifDateTimeOriginal || next.uploadedAt,
+          captureUtcOffsetSeconds: next.captureUtcOffsetSeconds,
+          gpsLatitude: next.gpsLatitude,
+          gpsLongitude: next.gpsLongitude,
+        }
+      : file;
+  }
+  return result;
+}
+
+/**
  * Splits files into day sections, each split again into regions of at most `radiusMeters`.
  *
  * Days, the clusters inside a day, and the files inside a cluster all keep the order they had
  * in `files` (the album's own order): the grouping re-shelves the gallery, it does not re-sort
  * it. Photos without a usable date land in a trailing "unknown" day; photos without coordinates
- * land in a trailing bucket of their own day.
+ * land in a trailing bucket of their own day. Text cards borrow both from the photo they
+ * introduce — see `withInheritedDayAndPlace`.
  */
 export function groupByDayAndRegion(
-  files: AlbumFile[],
+  input: AlbumFile[],
   radiusMeters: number = DEFAULT_REGION_RADIUS_METERS,
 ): DayGroup[] {
+  // D86: before anything is bucketed, every text card takes the day and place of the photo it
+  // introduces. A heading has neither of its own, and the trailing "unknown" bucket is the one
+  // place it must not end up.
+  const files = withInheritedDayAndPlace(input);
   const days = new Map<string, { date: Date | null; files: AlbumFile[] }>();
   const fallbackOffsetSeconds = dominantOffsetSeconds(files);
 

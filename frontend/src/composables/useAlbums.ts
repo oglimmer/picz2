@@ -26,6 +26,7 @@ export interface AlbumsComposable {
     storageBackendId?: number | null,
   ) => Promise<Album | null>;
   deleteAlbum: (albumId: number) => Promise<void>;
+  reorderAlbums: (albumIds: number[]) => Promise<void>;
   updateAlbum: (albumId: number, updates: Partial<Album>) => Promise<void>;
   saveMapView: (albumId: number, view: MapView | null) => Promise<void>;
   setPublished: (albumId: number, published: boolean) => Promise<void>;
@@ -111,6 +112,22 @@ export function useAlbums(): AlbumsComposable {
     if (albumIndex !== -1) albums.value.splice(albumIndex, 1);
   }
 
+  /**
+   * Stores the shelf order. `albumIds` are the albums in the order they should be listed; the
+   * server writes each one's `displayOrder` from its index.
+   *
+   * The list is replaced from the server's answer, not from what we sent: the server appends any
+   * album we did not mention (one created on another device) rather than refusing the whole drag,
+   * so its answer is the only reliable picture of the new order.
+   */
+  async function reorderAlbums(albumIds: number[]): Promise<void> {
+    const data = await requestJson<AlbumsResponse>(
+      `${apiUrl}/api/albums/reorder`,
+      jsonBody("PUT", { albumIds }),
+    );
+    if (data.albums) albums.value = data.albums;
+  }
+
   /** Applies `patch` to the current album and to its entry in the list, wherever it is held. */
   function patchAlbum(albumId: number, patch: Partial<Album>): void {
     if (currentAlbum.value && currentAlbum.value.id === albumId) {
@@ -187,6 +204,7 @@ export function useAlbums(): AlbumsComposable {
     loadAlbumById,
     createAlbum,
     deleteAlbum,
+    reorderAlbums,
     updateAlbum,
     saveMapView,
     setPublished,

@@ -1,10 +1,64 @@
 <template>
   <div
     class="album-tile"
+    :class="{ dragging, 'drag-over': dragOver }"
     :style="{ '--i': tileIndex }"
+    :draggable="isDraggable"
     @click="$emit('click')"
+    @dragstart="$emit('drag-start', $event)"
+    @dragover.prevent="$emit('drag-over', $event)"
+    @dragenter="$emit('drag-enter', $event)"
+    @drop="$emit('drop', $event)"
+    @dragend="$emit('drag-end', $event)"
   >
     <div class="tile-frame">
+      <!-- The tile itself is the drag handle; the grip only says so. Kept out of the pointer's
+           way so a click on it still opens the album. -->
+      <span
+        v-if="isDraggable"
+        class="tile-grip"
+        title="Drag to reorder"
+        aria-hidden="true"
+      >
+        <svg
+          width="10"
+          height="14"
+          viewBox="0 0 10 14"
+          fill="currentColor"
+        >
+          <circle
+            cx="2.5"
+            cy="2.5"
+            r="1.2"
+          />
+          <circle
+            cx="7.5"
+            cy="2.5"
+            r="1.2"
+          />
+          <circle
+            cx="2.5"
+            cy="7"
+            r="1.2"
+          />
+          <circle
+            cx="7.5"
+            cy="7"
+            r="1.2"
+          />
+          <circle
+            cx="2.5"
+            cy="11.5"
+            r="1.2"
+          />
+          <circle
+            cx="7.5"
+            cy="11.5"
+            r="1.2"
+          />
+        </svg>
+      </span>
+
       <img
         v-if="album.coverImageToken"
         :src="coverUrl"
@@ -49,6 +103,12 @@
       <div class="tile-caption">
         <span class="tile-frame-count">
           {{ (album.fileCount || 0).toLocaleString() }}&nbsp;{{ (album.fileCount || 0) === 1 ? 'frame' : 'frames' }}
+          <!-- Nested inside the frame count on purpose: the small grid already hides that
+               element, and a third-width tile has no room for a second meta line. -->
+          <span
+            v-if="coverDate"
+            class="tile-cover-date"
+          >{{ coverDate }}</span>
         </span>
         <h3 class="tile-title">
           {{ album.name }}
@@ -145,6 +205,12 @@ interface Props {
   tileIndex?: number
   isDeleting?: boolean
   isUploadTarget?: boolean
+  /** The owner may drag this tile to put the shelf in a different order. */
+  isDraggable?: boolean
+  /** This tile is the one being dragged. */
+  dragging?: boolean
+  /** The dragged tile would land here. */
+  dragOver?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -152,20 +218,50 @@ const props = withDefaults(defineProps<Props>(), {
   canDuplicate: false,
   tileIndex: 0,
   isDeleting: false,
-  isUploadTarget: false
+  isUploadTarget: false,
+  isDraggable: false,
+  dragging: false,
+  dragOver: false
 })
 
 defineEmits<{
   click: []
   delete: [albumId: number]
   duplicate: [albumId: number]
+  'drag-start': [event: DragEvent]
+  'drag-over': [event: DragEvent]
+  'drag-enter': [event: DragEvent]
+  drop: [event: DragEvent]
+  'drag-end': [event: DragEvent]
 }>()
 
 const { getAlbumCoverUrl } = useApi()
 const coverUrl = computed(() => getAlbumCoverUrl(props.album))
+
+/**
+ * When the album's first photo was taken, as a plain local date.
+ *
+ * Deliberately not `formatDate`: "Today" and "3 days ago" are right for a single photo's meta
+ * line, but an album is a place, and a bare date is what tells the owner which trip a tile is.
+ * An unparseable or missing value renders nothing and the element is dropped.
+ */
+const coverDate = computed(() => {
+  if (!props.album.coverImageDate) return ''
+  const date = new Date(props.album.coverImageDate)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+})
 </script>
 
 <style scoped>
+/* Sits behind a hairline divider rather than on its own line, so the caption keeps
+   the same height whether or not the album holds a photo. */
+.tile-cover-date::before {
+  content: '\00b7';
+  margin: 0 0.4em;
+  opacity: 0.6;
+}
+
 .tile-deleting-overlay {
   position: absolute;
   inset: 0;

@@ -17,6 +17,11 @@ export interface Album {
   fileCount?: number;
   coverFileId?: number;
   coverImageToken?: string;
+  /**
+   * When the cover photo was taken (its EXIF date, or its upload time when it has none). Absent
+   * while the album holds no image. Server-decided, so the shelf never has to load a file row.
+   */
+  coverImageDate?: string | null;
   shareToken?: string;
   // Whether the share link is live. A new album is created unpublished: the token exists but
   // the public routes 404 and subscribers get no mail until the owner turns it on. Owner-facing
@@ -112,6 +117,16 @@ export function albumMapView(album: Album | null | undefined): MapView | null {
 // QUEUED; out of attempts means DEAD_LETTER.
 export type ProcessingStatus = "QUEUED" | "PROCESSING" | "DONE" | "DEAD_LETTER";
 
+/**
+ * What an album entry is (D86). Server-derived from the stored mime type — never sniff the mime
+ * type here, the server has already decided.
+ *
+ * A `TEXT_CARD` is a chapter heading the owner writes into the album's order: a headline, an
+ * optional body, no pixels of its own. It is drawn over a blurred copy of the photo that follows
+ * it in the list, which is why the tile needs a neighbour handed to it rather than a token.
+ */
+export type AssetKind = "PHOTO" | "TEXT_CARD";
+
 export interface AlbumFile {
   id: number;
   albumId: number;
@@ -136,6 +151,13 @@ export interface AlbumFile {
   // Free text the album owner wrote about this photo (D69). Shown to public visitors in the
   // grid and in the lightbox. Absent or empty means the photo has no caption.
   caption?: string | null;
+  // D86. Absent on a response from an older server, which only ever served photos — treat a
+  // missing value as "PHOTO" rather than defaulting the other way.
+  kind?: AssetKind;
+  // A text card's heading and body text (D86). Both absent on a photo; `bodyText` is absent on a
+  // card that is a bare heading.
+  headline?: string | null;
+  bodyText?: string | null;
   tags: string[];
   order?: number;
   publicToken?: string;

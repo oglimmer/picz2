@@ -10,6 +10,7 @@ import com.oglimmer.photoupload.model.MessageResponse;
 import com.oglimmer.photoupload.model.ReorderRequest;
 import com.oglimmer.photoupload.model.TagOperationResponse;
 import com.oglimmer.photoupload.model.TagRequest;
+import com.oglimmer.photoupload.model.TextCardRequest;
 import com.oglimmer.photoupload.service.FileStorageService;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -138,6 +139,32 @@ public class FileController {
     return ResponseEntity.ok(fileStorageService.updateCaption(id, request.getCaption()));
   }
 
+  /**
+   * Create a text card in an album (D86) — a chapter heading that sits in the album's order where a
+   * photo would. 201 with the new row: nothing is processed, so there is no status to poll.
+   *
+   * <p>Album-in-the-body rather than a nested {@code /api/albums/{id}/…} route, to keep every
+   * single-asset operation on one controller and one service.
+   */
+  @PostMapping("/text-cards")
+  public ResponseEntity<FileInfo> createTextCard(@RequestBody TextCardRequest request) {
+    FileInfo created =
+        fileStorageService.createTextCard(
+            request.getAlbumId(), request.getHeadline(), request.getBodyText());
+    return ResponseEntity.status(HttpStatus.CREATED).body(created);
+  }
+
+  /**
+   * Rewrite one text card's heading and body (D86). Synchronous, like a caption edit — the updated
+   * row comes back so the client can swap it in place. A photo id answers 400.
+   */
+  @PutMapping("/{id}/text-card")
+  public ResponseEntity<FileInfo> updateTextCard(
+      @PathVariable Long id, @RequestBody TextCardRequest request) {
+    return ResponseEntity.ok(
+        fileStorageService.updateTextCard(id, request.getHeadline(), request.getBodyText()));
+  }
+
   @PostMapping("/{id}/rotate")
   public ResponseEntity<MessageResponse> rotateImage(@PathVariable Long id) {
     // Async since Phase 4.5: enqueues a ROTATE_LEFT job for the worker pod. Clients poll
@@ -162,9 +189,9 @@ public class FileController {
   }
 
   /**
-   * Step two: the preview itself, a LARGE-sized JPEG, owner-only. {@code no-store} because the
-   * same URL answers differently before the job, after it, and after a decision; the client
-   * fetches it exactly once per review anyway.
+   * Step two: the preview itself, a LARGE-sized JPEG, owner-only. {@code no-store} because the same
+   * URL answers differently before the job, after it, and after a decision; the client fetches it
+   * exactly once per review anyway.
    */
   @GetMapping("/{id}/enhance-preview")
   public ResponseEntity<Resource> getEnhancePreview(@PathVariable Long id) {
@@ -186,9 +213,9 @@ public class FileController {
   }
 
   /**
-   * Accepting (D82), or the one-tap auto-enhance without a look (D81) — the endpoint does not
-   * care. Async like rotate: enqueues an ENHANCE job for the worker pod, which rewrites the
-   * original, rebuilds the derivatives and drops any preview. Clients poll {@code GET
+   * Accepting (D82), or the one-tap auto-enhance without a look (D81) — the endpoint does not care.
+   * Async like rotate: enqueues an ENHANCE job for the worker pod, which rewrites the original,
+   * rebuilds the derivatives and drops any preview. Clients poll {@code GET
    * /api/assets/{id}/status} until DONE and then reload, because the {@code publicToken} changes.
    */
   @PostMapping("/{id}/enhance")

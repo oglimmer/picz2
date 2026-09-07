@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatBytes, formatDate, isVideo } from "../format";
+import { backgroundPhotoFor, formatBytes, formatDate, isTextCard, isVideo } from "../format";
 
 describe("formatBytes", () => {
   it("scales through the units and clamps at PB", () => {
@@ -47,6 +47,50 @@ describe("formatDate", () => {
 
   it("renders nothing for an unparseable timestamp", () => {
     expect(formatDate("nope")).toBe("");
+  });
+});
+
+describe("isTextCard", () => {
+  it("reads the server's `kind`, never the mime type", () => {
+    expect(isTextCard({ kind: "TEXT_CARD" })).toBe(true);
+    expect(isTextCard({ kind: "PHOTO" })).toBe(false);
+    // A row from an older server has no `kind`. It has to read as a photo: mistaking a photo for
+    // a card would draw text over a picture that then never gets rendered.
+    expect(isTextCard({})).toBe(false);
+    expect(isTextCard(null)).toBe(false);
+    expect(isTextCard(undefined)).toBe(false);
+  });
+});
+
+describe("backgroundPhotoFor", () => {
+  const card = (id: number) => ({ id, kind: "TEXT_CARD", publicToken: `c${id}` });
+  const photo = (id: number) => ({ id, kind: "PHOTO", publicToken: `p${id}` });
+
+  it("takes the next actual picture after the card", () => {
+    const files = [card(1), photo(2), photo(3)];
+    expect(backgroundPhotoFor(files, 0)?.id).toBe(2);
+  });
+
+  it("skips over other cards to reach a picture", () => {
+    const files = [card(1), card(2), photo(3)];
+    expect(backgroundPhotoFor(files, 0)?.id).toBe(3);
+  });
+
+  it("gives nothing back for a card at the end of the album", () => {
+    expect(backgroundPhotoFor([photo(1), card(2)], 1)).toBeNull();
+  });
+
+  it("gives nothing back when only cards follow", () => {
+    expect(backgroundPhotoFor([card(1), card(2)], 0)).toBeNull();
+  });
+
+  /**
+   * A photo whose derivatives are not written yet has no token to fetch, so it cannot serve as a
+   * background — the card would show a broken image instead of a blur.
+   */
+  it("passes over a picture that has no public token yet", () => {
+    const files = [card(1), { id: 2, kind: "PHOTO" }, photo(3)];
+    expect(backgroundPhotoFor(files, 0)?.id).toBe(3);
   });
 });
 

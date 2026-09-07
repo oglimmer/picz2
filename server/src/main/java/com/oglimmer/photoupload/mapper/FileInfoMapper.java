@@ -1,6 +1,7 @@
 /* Copyright (c) 2025 by oglimmer.com / Oliver Zimpasser. All rights reserved. */
 package com.oglimmer.photoupload.mapper;
 
+import com.oglimmer.photoupload.entity.AssetKind;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.model.FileInfo;
 import java.util.List;
@@ -20,6 +21,7 @@ public interface FileInfoMapper {
   @org.mapstruct.Mapping(target = "albumId", ignore = true) // Set in @AfterMapping
   @org.mapstruct.Mapping(target = "albumName", ignore = true) // Set in @AfterMapping
   @org.mapstruct.Mapping(target = "originalAvailable", ignore = true) // Set in @AfterMapping
+  @org.mapstruct.Mapping(target = "kind", ignore = true) // Derived in @AfterMapping (D86)
   FileInfo fileMetadataToFileInfo(FileMetadata metadata);
 
   List<FileInfo> fileMetadatasToFileInfos(List<FileMetadata> metadatas);
@@ -40,6 +42,10 @@ public interface FileInfoMapper {
       fileInfo.setAlbumId(metadata.getAlbum().getId());
       fileInfo.setAlbumName(metadata.getAlbum().getName());
     }
+
+    // D86: `kind` is derived from the mime type, not stored, so a text card cannot end up
+    // claiming to be a photo (or the other way round) through a half-written row.
+    fileInfo.setKind(AssetKind.ofMimeType(metadata.getMimeType()));
 
     // True iff the original bytes are still in object storage. Set to false by the Phase 6
     // retention CronJob, which nulls file_path after deleting the S3 object.

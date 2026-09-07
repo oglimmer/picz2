@@ -29,7 +29,12 @@ public interface AlbumRepository extends JpaRepository<Album, Long> {
   @Query("SELECT a.storageBackend FROM Album a WHERE a.id = :albumId")
   Optional<StorageBackend> findStorageBackendByAlbumId(@Param("albumId") Long albumId);
 
-  List<Album> findByUserOrderByDisplayOrderAsc(User user);
+  /**
+   * The owner's albums in the order they chose. The id is the tiebreaker, not decoration: rows that
+   * predate the first hand-made order all carry display_order 0, and without it their order would
+   * be whatever the database felt like that day.
+   */
+  List<Album> findByUserOrderByDisplayOrderAscIdAsc(User user);
 
   @Query("SELECT COALESCE(MAX(a.displayOrder), -1) FROM Album a WHERE a.user = :user")
   Integer findMaxDisplayOrderByUser(User user);

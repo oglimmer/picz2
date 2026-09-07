@@ -47,6 +47,9 @@ struct FileInfo: Codable, Identifiable {
         case gpsLongitude
         case caption
         case enhancedAt
+        case kind
+        case headline
+        case bodyText
     }
 
     /// When the shutter fired, as the server read it out of the file. An ISO-8601 instant, or
@@ -86,6 +89,32 @@ struct FileInfo: Codable, Identifiable {
 
     /// True when the enhance job has already run on this photo at least once.
     var isEnhanced: Bool { enhancedAt != nil }
+
+    /// What this album entry is (D86): `"PHOTO"` for anything with pixels, `"TEXT_CARD"` for a
+    /// chapter heading the owner wrote into the album's order.
+    ///
+    /// The raw string, for the same reason ``processingStatus`` is one: decoding an optional enum
+    /// from an unknown raw value *throws*, so one kind a future server adds would fail the decode
+    /// of the whole album rather than of one row. Nil means a server that predates the field, and
+    /// such a server only ever served photos.
+    var kind: String?
+
+    /// A text card's heading (D86), or nil on a photo.
+    var headline: String?
+
+    /// A text card's body text (D86), or nil on a photo and on a card that is a bare heading.
+    var bodyText: String?
+
+    /// True for a text card.
+    ///
+    /// Reads ``kind`` rather than sniffing ``mimetype``: the server derives one from the other and
+    /// is the only place that decision belongs. A row with no kind is a photo, which is the safe
+    /// way round — mistaking a photo for a card would draw text over a picture nobody ever sees.
+    var isTextCard: Bool { kind == "TEXT_CARD" }
+
+    /// What the tile prints as its heading. Falls back to the row's name, which the server keeps
+    /// equal to the headline anyway, so an older or half-decoded row still reads as something.
+    var cardHeadline: String { headline ?? originalName }
 
     var processing: AssetProcessingStatus? {
         processingStatus.flatMap(AssetProcessingStatus.init(rawValue:))

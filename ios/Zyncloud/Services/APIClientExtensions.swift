@@ -449,6 +449,28 @@ struct ReorderBody: Encodable {
     let fileIds: [Int]
 }
 
+extension APIClient {
+    /// Persists the shelf order — the order the album tiles are listed in. `albumIds` are the
+    /// albums in the wanted order; the server writes each one's `displayOrder` from its index and
+    /// answers with the whole shelf.
+    ///
+    /// The answer is what the caller should show, not the list it sent: the server appends any
+    /// album this device does not know about yet rather than refusing the move.
+    func reorderAlbums(albumIds: [Int], completion: @escaping @Sendable (Result<[Album], Error>) -> Void) {
+        send(.put, "api/albums/reorder",
+             body: AlbumReorderBody(albumIds: albumIds),
+             expecting: AlbumsResponse.self)
+        { result in
+            completion(result.map(\.albums))
+        }
+    }
+}
+
+/// The body of `PUT /api/albums/reorder` — the caller's albums in the order they should be listed.
+struct AlbumReorderBody: Encodable {
+    let albumIds: [Int]
+}
+
 // MARK: - Single-file actions
 
 extension APIClient {
@@ -512,6 +534,52 @@ extension APIClient {
     func updateCaption(id: Int, caption: String, completion: @escaping @Sendable (Result<Photo, Error>) -> Void) {
         send(.put, "api/files/\(id)/caption", body: CaptionBody(caption: caption), expecting: Photo.self, completion: completion)
     }
+
+    /// Creates a text card at the end of an album (D86) and answers with the new row.
+    ///
+    /// Synchronous on the server: a card carries no bytes, so nothing is processed and there is no
+    /// status to poll — unlike an upload, which is the other way of putting something in an album.
+    func createTextCard(
+        albumId: Int,
+        headline: String,
+        bodyText: String,
+        completion: @escaping @Sendable (Result<Photo, Error>) -> Void,
+    ) {
+        send(
+            .post,
+            "api/files/text-cards",
+            body: TextCardBody(albumId: albumId, headline: headline, bodyText: bodyText),
+            expecting: Photo.self,
+            completion: completion,
+        )
+    }
+
+    /// Rewrites one card's heading and body (D86), and answers with the card as it now is.
+    ///
+    /// A photo id is refused by the server with a 400 — there is no such thing as a photo's
+    /// headline, and accepting one would leave a row that lies about what it is.
+    func updateTextCard(
+        id: Int,
+        headline: String,
+        bodyText: String,
+        completion: @escaping @Sendable (Result<Photo, Error>) -> Void,
+    ) {
+        send(
+            .put,
+            "api/files/\(id)/text-card",
+            body: TextCardBody(albumId: nil, headline: headline, bodyText: bodyText),
+            expecting: Photo.self,
+            completion: completion,
+        )
+    }
+}
+
+/// The body of both text-card endpoints (D86). One shape for create and edit, like the server's
+/// `TextCardRequest`: `albumId` is read on create only, and a blank `bodyText` clears the body.
+struct TextCardBody: Encodable {
+    let albumId: Int?
+    let headline: String
+    let bodyText: String
 }
 
 /// The body of `PUT /api/files/{id}/caption`. Blank means "clear it" — the server stores null.

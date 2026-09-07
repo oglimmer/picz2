@@ -69,9 +69,23 @@ struct PresentationPhotoView: View {
 
     // MARK: - Slide
 
+    /// The photo a text card is drawn over, blurred: the next actual picture after it in the
+    /// reading order. Nil for a card that is last, or followed only by other cards.
+    private func backgroundURL(for card: Photo) -> URL? {
+        guard let index = photos.firstIndex(where: { $0.id == card.id }) else { return nil }
+        return photos[(index + 1)...]
+            .first { !$0.isTextCard }
+            .flatMap { AssetURLs.image(for: $0) }
+    }
+
     @ViewBuilder
     private func slide(_ photo: Photo, isCurrent: Bool) -> some View {
-        if !photo.isThumbnailReady {
+        if photo.isTextCard {
+            // D86: read full screen, a card is the chapter page. Most of a presentation is read
+            // zoomed in, so a heading that only appears in the grid is a heading nobody sees —
+            // the same reason the chapter marker follows the pager.
+            TextCardSlideView(card: photo, backgroundURL: backgroundURL(for: photo))
+        } else if !photo.isThumbnailReady {
             ProcessingPlaceholder(
                 label: photo.processingFailed
                     ? "The server could not process this file."

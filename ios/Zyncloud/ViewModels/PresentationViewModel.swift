@@ -123,10 +123,20 @@ final class PresentationViewModel: ViewModelProtocol {
         return groups.first { $0.tag == selectedTag && $0.endFileId == photoID }
     }
 
-    /// The photos of the current selection in reading order, flattened back out of the sections.
-    /// This is what the full-screen pager walks, so it cannot drift from what the grid shows.
+    /// The entries of the current selection in reading order, flattened back out of the sections.
+    /// This is what both the grid and the full-screen pager walk, so the two cannot drift.
     var orderedPhotos: [Photo] {
         sections.flatMap(\.photos)
+    }
+
+    /// The photo one text card is drawn over, blurred: the next actual picture after it in the
+    /// order the reader sees. Nil for a card that is last, or followed only by other cards.
+    func backgroundPhoto(for card: Photo) -> Photo? {
+        let ordered = orderedPhotos
+        guard card.isTextCard, let index = ordered.firstIndex(where: { $0.id == card.id }) else {
+            return nil
+        }
+        return ordered[(index + 1)...].first { !$0.isTextCard }
     }
 
     /// True when any tag in this album has a commentary. Used to say so before a tag is picked,

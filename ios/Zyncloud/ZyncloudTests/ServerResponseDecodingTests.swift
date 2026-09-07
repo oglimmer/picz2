@@ -45,6 +45,30 @@ struct ServerResponseDecodingTests {
         #expect(response.albums[0].imageCount == 12)
     }
 
+    /// The shelf tile shows when an album is from, so the cover's date has to survive decoding —
+    /// in both shapes the server writes an instant, with fractional seconds and without.
+    @Test func decodesTheCoverImageDate() throws {
+        let plain = try decode(
+            Album.self,
+            #"{ "id": 1, "name": "Trip", "coverImageDate": "2026-07-04T09:30:00Z" }"#
+        )
+        #expect(plain.coverDate == Date(timeIntervalSince1970: 1_783_157_400))
+
+        let fractional = try decode(
+            Album.self,
+            #"{ "id": 1, "name": "Trip", "coverImageDate": "2026-07-04T09:30:00.123Z" }"#
+        )
+        #expect(fractional.coverDate != nil)
+    }
+
+    /// An album with no image carries no cover date, and the tile drops the element rather than
+    /// showing a placeholder.
+    @Test func hasNoCoverDateWithoutACover() throws {
+        let album = try decode(Album.self, #"{ "id": 1, "name": "Inbox" }"#)
+        #expect(album.coverImageDate == nil)
+        #expect(album.coverDate == nil)
+    }
+
     /// Everything but `id` and `name` is optional, so a minimal album must still decode.
     @Test func decodesAnAlbumWithOnlyRequiredFields() throws {
         let album = try decode(Album.self, #"{ "id": 1, "name": "Inbox" }"#)
