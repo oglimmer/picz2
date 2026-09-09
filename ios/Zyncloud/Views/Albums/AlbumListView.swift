@@ -83,11 +83,16 @@ struct AlbumListView: View {
                 // Only worth offering once there are two tiles to put in an order.
                 if viewModel.albums.count > 1 {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(isReordering ? "Done" : "Reorder") {
-                            isReordering.toggle()
-                            draggedAlbumId = nil
-                            dropTargetAlbumId = nil
-                        }
+                        Button(
+                            action: {
+                                isReordering.toggle()
+                                draggedAlbumId = nil
+                                dropTargetAlbumId = nil
+                            },
+                            label: {
+                                Image(systemName: isReordering ? "checkmark" : "arrow.up.arrow.down")
+                            },
+                        )
                         .accessibilityLabel(isReordering ? "Finish reordering" : "Reorder albums")
                     }
                 }
