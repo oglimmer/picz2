@@ -9,6 +9,9 @@ import UIKit
 /// `ProcessInfo` is not remapped under Catalyst, so it is the honest source there.
 ///
 /// `isMacCatalystApp` is false on iOS, so there is one code path and no `#if` to keep in sync.
+///
+/// `@MainActor` because `UIDevice` is. The one caller, `PushNotificationManager`, is too.
+@MainActor
 enum DeviceIdentity {
     static var model: String {
         isMacCatalyst ? "Mac" : UIDevice.current.model

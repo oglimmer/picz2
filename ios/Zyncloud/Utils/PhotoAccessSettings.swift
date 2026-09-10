@@ -11,6 +11,9 @@ import UIKit
 ///
 /// `isMacCatalystApp` is false on iOS, so this is a runtime branch and not an `#if` to keep in
 /// sync — same reasoning as `DeviceIdentity`.
+///
+/// `@MainActor` because `UIApplication` is. The one caller is a SwiftUI button action.
+@MainActor
 enum PhotoAccessSettings {
     private static let macSettingsURLs = [
         "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Photos",
