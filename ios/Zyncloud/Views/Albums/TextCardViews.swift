@@ -83,31 +83,7 @@ struct TextCardSlideView: View {
     let backgroundURL: URL?
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(white: 0.28), Color(white: 0.12)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing,
-            )
-
-            if let backgroundURL {
-                AuthenticatedImage(url: backgroundURL)
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .blur(radius: 30)
-                    // Scaled after the blur so its soft edge is pushed off screen — `blur`
-                    // samples nothing outside the view, so an un-scaled image fades to a pale
-                    // border all the way round.
-                    .scaleEffect(1.25)
-                    .clipped()
-            }
-
-            LinearGradient(
-                colors: [.black.opacity(0.42), .black.opacity(0.68)],
-                startPoint: .top,
-                endPoint: .bottom,
-            )
-
+        GeometryReader { proxy in
             ScrollView {
                 VStack(spacing: 18) {
                     Text(card.cardHeadline)
@@ -126,14 +102,51 @@ struct TextCardSlideView: View {
                     }
                 }
                 .padding(.horizontal, 28)
-                .padding(.vertical, 80)
+                .padding(.vertical, 64)
                 .frame(maxWidth: 620)
+                // A card is usually a heading and a sentence, which should sit in the middle of
+                // the screen rather than at the top: a scroll view stacks its content from the
+                // top, so the content is made at least as tall as the screen and centred in that.
+                // The scroll view is there for the long one.
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
-            // A card is usually a heading and a sentence, which should sit in the middle of the
-            // screen rather than at the top. The scroll view is there for the long one.
             .scrollBounceBehavior(.basedOnSize)
         }
-        .ignoresSafeArea()
+        // The text keeps to the safe area, so it never runs under the detail sheet's navigation
+        // bar or the home indicator; only the picture behind it reaches the edges. As a
+        // background it cannot size the page either.
+        .background { background.ignoresSafeArea() }
+    }
+
+    private var background: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(white: 0.28), Color(white: 0.12)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing,
+            )
+
+            if let backgroundURL {
+                AuthenticatedImage(url: backgroundURL)
+                    .scaledToFill()
+                    // The zero minimums are load-bearing, as in the tile: without them the frame
+                    // reports the filled image's size, which for a landscape photo is far wider
+                    // than the screen, and `clipped()` then clips to that instead of the screen.
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .blur(radius: 30)
+                    // Scaled after the blur so its soft edge is pushed off screen — `blur`
+                    // samples nothing outside the view, so an un-scaled image fades to a pale
+                    // border all the way round.
+                    .scaleEffect(1.25)
+                    .clipped()
+            }
+
+            LinearGradient(
+                colors: [.black.opacity(0.42), .black.opacity(0.68)],
+                startPoint: .top,
+                endPoint: .bottom,
+            )
+        }
     }
 }
 
