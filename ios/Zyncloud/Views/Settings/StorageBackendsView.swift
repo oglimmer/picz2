@@ -12,7 +12,11 @@ struct StorageBackendsView: View {
     var body: some View {
         List {
             Section(
-                footer: Text("Photos are stored on this site by default, up to the limit shown. Add your own S3-compatible storage to keep the files in your bucket instead, with no limit from us. You choose the storage when you create an album; it cannot be changed afterwards."),
+                footer: Text("Photos are stored on this site by default, up to the limit shown. "
+                    + "Got a home server — a MinIO box in your home lab, or a little machine humming "
+                    + "in the living room? Add it, and the files of an album live there instead, "
+                    + "with no limit from us. You choose the storage when you create an album; it "
+                    + "cannot be changed afterwards."),
             ) {
                 ForEach(viewModel.backends) { backend in
                     row(for: backend)
@@ -143,10 +147,6 @@ struct StorageBackendFormView: View {
     @State private var secretKey: String
     @State private var pathStyleAccess: Bool
 
-    /// Which preset the form is following. A convenience only — nothing about it is sent, and the
-    /// server sees the resulting endpoint/region/path-style like any hand-typed set.
-    @State private var providerId: String
-
     @Environment(\.dismiss) private var dismiss
 
     init(mode: Mode, viewModel: StorageBackendsViewModel, onFinished: @escaping () -> Void) {
@@ -156,23 +156,16 @@ struct StorageBackendFormView: View {
 
         switch mode {
         case .create:
-            // Start on a preset rather than on empty fields: an endpoint shape is far easier to
-            // correct than to invent, and every provider writes it differently.
-            let preset = StorageProvider.all[0]
-            _providerId = State(initialValue: preset.id)
+            // The copy is written for a self-hosted MinIO, and these are its settings. Nothing
+            // is locked, so any other server that speaks the same protocol works as well.
             _name = State(initialValue: "")
-            _endpoint = State(initialValue: preset.endpointTemplate)
-            _region = State(initialValue: preset.region)
+            _endpoint = State(initialValue: "")
+            _region = State(initialValue: "us-east-1")
             _bucket = State(initialValue: "")
             _accessKey = State(initialValue: "")
             _secretKey = State(initialValue: "")
-            _pathStyleAccess = State(initialValue: preset.pathStyleAccess)
+            _pathStyleAccess = State(initialValue: true)
         case let .edit(backend):
-            // Guessed from the saved endpoint so the hints describe the provider this backend
-            // actually points at, not whichever one is first in the list.
-            _providerId = State(
-                initialValue: StorageProvider.guess(fromEndpoint: backend.endpoint ?? "").id,
-            )
             _name = State(initialValue: backend.name)
             _endpoint = State(initialValue: backend.endpoint ?? "")
             _region = State(initialValue: backend.region ?? "us-east-1")
@@ -181,21 +174,6 @@ struct StorageBackendFormView: View {
             _secretKey = State(initialValue: "")
             _pathStyleAccess = State(initialValue: backend.pathStyleAccess)
         }
-    }
-
-    private var provider: StorageProvider {
-        StorageProvider.named(providerId)
-    }
-
-    /// Copy the chosen preset into the connection fields. Only the three it knows — name, bucket
-    /// and the keys are the user's, and clearing them on a stray change of the picker would throw
-    /// away typing.
-    private func applyProvider() {
-        let preset = provider
-        endpoint = preset.endpointTemplate
-        region = preset.region
-        pathStyleAccess = preset.pathStyleAccess
-        viewModel.testResult = nil
     }
 
     private var isValid: Bool {
@@ -222,33 +200,30 @@ struct StorageBackendFormView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(
-                    header: Text("Provider"),
-                    footer: Text("Picking one fills in the endpoint shape and the right settings. You can still edit everything below."),
-                ) {
-                    Picker("Provider", selection: $providerId) {
-                        ForEach(StorageProvider.all) { option in
-                            Text(option.label).tag(option.id)
-                        }
-                    }
-                    .onChange(of: providerId) { _, _ in applyProvider() }
-                }
-
                 // A real row rather than a lone footer: a Section with no content renders as an
                 // empty band on some iOS versions, and this is the paragraph people most need to
-                // read before they go hunting in a provider console.
+                // read before they open the MinIO Console.
                 Section {
-                    Text("You need a bucket that already exists, and a key pair that may read, write and delete in it. This app does not create the bucket for you. Keep the bucket private — photos are served through short-lived signed links, so nothing needs to be public.")
+                    Text("Your photos, on the server in your own home. Before you start, create a "
+                        + "bucket on your home server's MinIO and an access key that may read, write "
+                        + "and delete in it — this app does not create the bucket for you. Keep the "
+                        + "bucket private: the photo server fetches the photos from your server and "
+                        + "passes them on, so nothing on your server needs to be public.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
 
                 Section(
                     header: Text("Storage"),
-                    footer: Text("Name is just a label for you; it appears in the album picker. The endpoint is your provider's S3 address, not your bucket's — replace anything in <angle brackets>. The bucket is its name on its own, no URL and no slashes."),
+                    footer: Text("Name is just a label for you, like \"Home server\"; it appears in "
+                        + "the album picker. The endpoint is the API address of the MinIO on your "
+                        + "home server (often port 9000) — not the Console address, and not the "
+                        + "bucket's address. It has to be reachable from the internet: the photo "
+                        + "server calls your home, so an address that only works on your home Wi‑Fi "
+                        + "is not enough. The bucket is its name on its own, no URL and no slashes."),
                 ) {
                     TextField("Name", text: $name)
-                    TextField("Endpoint URL", text: $endpoint)
+                    TextField("Endpoint URL", text: $endpoint, prompt: Text("https://minio.example.com"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -259,7 +234,8 @@ struct StorageBackendFormView: View {
 
                 Section(
                     header: Text("Region"),
-                    footer: Text(provider.regionHint),
+                    footer: Text("A home server rarely cares about this: MinIO ignores the region "
+                        + "unless you set one. Leave \"us-east-1\" unless you changed it on your server."),
                 ) {
                     TextField("Region", text: $region)
                         .textInputAutocapitalization(.never)
@@ -268,7 +244,10 @@ struct StorageBackendFormView: View {
 
                 Section(
                     header: Text("Credentials"),
-                    footer: Text("\(provider.keysHint)\n\nThe secret key is stored encrypted and never shown again — most providers only show it once too, when you create the key. Leave it empty when editing to keep the saved one."),
+                    footer: Text("Open the MinIO Console on your home server: Access Keys → Create "
+                        + "access key.\n\nThe secret key is stored encrypted and never shown again. "
+                        + "MinIO also shows it only once, when you create the key, so copy it then. "
+                        + "Leave it empty when editing to keep the saved one."),
                 ) {
                     TextField("Access key", text: $accessKey)
                         .textInputAutocapitalization(.never)
@@ -277,17 +256,11 @@ struct StorageBackendFormView: View {
                 }
 
                 Section(
-                    footer: Text("Puts the bucket in the path (endpoint/bucket) instead of in the hostname. Amazon S3 wants this off; almost everyone else wants it on. The provider above sets it for you."),
+                    footer: Text("Puts the bucket in the path (endpoint/bucket) instead of in the "
+                        + "hostname. The MinIO on a home server needs this on. Turn it off only if "
+                        + "you set up your server to expect the bucket name in the hostname."),
                 ) {
                     Toggle("Path-style addressing", isOn: $pathStyleAccess)
-                }
-
-                if let note = provider.note {
-                    Section {
-                        Label(note, systemImage: "info.circle")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
                 }
 
                 if let result = viewModel.testResult {

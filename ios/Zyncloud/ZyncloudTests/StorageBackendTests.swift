@@ -37,7 +37,7 @@ struct StorageBackendTests {
         let backend = try decode(StorageBackend.self, """
         {
           "id": 5,
-          "name": "My Hetzner bucket",
+          "name": "My MinIO bucket",
           "systemDefault": false,
           "endpoint": "https://s3.example.com",
           "region": "eu-central-1",
@@ -49,7 +49,7 @@ struct StorageBackendTests {
         }
         """)
 
-        #expect(backend.name == "My Hetzner bucket")
+        #expect(backend.name == "My MinIO bucket")
         #expect(backend.subtitle == "https://s3.example.com · my-photos")
         #expect(backend.albumCount == 0)
     }
@@ -122,57 +122,5 @@ struct StorageBackendTests {
 
         #expect(album.storageBackendId == 5)
         #expect(album.storageBackendName == "My bucket")
-    }
-
-    // MARK: - Provider presets
-
-    /// Every preset has to be usable as-is: a template you cannot edit into a real URL, or a
-    /// missing hint, is a field the user is left guessing at.
-    @Test func `every preset is complete`() {
-        for provider in StorageProvider.all {
-            #expect(!provider.label.isEmpty)
-            #expect(provider.endpointTemplate.hasPrefix("https://"))
-            #expect(!provider.regionHint.isEmpty)
-            #expect(!provider.keysHint.isEmpty)
-        }
-    }
-
-    /// AWS and OVH want virtual-hosted addressing (OVH buckets are addressable like Amazon's);
-    /// everyone else here needs path-style, and getting it backwards produces a signature error
-    /// that names neither.
-    @Test func `only amazon and ovh default to virtual hosted addressing`() {
-        let virtualHosted: Set<String> = ["aws", "ovh"]
-        for provider in StorageProvider.all {
-            #expect(provider.pathStyleAccess == !virtualHosted.contains(provider.id), "\(provider.id)")
-        }
-    }
-
-    /// The reason the guess matches on the domain suffix and not the prefix: "https://s3." starts
-    /// both the Amazon and the Backblaze template, so a prefix match would file every B2 bucket
-    /// under AWS and show it the wrong hints and the wrong addressing default.
-    @Test(arguments: [
-        ("https://s3.eu-central-1.amazonaws.com", "aws"),
-        ("https://s3.eu-central-003.backblazeb2.com", "backblaze"),
-        ("https://s3.eu-central-1.wasabisys.com", "wasabi"),
-        ("https://s3.fr-par.scw.cloud", "scaleway"),
-        ("https://abc123.r2.cloudflarestorage.com", "r2"),
-        ("https://fsn1.your-objectstorage.com", "hetzner"),
-        ("https://fra1.digitaloceanspaces.com", "digitalocean"),
-        ("https://s3.gra.io.cloud.ovh.net", "ovh"),
-    ])
-    func `guesses the provider from its endpoint`(endpoint: String, expected: String) {
-        #expect(StorageProvider.guess(fromEndpoint: endpoint).id == expected)
-    }
-
-    /// A trailing slash is what a person pastes out of a browser bar; it must not change the answer.
-    @Test func `a trailing slash does not confuse the guess`() {
-        #expect(StorageProvider.guess(fromEndpoint: "https://fsn1.your-objectstorage.com/").id == "hetzner")
-    }
-
-    /// An endpoint nobody recognises falls back to the generic preset rather than to whichever
-    /// provider happens to be listed first, whose hints would simply be wrong.
-    @Test func `an unknown endpoint falls back to other`() {
-        #expect(StorageProvider.guess(fromEndpoint: "https://minio.mycompany.internal").id == "other")
-        #expect(StorageProvider.guess(fromEndpoint: "").id == "other")
     }
 }

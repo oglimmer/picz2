@@ -1,10 +1,16 @@
 <template>
   <div class="storage-manager">
     <p class="storage-intro">
-      Photos are stored on this site by default, up to the limit shown below. You can add
-      your own S3-compatible storage instead — then the files live in your bucket, on your
-      bill, with no limit from us. Pick the storage when you create an album; it cannot be
-      changed afterwards.
+      Photos are stored on this site by default, up to the limit shown below. Got a home
+      server — a MinIO box in your home lab, or a little machine humming in the living room?
+      Add it, and the files of an album live there instead, with no limit from us. Pick the
+      storage when you create an album; it cannot be changed afterwards.
+      <router-link
+        to="/help/home-server"
+        class="storage-guide-link"
+      >
+        Step-by-step guide: set up MinIO at home
+      </router-link>
     </p>
 
     <div
@@ -112,42 +118,22 @@
       <h3>{{ editingId ? 'Edit storage' : 'Add storage' }}</h3>
 
       <p class="storage-form-intro">
-        You need a bucket that already exists, and a key pair that may read, write and
-        delete in it. This app does not create the bucket for you. Keep the bucket
-        private — photos are served through short-lived signed links, so nothing needs
-        to be public.
+        Your photos, on the server in your own home. Before you start, create a bucket on
+        your home server's MinIO and an access key that may read, write and delete in it —
+        this app does not create the bucket for you. Keep the bucket private: this site fetches
+        the photos from your server and passes them on, so nothing on your server needs to be
+        public.
       </p>
-
-      <div class="form-group">
-        <label for="storage-provider">Provider</label>
-        <select
-          id="storage-provider"
-          v-model="providerId"
-          @change="applyProvider"
-        >
-          <option
-            v-for="option in providers"
-            :key="option.id"
-            :value="option.id"
-          >
-            {{ option.label }}
-          </option>
-        </select>
-        <small class="form-hint">
-          Picking one fills in the endpoint shape and the right settings. You can still edit
-          everything below.
-        </small>
-      </div>
 
       <div class="form-group">
         <label for="storage-name">Name</label>
         <input
           id="storage-name"
           v-model="form.name"
-          placeholder="My photo bucket"
+          placeholder="Home server"
           required
         >
-        <small class="form-hint">Just a label for you. It appears in the album picker.</small>
+        <small class="form-hint">Just a label for you, like "Home server". It appears in the album picker.</small>
       </div>
 
       <div class="form-group">
@@ -155,12 +141,12 @@
         <input
           id="storage-endpoint"
           v-model="form.endpoint"
-          :placeholder="provider.endpointTemplate"
+          placeholder="https://minio.example.com"
           required
         >
         <small class="form-hint">
-          The S3 address of your provider — not the address of your bucket.
-          Replace anything in &lt;angle brackets&gt;.
+          The API address of the MinIO on your home server (often port 9000) — not the
+          Console address, and not the address of your bucket.
         </small>
       </div>
 
@@ -184,7 +170,10 @@
           v-model="form.region"
           placeholder="us-east-1"
         >
-        <small class="form-hint">{{ provider.regionHint }}</small>
+        <small class="form-hint">
+          A home server rarely cares about this: MinIO ignores the region unless you set one.
+          Leave "us-east-1" unless you changed it on your server.
+        </small>
       </div>
 
       <div class="form-group">
@@ -195,7 +184,9 @@
           autocomplete="off"
           required
         >
-        <small class="form-hint">{{ provider.keysHint }}</small>
+        <small class="form-hint">
+          Open the MinIO Console on your home server: Access Keys → Create access key.
+        </small>
       </div>
 
       <div class="form-group">
@@ -210,8 +201,8 @@
         >
         <!-- The secret never comes back from the server, so an edit form cannot show it. -->
         <small class="form-hint">
-          The long half of the key pair. Stored encrypted here and never shown again — most
-          providers only show it once too, when you create the key.
+          The long half of the key pair. Stored encrypted here and never shown again. MinIO
+          also shows it only once, when you create the key, so copy it then.
         </small>
       </div>
 
@@ -224,17 +215,15 @@
           Path-style addressing
           <small class="form-hint">
             Puts the bucket in the path ({{ form.endpoint || 'https://…' }}/{{ form.bucket || 'bucket' }})
-            instead of in the hostname. Amazon S3 wants this off; almost everyone else wants it on.
-            The provider list above sets it for you.
+            instead of in the hostname. The MinIO on a home server needs this on. Turn it off
+            only if you set up your server to expect the bucket name in the hostname.
           </small>
         </span>
       </label>
 
-      <p
-        v-if="provider.note"
-        class="storage-form-note"
-      >
-        {{ provider.note }}
+      <p class="storage-form-note">
+        Your home server has to be reachable from the internet: this site calls your home, so
+        an address that only works on your home Wi‑Fi is not enough.
       </p>
 
       <div
@@ -279,12 +268,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useStorageBackends } from '../composables/useStorageBackends'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
 import { formatBytes } from '@/utils/format'
-import { STORAGE_PROVIDERS, findProvider } from '@/utils/storageProviders'
 import type { StorageBackend, StorageBackendInput, StorageBackendTestResult } from '@/types'
 
 const {
@@ -302,11 +290,6 @@ const { confirm: confirmDialog } = useConfirm()
 
 const formOpen = ref(false)
 const editingId = ref<number | null>(null)
-const providers = STORAGE_PROVIDERS
-// Which preset the form is following. Only a convenience — nothing about it is sent to the
-// server, which sees the resulting endpoint/region/path-style like any hand-typed set.
-const providerId = ref<string>('aws')
-const provider = computed(() => findProvider(providerId.value) ?? STORAGE_PROVIDERS[0])
 const busy = ref(false)
 const testResult = ref<StorageBackendTestResult | null>(null)
 
@@ -345,32 +328,20 @@ function resetForm() {
   testResult.value = null
 }
 
+/**
+ * The copy is written for a self-hosted MinIO, and `resetForm` leaves its settings (region
+ * "us-east-1", path-style on). Nothing is locked, so any other server that speaks the same
+ * protocol works as well.
+ */
 function startCreate() {
   resetForm()
   editingId.value = null
-  providerId.value = 'aws'
-  applyProvider()
   formOpen.value = true
-}
-
-/**
- * Copy the chosen preset into the connection fields. Only the three the preset actually knows —
- * name, bucket and the keys are the user's, and clearing them on a stray change of the dropdown
- * would throw away typing.
- */
-function applyProvider() {
-  form.endpoint = provider.value.endpointTemplate
-  form.region = provider.value.region
-  form.pathStyleAccess = provider.value.pathStyleAccess
-  testResult.value = null
 }
 
 function startEdit(backend: StorageBackend) {
   resetForm()
   editingId.value = backend.id
-  // Guess the preset back from the saved endpoint, so the hints under the fields describe the
-  // provider this backend actually points at rather than whichever one happened to be selected.
-  providerId.value = guessProvider(backend.endpoint ?? '')
   form.name = backend.name
   form.endpoint = backend.endpoint ?? ''
   form.region = backend.region ?? 'us-east-1'
@@ -380,25 +351,6 @@ function startEdit(backend: StorageBackend) {
   // means "keep the stored one".
   form.pathStyleAccess = backend.pathStyleAccess
   formOpen.value = true
-}
-
-/**
- * Which preset an existing endpoint looks like, so an edit form shows hints about the provider it
- * actually points at.
- *
- * Matched on the domain *suffix*, never the prefix: "https://s3." is the start of both the Amazon
- * and the Backblaze template, so a prefix match would file every B2 bucket under AWS — whichever
- * happened to be listed first. The tail after the last placeholder is unique per provider.
- */
-function guessProvider(endpoint: string): string {
-  const host = endpoint.toLowerCase().replace(/\/+$/, '')
-  const match = STORAGE_PROVIDERS.find(p => {
-    if (p.id === 'other') return false
-    const template = p.endpointTemplate.toLowerCase()
-    const suffix = template.includes('>') ? (template.split('>').pop() ?? '') : ''
-    return suffix.length > 4 && host.endsWith(suffix)
-  })
-  return match?.id ?? 'other'
 }
 
 function closeForm() {
@@ -478,6 +430,12 @@ async function handleDelete(backend: StorageBackend) {
   color: var(--c-text-2);
   font-size: .9375rem;
   line-height: 1.5;
+}
+
+.storage-guide-link {
+  display: block;
+  margin-top: var(--sp-2);
+  color: var(--c-accent);
 }
 
 .storage-error {
@@ -607,8 +565,8 @@ async function handleDelete(backend: StorageBackend) {
   line-height: 1.5;
 }
 
-/* Provider-specific gotcha — the thing that makes the difference between a key that works and
-   one that 403s. Set apart from the field hints so it is not read as another optional aside. */
+/* The one thing that trips people up with a home server: the phone or browser can reach it, the
+   photo server cannot. Set apart from the field hints so it is not read as an optional aside. */
 .storage-form-note {
   margin: 0;
   padding: var(--sp-3);

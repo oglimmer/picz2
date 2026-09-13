@@ -345,8 +345,9 @@ struct WelcomeView: View {
                 .foregroundStyle(LandingStyle.text2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("And the files can stay on storage you own. Connect your own S3 bucket, put an "
-                + "album on it, and Picz keeps only the gallery around your photos.")
+            Text("And the files can stay on storage you own. Connect your own storage server, such "
+                + "as a self-hosted MinIO, put an album on it, and Picz keeps only the gallery "
+                + "around your photos.")
                 .font(.system(size: 15))
                 .lineSpacing(5)
                 .foregroundStyle(LandingStyle.text2)
@@ -489,9 +490,9 @@ enum SampleGallery {
         Row(label: "Slideshow", body: "Full-screen playback, with the narration or without it."),
         Row(label: "Video", body: "Videos upload and play in line with the photos."),
         Row(label: "Your own storage",
-            body: "Point an album at your own S3 bucket — AWS, Cloudflare R2, Backblaze, Hetzner "
-                + "and more. The gallery stays here, the files stay yours, and nothing you keep "
-                + "there counts against your space."),
+            body: "Point an album at your own storage server, such as a self-hosted MinIO. The "
+                + "gallery stays here, the files stay yours, and nothing you keep there counts "
+                + "against your space."),
     ]
 
     /// Length of the sample recording, in seconds.
