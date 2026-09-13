@@ -141,7 +141,7 @@
         <input
           id="storage-endpoint"
           v-model="form.endpoint"
-          placeholder="https://minio.example.com"
+          placeholder="https://abc123def456.myfritz.net"
           required
         >
         <small class="form-hint">

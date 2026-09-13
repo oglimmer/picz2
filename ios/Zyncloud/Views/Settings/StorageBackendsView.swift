@@ -223,7 +223,7 @@ struct StorageBackendFormView: View {
                         + "is not enough. The bucket is its name on its own, no URL and no slashes."),
                 ) {
                     TextField("Name", text: $name)
-                    TextField("Endpoint URL", text: $endpoint, prompt: Text("https://minio.example.com"))
+                    TextField("Endpoint URL", text: $endpoint, prompt: Text("https://abc123def456.myfritz.net"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
