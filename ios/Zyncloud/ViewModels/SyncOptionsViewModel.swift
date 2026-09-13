@@ -201,83 +201,8 @@ class SyncOptionsViewModel: ViewModelProtocol {
 
     /// The device switch. Everything it does lives on ``SyncCoordinator/setSyncEnabled(_:)`` —
     /// this only forwards, so the toggle and any other caller cannot drift apart.
-    var syncEnabled: Bool { syncCoordinator.settings.syncEnabled }
-
     func setSyncEnabled(_ enabled: Bool) {
         syncCoordinator.setSyncEnabled(enabled)
-    }
-
-    func syncNow() {
-        guard selectedAlbum != nil else {
-            alertState = AlertState(
-                title: "No Album Selected",
-                message: "Please select a target album before syncing.",
-            )
-            return
-        }
-
-        // Without this the run would start, hit the switch inside `performSync` and stop, while
-        // the alert below said "Checking for new photos" — a sync that reports itself started
-        // and does nothing is worse than one that says why it will not.
-        guard syncEnabled else {
-            alertState = AlertState(
-                title: "Syncing Is Off",
-                message: "Syncing is turned off for this phone. Turn it on under Sync Settings first.",
-            )
-            return
-        }
-
-        // Trigger manual sync which will check for new images and upload them
-        syncCoordinator.performManualSync {
-            // Sync completed - the logging is handled inside performManualSync
-        }
-
-        alertState = AlertState(
-            title: "Sync Started",
-            message: "Checking for new photos and starting sync...",
-        )
-    }
-
-    func clearLocalCache() {
-        alertState = .confirmation(
-            title: "Clear Local Cache",
-            message: "This will clear all uploaded photo records, allowing you to re-upload photos. Your login credentials and album selection will be preserved.",
-            confirmTitle: "Clear Cache",
-            confirmAction: {
-                // Save current album selection
-                let savedAlbumId = self.syncCoordinator.settings.albumId
-                let savedAlbumName = self.syncCoordinator.settings.selectedAlbumName
-                let savedWifiOnly = self.syncCoordinator.settings.wifiOnly
-                let savedSyncLastDays = self.syncCoordinator.settings.syncLastDays
-
-                // Clear all synced images data
-                UploadStore.shared.clear()
-
-                // Clear sync queue and reset metrics
-                self.syncCoordinator.clearQueue()
-                self.syncCoordinator.metrics = SyncCoordinator.Metrics()
-
-                // Reset only lastSyncDate to force a full re-scan
-                self.syncCoordinator.settings.lastSyncDate = nil
-
-                // Restore album selection and other settings
-                self.syncCoordinator.settings.albumId = savedAlbumId
-                self.syncCoordinator.settings.selectedAlbumName = savedAlbumName
-                self.syncCoordinator.settings.wifiOnly = savedWifiOnly
-                self.syncCoordinator.settings.syncLastDays = savedSyncLastDays
-
-                // Show success message and trigger sync
-                self.alertState = .success(
-                    title: "Cache Cleared",
-                    message: "Local cache has been cleared. Starting re-sync now...",
-                )
-
-                // Trigger a new sync to re-upload photos
-                if savedAlbumName != nil {
-                    self.syncCoordinator.start()
-                }
-            },
-        )
     }
 
     var photoAccessStatusText: String {

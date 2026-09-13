@@ -155,17 +155,7 @@ struct SyncOptionsView: View {
                         TagManagerView()
                     }
                 }
-
-                Section(header: Text("Data Management")) {
-                    Button("Sync Now") {
-                        viewModel.syncNow()
-                    }
-
-                    Button("Clear Local Cache") {
-                        viewModel.clearLocalCache()
-                    }
-                    .foregroundColor(.orange)
-                }
+                // "Sync Now" and "Clear Local Cache" moved to the top of the Status tab.
             }
             .navigationTitle("Sync Options")
             .alert(state: $viewModel.alertState)

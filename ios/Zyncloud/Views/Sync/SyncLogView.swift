@@ -12,6 +12,7 @@ struct SyncLogView: View {
     @ObservedObject private var taskLog = BackgroundTaskLog.shared
     /// Only read for the sync window, which the "In scope" explanation spells out.
     @ObservedObject private var settings = Settings.shared
+    @StateObject private var actions = SyncActionsViewModel()
 
     /// The open explanation sheet, if any. One `@State` for both sections: they can never be
     /// open at once, and `sheet(item:)` re-presents correctly when the identity changes.
@@ -27,6 +28,18 @@ struct SyncLogView: View {
     var body: some View {
         NavigationStack {
             List {
+                // The two commands, first: the readouts below are how you see what they did.
+                Section {
+                    Button("Sync Now") {
+                        actions.syncNow()
+                    }
+
+                    Button("Clear Local Cache") {
+                        actions.clearLocalCache()
+                    }
+                    .foregroundColor(.orange)
+                }
+
                 // Sync status. §3.3 was undetectable in code and would have been obvious here:
                 // background tasks were only ever scheduled at launch, and the only symptom was
                 // sync quietly stopping. Scheduled and run are shown separately because "iOS has
@@ -101,6 +114,7 @@ struct SyncLogView: View {
             }
             .listStyle(.insetGrouped)
             .sheet(item: $guide) { StatusFieldGuideSheet(guide: $0) }
+            .alert(state: $actions.alertState)
             .navigationTitle("Sync Status")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
