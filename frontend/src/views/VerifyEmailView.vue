@@ -46,7 +46,7 @@
           <h1>Email Verified!</h1>
 
           <p class="message">
-            Your email has been successfully verified. You can now log in to your account.
+            Your email has been successfully verified. You can now log in here or in the Picz app on your iPhone.
           </p>
 
           <div class="actions">

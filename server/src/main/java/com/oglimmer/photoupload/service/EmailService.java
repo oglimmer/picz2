@@ -69,6 +69,8 @@ public class EmailService {
 
           This link will expire in 24 hours.
 
+          After that, you can log in in the browser or in the Picz app on your iPhone.
+
           If you did not create an account, please ignore this email.
 
           ---
@@ -103,7 +105,9 @@ public class EmailService {
 
           Your email has been successfully verified. You can now log in and start sharing your photos.
 
-          Get started: %s/login
+          Log in where you like:
+          - In the browser: %s/login
+          - In the Picz app on your iPhone, with the same email and password
 
           ---
           Picz - Picture Sharing
