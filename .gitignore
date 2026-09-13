@@ -114,3 +114,7 @@ AuthKey_*.p8
 # double the app in the history for a direction nobody has committed to yet. Delete this rule if
 # the native route is kept; see macos/Zyncloud/README.md.
 macos/
+
+# Answers for App Review, pasted into App Store Connect. Kept out of git because the demo
+# account password gets written into it before each submission.
+ios/Zyncloud/APP-REVIEW-NOTES.md
