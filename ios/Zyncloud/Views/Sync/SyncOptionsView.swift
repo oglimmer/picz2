@@ -15,20 +15,28 @@ struct SyncOptionsView: View {
     @ObservedObject private var settings = Settings.shared
     @Binding var isLoggedIn: Bool
 
-    /// Step 1 of the account delete — the "are you sure" sheet.
-    @State private var showDeleteAccountConfirm = false
-    /// Step 2 — set only once step 1 was confirmed, which swaps the row for a final warning.
-    ///
-    /// The web app stacks two modal confirms here. On iOS the second one cannot be a second
-    /// `.alert`: this view already carries `.alert(state:)` for `alertState`, and two alert
-    /// modifiers on one view fight over the same presentation slot — the later one silently
-    /// wins. So the final warning is an inline armed state instead. Same two deliberate
-    /// destructive taps, one presenter.
-    @State private var deleteAccountArmed = false
-
     var body: some View {
         NavigationStack {
             List {
+                // The account lives on its own screen, the way the web app has a Profile page;
+                // everything else here is about this phone's sync.
+                Section {
+                    NavigationLink {
+                        ProfileView(isLoggedIn: $isLoggedIn)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Profile")
+                                Text(APIClientProvider.shared.credentials?.username ?? "")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "person.crop.circle")
+                        }
+                    }
+                }
+
                 // Photo Access Section — shown only while there is something to fix. Full
                 // access is the steady state and needs no row; `.limited` is *not* full access
                 // and stays visible, because the cost of it is invisible otherwise.
@@ -131,13 +139,9 @@ struct SyncOptionsView: View {
                     }
                 }
 
-                // Account-level gallery settings. These live on the user, not on this
-                // device, so they are the same values the web app edits from its account menu.
+                // Gallery settings. New Photo Visibility and Photo Storage moved to Profile,
+                // next to the rest of the account.
                 Section(header: Text("Gallery Settings")) {
-                    NavigationLink("New Photo Visibility") {
-                        NewPhotoVisibilityView()
-                    }
-
                     // The two language names are instance-wide and only an admin may rename them
                     // (server D75). Everyone else would only ever see a field that answers 403,
                     // so the row is not shown to them at all — same as the web app.
@@ -150,13 +154,8 @@ struct SyncOptionsView: View {
                     NavigationLink("Tags") {
                         TagManagerView()
                     }
-
-                    NavigationLink("Photo Storage") {
-                        StorageBackendsView()
-                    }
                 }
 
-                // Account Section
                 Section(header: Text("Data Management")) {
                     Button("Sync Now") {
                         viewModel.syncNow()
@@ -166,63 +165,9 @@ struct SyncOptionsView: View {
                         viewModel.clearLocalCache()
                     }
                     .foregroundColor(.orange)
-
-                    Button("Logout") {
-                        viewModel.logout {
-                            isLoggedIn = false
-                        }
-                    }
-                    .foregroundColor(.red)
-                }
-
-                Section(
-                    header: Text("Danger Zone"),
-                    footer: Text("Deleting your account removes your albums, photos, tags and settings from the server for good. There is no undo and no export afterwards."),
-                ) {
-                    if viewModel.isDeletingAccount {
-                        HStack {
-                            Text("Deleting account…")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            ProgressView()
-                        }
-                    } else if deleteAccountArmed {
-                        Text("Final warning — this cannot be undone.")
-                            .font(.footnote)
-                            .foregroundColor(.red)
-
-                        Button("Yes, Delete Everything") {
-                            deleteAccountArmed = false
-                            viewModel.deleteAccount {
-                                isLoggedIn = false
-                            }
-                        }
-                        .foregroundColor(.red)
-
-                        Button("Cancel") {
-                            deleteAccountArmed = false
-                        }
-                    } else {
-                        Button("Delete Account") {
-                            showDeleteAccountConfirm = true
-                        }
-                        .foregroundColor(.red)
-                    }
                 }
             }
             .navigationTitle("Sync Options")
-            .confirmationDialog(
-                "Delete your account?",
-                isPresented: $showDeleteAccountConfirm,
-                titleVisibility: .visible,
-            ) {
-                Button("Delete My Account", role: .destructive) {
-                    deleteAccountArmed = true
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This permanently deletes all your albums, all your photos, all your tags and all your settings. This action cannot be undone.")
-            }
             .alert(state: $viewModel.alertState)
             .onAppear {
                 viewModel.checkPhotoAccess()

@@ -160,11 +160,28 @@ struct APIValidationTests {
         #expect(statusCode == 409)
     }
 
-    /// ``ErrorResponse`` needs both `success` and `message`; JSON carrying only one of them is
-    /// not an error envelope, and must fall back rather than decode to something half-empty.
+    /// The server's `GlobalExceptionHandler` body carries no `success` field. This is the shape
+    /// every `ValidationException` arrives in, so its message has to reach the user too.
+    @Test func theExceptionHandlerBodyWithoutSuccessIsReadToo() throws {
+        let body = Data("""
+        {"timestamp":"2026-09-13T10:00:00","status":400,"error":"Bad Request",\
+        "message":"Current password is incorrect","path":"/api/users/change-password"}
+        """.utf8)
+        let result = validate(data: body, status: 400)
+
+        guard case let .api(message, statusCode) = try #require(appError(result)) else {
+            Issue.record("expected .api")
+            return
+        }
+        #expect(message == "Current password is incorrect")
+        #expect(statusCode == 400)
+    }
+
+    /// ``ErrorResponse`` needs a `message` with words in it; a body without one is not an
+    /// explanation, and must fall back rather than show the user an empty error.
     @Test(arguments: [
         "{\"success\":false}",
-        "{\"message\":\"Nope\"}",
+        "{\"success\":false,\"message\":\"\"}",
         "{}",
         "[]",
         "null",

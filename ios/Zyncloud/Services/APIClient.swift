@@ -4,12 +4,38 @@ import os
 
 struct APIClient {
     var baseURL = AppConfiguration.apiBaseURL
-    var username: String?
-    var password: String?
+    private let fixedUsername: String?
+    private let fixedPassword: String?
+    /// Set only on the clients ``APIClientProvider`` hands out. Asked on every request, so a
+    /// client a view model has held since launch sends the password the keychain holds *now*.
+    ///
+    /// Without it, every view model kept the credentials it was built with. A password change
+    /// (which the server answers by refusing the old one at once) would then have left the
+    /// Albums tab and every open album sending the old password and failing with 401 until the
+    /// app was restarted. A sign-in as somebody else does not rely on this: that tears the whole
+    /// signed-in UI down anyway.
+    private let signedInAccount: (@Sendable () -> (username: String, password: String)?)?
+
+    var username: String? {
+        signedInAccount.map { $0()?.username } ?? fixedUsername
+    }
+
+    var password: String? {
+        signedInAccount.map { $0()?.password } ?? fixedPassword
+    }
 
     init(username: String? = nil, password: String? = nil) {
-        self.username = username
-        self.password = password
+        fixedUsername = username
+        fixedPassword = password
+        signedInAccount = nil
+    }
+
+    /// A client that follows whoever is signed in. When `signedInAccount` answers nil (signed
+    /// out), requests go without an `Authorization` header rather than with a stale one.
+    init(signedInAccount: @escaping @Sendable () -> (username: String, password: String)?) {
+        fixedUsername = nil
+        fixedPassword = nil
+        self.signedInAccount = signedInAccount
     }
 
     func addBasicAuth(to request: inout URLRequest) {

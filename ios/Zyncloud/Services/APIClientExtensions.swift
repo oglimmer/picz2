@@ -148,7 +148,9 @@ extension APIClient {
             "Received \(data.count, privacy: .public) bytes — HTTP \(httpResponse.statusCode, privacy: .public)",
         )
         guard (200 ... 299).contains(httpResponse.statusCode) else {
-            if let errorMessage = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
+            if let errorMessage = try? JSONDecoder().decode(ErrorResponse.self, from: data),
+               !errorMessage.message.isEmpty
+            {
                 return .failure(AppError.api(message: errorMessage.message, statusCode: httpResponse.statusCode))
             }
             return .failure(AppError.api(message: plainMeaning(of: httpResponse.statusCode),
@@ -321,6 +323,20 @@ extension APIClient {
         send(.delete, "api/users/account", completion: completion)
     }
 
+    /// Change the signed-in account's password. The server checks `currentPassword` itself and
+    /// answers 400 with a readable message when it is wrong or `newPassword` is too short.
+    ///
+    /// On success the server has already revoked every browser session and upload token, and it
+    /// refuses the old password from now on — so the caller must store `newPassword` in the
+    /// keychain straight away, or this phone signs itself out on its next request.
+    func changePassword(currentPassword: String, newPassword: String,
+                        completion: @escaping @Sendable (Result<Void, Error>) -> Void)
+    {
+        send(.post, "api/users/change-password",
+             body: ChangePasswordBody(currentPassword: currentPassword, newPassword: newPassword),
+             completion: completion)
+    }
+
     /// Create a new account. Unauthenticated POST to `/api/users`. On success the server
     /// has emailed a verification link; the user can't sign in until they click it.
     static func register(email: String, password: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
@@ -346,6 +362,12 @@ struct RegistrationBody: Encodable {
     let password: String
 }
 
+/// The body of `POST /api/users/change-password`.
+struct ChangePasswordBody: Encodable {
+    let currentPassword: String
+    let newPassword: String
+}
+
 /// The body of `POST /api/users/password-reset-request`.
 struct PasswordResetBody: Encodable {
     let email: String
@@ -369,8 +391,13 @@ struct AlbumBody: Encodable {
     var storageBackendId: Int?
 }
 
+/// An explained refusal. Two shapes reach the phone: a controller's own
+/// `{"success": false, "message": …}`, and the server's `GlobalExceptionHandler` body
+/// `{"status", "error", "message", "path", "timestamp"}`, which has no `success` at all — and is
+/// what every `ValidationException` sends, "Current password is incorrect" among them. Only
+/// `message` is required, so both decode.
 struct ErrorResponse: Codable {
-    let success: Bool
+    let success: Bool?
     let message: String
 }
 

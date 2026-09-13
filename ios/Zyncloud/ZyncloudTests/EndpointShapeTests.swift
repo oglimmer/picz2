@@ -64,6 +64,47 @@ struct EndpointShapeTests {
         #expect((try? result?.get()) != nil)
     }
 
+    // MARK: - Password change
+
+    /// The server reads exactly these two keys. A misspelled one reaches it as a null and comes
+    /// back as "Current password is incorrect", which would look like the user's mistake.
+    @Test func changePasswordPostsBothPasswordsToTheChangeEndpoint() async {
+        let request = await StubServer.captureOne {
+            _ = await awaiting { done in
+                api.changePassword(currentPassword: "hunter2", newPassword: "correct horse", completion: done)
+            }
+        }
+
+        #expect(request?.method == "POST")
+        #expect(request?.path == "/api/users/change-password")
+        #expect(request?.headers["Authorization"] == APIClient.stubbedAuthHeader)
+        #expect(request?.headers["Content-Type"] == "application/json")
+        #expect(request?.json["currentPassword"] as? String == "hunter2")
+        #expect(request?.json["newPassword"] as? String == "correct horse")
+    }
+
+    /// A wrong current password must fail, and carry the server's words, because the caller
+    /// overwrites the stored password on success.
+    @Test func arefusedPasswordChangeIsAFailureWithTheServersMessage() async {
+        var result: Result<Void, Error>?
+        // The body `GlobalExceptionHandler` really sends for a `ValidationException`.
+        let body = """
+        {"status":400,"error":"Bad Request","message":"Current password is incorrect",\
+        "path":"/api/users/change-password"}
+        """
+        _ = await StubServer.capture(status: 400, json: body) {
+            result = await awaiting { done in
+                api.changePassword(currentPassword: "wrong", newPassword: "correct horse", completion: done)
+            }
+        }
+
+        guard case let .failure(error) = result else {
+            Issue.record("a 400 must not read as a changed password")
+            return
+        }
+        #expect((error as? AppError)?.errorDescription?.contains("Current password is incorrect") == true)
+    }
+
     // MARK: - Tags on one file
 
     @Test func addTagPostsTheTagNameToTheFile() async {

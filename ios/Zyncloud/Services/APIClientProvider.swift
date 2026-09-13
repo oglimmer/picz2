@@ -14,24 +14,31 @@ import Foundation
 ///   in" instead of firing a request that is certain to come back 401.
 /// * ``clientOrAnonymous`` always answers. Background upload paths want that: they run without a
 ///   screen to put a message on, and a 401 they can log is more useful than a silent no-op.
-/// - Note: `@unchecked Sendable` — every access to the one piece of mutable state, ``cached``,
+///
+/// The clients it hands out read the credentials from here on every request (see
+/// ``APIClient/init(signedInAccount:)``), so a view model that holds one for the life of the
+/// session still sends the new password after a change.
+/// - Note: `@unchecked Sendable` — every access to the mutable state, ``cached`` and ``loaded``,
 ///   goes through ``lock``. The compiler cannot see that, so it is asserted here.
 final class APIClientProvider: @unchecked Sendable {
     static let shared = APIClientProvider()
 
-    /// The keychain read is a synchronous call into `securityd`, and the upload path asks for a
-    /// client several times per photo, so the answer is cached.
+    /// The keychain read is a synchronous call into `securityd`, and every request asks for the
+    /// credentials, so the answer is cached.
     ///
     /// Locked because callers are on three different threads: view models on the main queue,
     /// the coordinator on its own sync queue, the uploaders on URLSession callback threads.
     private let lock = NSLock()
-    private var cached: APIClient?
+    private var cached: (username: String, password: String)?
+    /// Separate from `cached` so "nobody is signed in" is cached too, rather than sending every
+    /// request of a signed-out session to the keychain.
+    private var loaded = false
     private var observer: NSObjectProtocol?
 
     private init() {
-        // The cache is only safe because of this: sign-in, sign-out and the legacy-format
-        // migration all post `credentialsDidChange`, so a signed-out session cannot go on
-        // holding an authenticated client.
+        // The cache is only safe because of this: sign-in, sign-out, a password change and the
+        // legacy-format migration all post `credentialsDidChange`, so a signed-out session
+        // cannot go on sending credentials, and a changed password is picked up at once.
         observer = NotificationCenter.default.addObserver(
             forName: KeychainHelper.credentialsDidChange, object: nil, queue: nil,
         ) { [weak self] _ in
@@ -39,15 +46,21 @@ final class APIClientProvider: @unchecked Sendable {
         }
     }
 
-    /// The client for the stored credentials, or nil when there are none.
-    var current: APIClient? {
+    /// The stored credentials, or nil when nobody is signed in.
+    var credentials: (username: String, password: String)? {
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
-        guard let credentials = KeychainHelper.shared.load() else { return nil }
-        let client = APIClient(username: credentials.username, password: credentials.password)
-        cached = client
-        return client
+        if !loaded {
+            cached = KeychainHelper.shared.load()
+            loaded = true
+        }
+        return cached
+    }
+
+    /// The client for the stored credentials, or nil when there are none.
+    var current: APIClient? {
+        guard credentials != nil else { return nil }
+        return APIClient { [weak self] in self?.credentials }
     }
 
     /// A client either way — unauthenticated when nobody is signed in.
@@ -55,11 +68,12 @@ final class APIClientProvider: @unchecked Sendable {
         current ?? APIClient()
     }
 
-    /// Drops the cached client. Called for you when the stored credentials change; exposed so a
-    /// test that writes to the keychain directly can force the next read to go and look.
+    /// Drops the cached credentials. Called for you when the stored credentials change; exposed
+    /// so a test that writes to the keychain directly can force the next read to go and look.
     func invalidate() {
         lock.lock()
         cached = nil
+        loaded = false
         lock.unlock()
     }
 }

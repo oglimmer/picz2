@@ -127,9 +127,20 @@ final class Settings: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Whether the Status tab is shown. Off by default: the tab is the upload log and the sync
+    /// counters, which help when something goes wrong and are noise the rest of the time.
+    ///
+    /// Not in ``Snapshot``: only the tab bar and the Profile switch read it, both on main.
+    @Published var showsDebugInformation: Bool {
+        didSet {
+            defaults.set(showsDebugInformation, forKey: Keys.showsDebugInformation)
+        }
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
+        static let showsDebugInformation = "settings.showsDebugInformation"
         static let syncEnabled = "settings.syncEnabled"
         static let wifiOnly = "settings.wifiOnly"
         static let tusMaxUploadBytes = "settings.tusMaxUploadBytes"
@@ -152,6 +163,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
         selectedAlbumName = defaults.object(forKey: Keys.selectedAlbumName) as? String
         syncLastDays = defaults.object(forKey: Keys.syncLastDays) as? Int ?? 3
         tusMaxUploadBytes = (defaults.object(forKey: Keys.tusMaxUploadBytes) as? NSNumber)?.int64Value ?? 0
+        showsDebugInformation = defaults.bool(forKey: Keys.showsDebugInformation)
         refreshSnapshot()
     }
 
@@ -163,6 +175,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
         defaults.removeObject(forKey: Keys.selectedAlbumName)
         defaults.removeObject(forKey: Keys.syncLastDays)
         defaults.removeObject(forKey: Keys.tusMaxUploadBytes)
+        defaults.removeObject(forKey: Keys.showsDebugInformation)
 
         // Reset to default values
         syncEnabled = true
@@ -172,6 +185,7 @@ final class Settings: ObservableObject, @unchecked Sendable {
         selectedAlbumName = nil
         syncLastDays = 3
         tusMaxUploadBytes = 0  // unknown until the next /api/capabilities
+        showsDebugInformation = false
     }
 }
 

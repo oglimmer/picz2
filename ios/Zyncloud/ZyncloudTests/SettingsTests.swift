@@ -12,6 +12,33 @@ struct SettingsTests {
         try body(defaults)
     }
 
+    // MARK: - Debug information
+
+    /// The Status tab is hidden until the user asks for it.
+    @Test func debugInformationIsOffOnAFreshInstall() {
+        withScratchDefaults { defaults in
+            #expect(!Settings(defaults: defaults).showsDebugInformation)
+        }
+    }
+
+    @Test func debugInformationSurvivesARestart() {
+        withScratchDefaults { defaults in
+            Settings(defaults: defaults).showsDebugInformation = true
+            #expect(Settings(defaults: defaults).showsDebugInformation)
+        }
+    }
+
+    /// A sign-out clears the settings, and the next account starts with the tab hidden.
+    @Test func clearTurnsDebugInformationOff() {
+        withScratchDefaults { defaults in
+            let settings = Settings(defaults: defaults)
+            settings.showsDebugInformation = true
+            settings.clear()
+            #expect(!settings.showsDebugInformation)
+            #expect(!Settings(defaults: defaults).showsDebugInformation)
+        }
+    }
+
     // MARK: - Defaults
 
     @Test func freshInstallDefaults() {
