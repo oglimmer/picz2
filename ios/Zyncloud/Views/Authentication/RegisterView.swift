@@ -3,6 +3,9 @@ import SwiftUI
 struct RegisterView: View {
     @StateObject private var viewModel = RegisterViewModel()
     @Environment(\.dismiss) private var dismiss
+    /// The home-server guide, shown in the app like the legal pages rather than sending the
+    /// reader out to Safari halfway through the sign-up.
+    @State private var showsHomeServerGuide = false
 
     private var termsURL: URL? {
         LegalPage.terms.url
@@ -42,6 +45,23 @@ struct RegisterView: View {
 
                     SecureField("Confirm password", text: $viewModel.confirmPassword)
                         .textContentType(.newPassword)
+                }
+
+                Section(
+                    header: Text("Your Photos, at Home"),
+                    footer: Text("Picz can keep an album's photo files on a server in your own home instead of on this site — private, and independent of any cloud company. The guide shows how to set one up. You can do it any time after you sign up."),
+                ) {
+                    Button {
+                        showsHomeServerGuide = true
+                    } label: {
+                        HStack {
+                            Label("Read the home-server guide", systemImage: "house")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
 
                 Section(header: Text("Consent")) {
@@ -87,5 +107,8 @@ struct RegisterView: View {
         }
         .navigationTitle("Create Account")
         .alert(state: $viewModel.alertState)
+        .sheet(isPresented: $showsHomeServerGuide) {
+            LegalPageSheet(url: AppConfiguration.homeServerGuideURL).ignoresSafeArea()
+        }
     }
 }

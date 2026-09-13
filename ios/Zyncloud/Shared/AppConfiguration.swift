@@ -35,6 +35,14 @@ enum AppConfiguration {
         apiBaseURL.appendingPathComponent("files/")
     }
 
+    /// The web app's guide to running MinIO at home for "your own storage":
+    /// `<baseURL>/help/home-server`. Public, so it opens before an account exists.
+    static var homeServerGuideURL: URL {
+        apiBaseURL
+            .appendingPathComponent("help")
+            .appendingPathComponent("home-server")
+    }
+
     /// Public link for an album — the same URL the web app's share button copies:
     /// `<baseURL>/public/album/<shareToken>`. Anyone holding it can view the album without
     /// logging in, so it is only ever built from a token the server already handed out.

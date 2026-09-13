@@ -21,6 +21,7 @@ import ProfileView from "../views/ProfileView.vue";
 import ImprintView from "../views/ImprintView.vue";
 import PrivacyView from "../views/PrivacyView.vue";
 import TermsView from "../views/TermsView.vue";
+import HomeServerHelpView from "../views/HomeServerHelpView.vue";
 import SubscriptionConfirmView from "../views/SubscriptionConfirmView.vue";
 
 declare module "vue-router" {
@@ -74,6 +75,13 @@ const routes: RouteRecordRaw[] = [
     path: "/terms",
     name: "Terms",
     component: TermsView,
+    meta: { public: true },
+  },
+  // Public, so the guide can be read before an account exists and linked from anywhere.
+  {
+    path: "/help/home-server",
+    name: "HomeServerHelp",
+    component: HomeServerHelpView,
     meta: { public: true },
   },
   {
