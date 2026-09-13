@@ -8,6 +8,9 @@ struct ProfileView: View {
     @ObservedObject private var settings = Settings.shared
     @Binding var isLoggedIn: Bool
 
+    /// The web app's home-server guide, in a sheet like on the sign-up form.
+    @State private var showsHomeServerGuide = false
+
     /// Step 1 of the account delete — the "are you sure" sheet.
     @State private var showDeleteAccountConfirm = false
     /// Step 2 — set only once step 1 was confirmed, which swaps the row for a final warning.
@@ -31,13 +34,29 @@ struct ProfileView: View {
 
             // These live on the user, not on this device, so they are the same values the web
             // app edits on its Profile page.
-            Section(header: Text("Photos")) {
+            Section(
+                header: Text("Photos"),
+                footer: Text("The guide shows how to keep an album's photos on a server in your own home."),
+            ) {
                 NavigationLink("New Photo Visibility") {
                     NewPhotoVisibilityView()
                 }
 
                 NavigationLink("Photo Storage") {
                     StorageBackendsView()
+                }
+
+                Button {
+                    showsHomeServerGuide = true
+                } label: {
+                    HStack {
+                        Text("Home-Server Guide")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -103,5 +122,8 @@ struct ProfileView: View {
             Text("This permanently deletes all your albums, all your photos, all your tags and all your settings. This action cannot be undone.")
         }
         .alert(state: $viewModel.alertState)
+        .sheet(isPresented: $showsHomeServerGuide) {
+            LegalPageSheet(url: AppConfiguration.homeServerGuideURL).ignoresSafeArea()
+        }
     }
 }
