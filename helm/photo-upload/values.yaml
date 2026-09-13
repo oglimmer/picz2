@@ -229,7 +229,10 @@ retention:
   # First nightly run on 2026-05-02 logged 2408 eligible originals + 0 TUS + 0 orphans cleanly,
   # so the live sweep was enabled on 2026-05-03. Set back to true if a future schema change
   # warrants a fresh dry-run validation.
-  dryRun: false
+  # Back on true on 2026-09-13 for one night: the original-purge query now only picks originals
+  # on the system default backend (D89). Read the "Dry run — would purge" lines of that run, check
+  # that no album on a user's own storage appears, then set this to false again.
+  dryRun: true
   # K8s job housekeeping.
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3

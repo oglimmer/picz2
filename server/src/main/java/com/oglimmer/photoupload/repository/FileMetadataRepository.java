@@ -175,17 +175,25 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, Long
    * check that *some* derivative exists. {@code DONE} rows always have this in practice, but this
    * protects against an anomalous row that was force-marked DONE without derivatives.
    *
+   * <p>Only originals on the <b>system default</b> backend (D89). Retention exists to keep the
+   * instance's own disk small; a user's own bucket is theirs to fill, and people who bring their
+   * own storage — a home server — do it to keep the full-size files. Without the join the job
+   * deleted their originals too, {@code originalDays} after upload.
+   *
    * <p>{@code LIMIT :maxRows} keeps a single CronJob firing bounded if the cutoff is misconfigured.
    */
   @Query(
       value =
-          "SELECT * FROM file_metadata "
-              + "WHERE processing_status = 'DONE' "
-              + "AND uploaded_at < :cutoff "
-              + "AND file_path IS NOT NULL "
-              + "AND file_path LIKE 'originals/%' "
-              + "AND thumbnail_path IS NOT NULL "
-              + "ORDER BY uploaded_at ASC "
+          "SELECT fm.* FROM file_metadata fm "
+              + "JOIN albums a ON a.id = fm.album_id "
+              + "JOIN storage_backends sb ON sb.id = a.storage_backend_id "
+              + "WHERE sb.system_default = TRUE "
+              + "AND fm.processing_status = 'DONE' "
+              + "AND fm.uploaded_at < :cutoff "
+              + "AND fm.file_path IS NOT NULL "
+              + "AND fm.file_path LIKE 'originals/%' "
+              + "AND fm.thumbnail_path IS NOT NULL "
+              + "ORDER BY fm.uploaded_at ASC "
               + "LIMIT :maxRows",
       nativeQuery = true)
   List<FileMetadata> findRetentionPurgeCandidates(
