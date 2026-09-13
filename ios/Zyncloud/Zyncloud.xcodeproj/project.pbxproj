@@ -30,6 +30,13 @@
 			remoteGlobalIDString = AA0000000000000000000005;
 			remoteInfo = Zyncloud;
 		};
+		AA9999999999999999999906 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000005;
+			remoteInfo = Zyncloud;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -58,6 +65,7 @@
 		AA3333333333333333333302 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		AA4444444444444444444401 /* Zyncloud.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Zyncloud.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8888888888888888888801 /* ZyncloudTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZyncloudTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA9999999999999999999901 /* ZyncloudUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZyncloudUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -108,6 +116,7 @@
 		4F525AB92EC346FA003F8EDD /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4F525AC02EC346FA003F8EDD /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Shared; sourceTree = "<group>"; };
 		4FCF81DD2EA2D6AC00FD14F6 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4FCF81F82EA2E2EB00FD14F6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
 		AA8888888888888888888802 /* ZyncloudTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ZyncloudTests; sourceTree = "<group>"; };
+		AA9999999999999999999902 /* ZyncloudUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ZyncloudUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,6 +135,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA8888888888888888888804 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA9999999999999999999904 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -154,6 +170,7 @@
 				4F525AB92EC346FA003F8EDD /* Shared */,
 				4FCF81DD2EA2D6AC00FD14F6 /* ShareExtension */,
 				AA8888888888888888888802 /* ZyncloudTests */,
+				AA9999999999999999999902 /* ZyncloudUITests */,
 				AA0000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -164,6 +181,7 @@
 				AA4444444444444444444401 /* Zyncloud.app */,
 				4FCF81DC2EA2D6AC00FD14F6 /* ShareExtension.appex */,
 				AA8888888888888888888801 /* ZyncloudTests.xctest */,
+				AA9999999999999999999901 /* ZyncloudUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -243,6 +261,29 @@
 			productReference = AA8888888888888888888801 /* ZyncloudTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA9999999999999999999908 /* ZyncloudUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA999999999999999999990B /* Build configuration list for PBXNativeTarget "ZyncloudUITests" */;
+			buildPhases = (
+				AA9999999999999999999903 /* Sources */,
+				AA9999999999999999999904 /* Frameworks */,
+				AA9999999999999999999905 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA9999999999999999999907 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA9999999999999999999902 /* ZyncloudUITests */,
+			);
+			name = ZyncloudUITests;
+			packageProductDependencies = (
+			);
+			productName = ZyncloudUITests;
+			productReference = AA9999999999999999999901 /* ZyncloudUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -255,6 +296,9 @@
 				TargetAttributes = {
 					4FCF81DB2EA2D6AC00FD14F6 = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					AA9999999999999999999908 = {
+						TestTargetID = AA0000000000000000000005;
 					};
 				};
 			};
@@ -274,6 +318,7 @@
 				AA0000000000000000000005 /* Zyncloud */,
 				4FCF81DB2EA2D6AC00FD14F6 /* ShareExtension */,
 				AA8888888888888888888808 /* ZyncloudTests */,
+				AA9999999999999999999908 /* ZyncloudUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -297,6 +342,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA8888888888888888888805 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA9999999999999999999905 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -329,6 +381,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA9999999999999999999903 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -341,6 +400,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000005 /* Zyncloud */;
 			targetProxy = AA8888888888888888888806 /* PBXContainerItemProxy */;
+		};
+		AA9999999999999999999907 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000005 /* Zyncloud */;
+			targetProxy = AA9999999999999999999906 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -356,6 +420,36 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		AA9999999999999999999909 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oglimmer.photosync.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zyncloud;
+			};
+			name = Debug;
+		};
+		AA999999999999999999990A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oglimmer.photosync.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zyncloud;
+			};
+			name = Release;
+		};
 		4FCF81E82EA2D6AC00FD14F6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -679,6 +773,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		AA999999999999999999990B /* Build configuration list for PBXNativeTarget "ZyncloudUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA9999999999999999999909 /* Debug */,
+				AA999999999999999999990A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		4FCF81EB2EA2D6AC00FD14F6 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
