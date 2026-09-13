@@ -48,6 +48,11 @@
           fear. Your archive is a folder on your own disk.
         </li>
         <li>
+          <strong>Your originals stay.</strong> On this site's own storage, Picz keeps only the
+          smaller copies once a photo is a few days old. On your own server, it never deletes the
+          full-size files you uploaded.
+        </li>
+        <li>
           <strong>No limit from us.</strong> What you keep on your own server does not count
           against your space on this site. Your disk is the only limit.
         </li>
