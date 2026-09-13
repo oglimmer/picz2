@@ -296,12 +296,11 @@ public class StorageBackendService {
   }
 
   private StorageBackendResponse toResponse(StorageBackend backend) {
+    User user = userContext.getCurrentUser();
     // Usage is only meaningful for the instance's own storage; a user's own bucket is theirs to
     // fill, and we could not measure it without listing it on every request anyway.
     StorageQuotaService.Usage usage =
-        backend.isSystemDefault()
-            ? storageQuotaService.usageFor(userContext.getCurrentUser())
-            : null;
+        backend.isSystemDefault() ? storageQuotaService.usageFor(user) : null;
     return new StorageBackendResponse(
         backend.getId(),
         backend.getName(),
@@ -311,7 +310,9 @@ public class StorageBackendService {
         backend.getBucket(),
         backend.getAccessKey(),
         backend.isPathStyleAccess(),
-        repository.countAlbumsUsing(backend.getId()),
+        // The caller's albums only. The system default is shared by every user, so an unscoped
+        // count showed a user with one album the whole instance's total.
+        repository.countAlbumsOfUserUsing(backend.getId(), user.getId()),
         backend.getCreatedAt(),
         usage != null ? usage.usedBytes() : null,
         usage != null ? usage.quotaBytes() : null);

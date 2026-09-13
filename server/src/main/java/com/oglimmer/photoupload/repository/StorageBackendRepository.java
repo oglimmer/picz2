@@ -25,7 +25,20 @@ public interface StorageBackendRepository extends JpaRepository<StorageBackend, 
           + " ORDER BY b.systemDefault DESC, b.name ASC")
   List<StorageBackend> findSelectableForUser(Long userId);
 
-  /** Guard for delete: an album still holding bytes there pins the backend. */
+  /**
+   * Guard for delete: an album still holding bytes there pins the backend. Every user's albums
+   * count, which is right for the only backends that can be deleted — a user's own, which only that
+   * user's albums can use. Never show this number to a user: on the system default it is the whole
+   * instance's album count.
+   */
   @Query("SELECT COUNT(a) FROM Album a WHERE a.storageBackend.id = :backendId")
   long countAlbumsUsing(Long backendId);
+
+  /**
+   * How many of one user's albums live on a backend — the number the storage list shows. On the
+   * system default the unscoped {@link #countAlbumsUsing} would report every album on the instance.
+   */
+  @Query(
+      "SELECT COUNT(a) FROM Album a WHERE a.storageBackend.id = :backendId AND a.user.id = :userId")
+  long countAlbumsOfUserUsing(Long backendId, Long userId);
 }
