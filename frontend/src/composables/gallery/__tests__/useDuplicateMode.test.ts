@@ -17,8 +17,40 @@ describe("useDuplicateMode", () => {
     expect([...mode.selected.value].sort()).toEqual([3, 4]);
   });
 
+  it("treats a JPEG and a HEIC of the same name as one photo", () => {
+    const files = ref([
+      f(1, "IMG_1.HEIC"),
+      f(2, "IMG_1.jpg"),
+      f(3, "IMG_2.jpeg"),
+      f(4, "IMG_2.heif"),
+      f(5, "IMG_3.heic"),
+      f(6, "IMG_4.heic"),
+    ]);
+    const mode = useDuplicateMode({ files, deleteMany: vi.fn() });
+    mode.toggleMode();
+    expect(mode.displayedFiles.value.map((x) => x.id)).toEqual([1, 2, 3, 4]);
+    expect([...mode.selected.value].sort()).toEqual([2, 4]);
+  });
+
+  it("leaves a Live Photo's video and other formats alone", () => {
+    const files = ref([f(1, "IMG_1.HEIC"), f(2, "IMG_1.MOV"), f(3, "IMG_2.png"), f(4, "IMG_2.jpg")]);
+    const mode = useDuplicateMode({ files, deleteMany: vi.fn() });
+    mode.toggleMode();
+    expect(mode.displayedFiles.value).toEqual([]);
+  });
+
+  it("never flags two text cards with the same headline", () => {
+    const files = ref([
+      { ...f(1, "Day 1"), kind: "TEXT_CARD" as const },
+      { ...f(2, "Day 1"), kind: "TEXT_CARD" as const },
+    ]);
+    const mode = useDuplicateMode({ files, deleteMany: vi.fn() });
+    mode.toggleMode();
+    expect(mode.displayedFiles.value).toEqual([]);
+  });
+
   it("never flags iOS's FullSizeRender.heic", () => {
-    const files = ref([f(1, "FullSizeRender.heic"), f(2, "fullsizerender.HEIC")]);
+    const files = ref([f(1, "FullSizeRender.heic"), f(2, "fullsizerender.HEIC"), f(3, "FullSizeRender.jpg")]);
     const mode = useDuplicateMode({ files, deleteMany: vi.fn() });
     mode.toggleMode();
     expect(mode.displayedFiles.value).toEqual([]);
