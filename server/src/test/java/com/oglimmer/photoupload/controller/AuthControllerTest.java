@@ -9,10 +9,10 @@ import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.service.SessionTokenService;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import org.springframework.mock.web.MockHttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 
 class AuthControllerTest {
 
@@ -77,13 +77,15 @@ class AuthControllerTest {
     SessionTokenService sessions = Mockito.mock(SessionTokenService.class);
     AuthController controller = new AuthController(Mockito.mock(UserContext.class), sessions);
 
-    MockHttpServletRequest withToken = new MockHttpServletRequest("DELETE", "/api/auth/sessions/current");
+    MockHttpServletRequest withToken =
+        new MockHttpServletRequest("DELETE", "/api/auth/sessions/current");
     withToken.addHeader("Authorization", "Bearer zst_live");
     assertEquals(204, controller.endSession(withToken).getStatusCode().value());
     Mockito.verify(sessions).revoke("zst_live");
 
     // A Basic-authenticated caller has no session to end; that must not blow up.
-    MockHttpServletRequest basic = new MockHttpServletRequest("DELETE", "/api/auth/sessions/current");
+    MockHttpServletRequest basic =
+        new MockHttpServletRequest("DELETE", "/api/auth/sessions/current");
     basic.addHeader("Authorization", "Basic dXNlcjpwdw==");
     assertEquals(204, controller.endSession(basic).getStatusCode().value());
     Mockito.verifyNoMoreInteractions(sessions);

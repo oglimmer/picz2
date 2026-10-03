@@ -280,11 +280,11 @@ public class FileProcessingService {
    * JPEG copy of it, runs {@link ThumbnailService#enhanceImage(Path)} over that copy and PUTs the
    * result to {@link StoragePaths#derivativeEnhancePreviewKey(Long)}. The asset row is leased into
    * PROCESSING and back to DONE like every other job, so the client can wait on the usual status
-   * endpoint — but nothing else on the row moves: not the original, not the derivatives, not
-   * {@code publicToken}. Declining is a DELETE of one key.
+   * endpoint — but nothing else on the row moves: not the original, not the derivatives, not {@code
+   * publicToken}. Declining is a DELETE of one key.
    *
-   * <p>Computed on the large copy rather than the original because the owner is going to look at
-   * it at screen size anyway, and because the recipe is scale-invariant in everything but the blur
+   * <p>Computed on the large copy rather than the original because the owner is going to look at it
+   * at screen size anyway, and because the recipe is scale-invariant in everything but the blur
    * radii, which are relative to the image. The accepted job then runs the same recipe on the
    * original, so what was approved is what gets applied.
    */

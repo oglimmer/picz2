@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.StorageBackend;
 import com.oglimmer.photoupload.mapper.FileInfoMapper;
 import com.oglimmer.photoupload.repository.AlbumEnabledTagRepository;
@@ -20,7 +21,6 @@ import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.BackendStorage;
-import com.oglimmer.photoupload.config.JobsProperties;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -28,9 +28,9 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.mockito.Mockito;
 
 /**
  * The orphan sweep decides what to delete from a set of keys the DB knows about. It used to build

@@ -111,10 +111,10 @@ public class SecurityConfig {
    * <p>Spring's default entry point sends {@code WWW-Authenticate: Basic realm="PhotoUpload"},
    * which is a standing instruction to the browser to prompt for credentials — and Chrome obeys it
    * even for {@code fetch()} calls made by page JavaScript. This SPA sends its own header — Basic
-   * once at login, then a Bearer session token (D78) — so the native dialog is pure
-   * interference: a visitor whose saved session had gone stale got a credentials prompt on a
-   * <em>public</em> share link, over a background request they never asked for, and the app did not
-   * mount until they dismissed it.
+   * once at login, then a Bearer session token (D78) — so the native dialog is pure interference: a
+   * visitor whose saved session had gone stale got a credentials prompt on a <em>public</em> share
+   * link, over a background request they never asked for, and the app did not mount until they
+   * dismissed it.
    *
    * <p>The scheme name is deliberately misspelt rather than dropped: RFC 7235 requires a challenge
    * on a 401, and no browser recognises {@code xBasic}, so the header stays present and inert.

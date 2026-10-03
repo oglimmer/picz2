@@ -192,14 +192,14 @@ public class ThumbnailService {
 
   /**
    * Strength of the shadow lift / highlight pull ("Brilliance"), 0–100. The local-tone mask is
-   * mixed toward neutral grey by {@code 100 - this} percent before the soft-light blend, so 100
-   * is the full textbook effect and 0 is none. 40 lifts a 20 % shadow to about 26 %.
+   * mixed toward neutral grey by {@code 100 - this} percent before the soft-light blend, so 100 is
+   * the full textbook effect and 0 is none. 40 lifts a 20 % shadow to about 26 %.
    */
   static final int BRILLIANCE_PERCENT = 40;
 
   /**
-   * Local-contrast gain ("Definition"): the output is {@code (1 + k) * image - k * blurred}. Apple's
-   * slider at its auto position is subtle; 0.25 adds texture without visible halos.
+   * Local-contrast gain ("Definition"): the output is {@code (1 + k) * image - k * blurred}.
+   * Apple's slider at its auto position is subtle; 0.25 adds texture without visible halos.
    */
   static final double DEFINITION_GAIN = 0.25;
 
@@ -221,9 +221,9 @@ public class ThumbnailService {
    *       soft-light blended over the image. Where the photo is dark the mask is light and lifts;
    *       where it is bright the mask is dark and pulls back. Mixed toward grey by {@link
    *       #BRILLIANCE_PERCENT} so it stays a nudge, not an HDR look.
-   *   <li>Definition (local contrast): {@code (1 + k) * image - k * blurred}, a wide-radius
-   *       unsharp mask by another name, {@link #DEFINITION_GAIN} as {@code k}. Not edge
-   *       sharpening — the derivatives are resampled afterwards and would lose that anyway.
+   *   <li>Definition (local contrast): {@code (1 + k) * image - k * blurred}, a wide-radius unsharp
+   *       mask by another name, {@link #DEFINITION_GAIN} as {@code k}. Not edge sharpening — the
+   *       derivatives are resampled afterwards and would lose that anyway.
    *   <li>{@code -modulate 100,112,100} — 12 % more saturation, hue and brightness untouched.
    * </ol>
    *
@@ -231,17 +231,16 @@ public class ThumbnailService {
    * pixel size, because a Gaussian blur with a radius of 2 % of the width is what makes these two
    * steps expensive, and a Pi would spend most of a minute on it at full resolution — the same
    * lesson as {@link #measureMeanLuminance(Path)}. On the small copy the blur is free and the mean
-   * is preserved; the cost that remains is two resizes and two composites at full size. The size
-   * is passed as literal numbers from {@link #measureDimensions(Path)}: the legacy {@code convert}
+   * is preserved; the cost that remains is two resizes and two composites at full size. The size is
+   * passed as literal numbers from {@link #measureDimensions(Path)}: the legacy {@code convert}
    * entry point does not expand percent escapes in geometry arguments (asset 6986, 2026-09-06:
    * "invalid argument for option '-resize': %[dims]!"), and {@code convert} is what every other
    * ImageMagick call here uses.
    *
    * <p>Only the first frame ({@code [0]}) is read, so an animated GIF comes out as one still. Three
    * invocations: header-only {@code identify} for the size, a small decode for the mean, then the
-   * pass itself. The output keeps the input format (unknown
-   * {@code .tmp} suffix → ImageMagick writes with the reader's format), exactly like {@link
-   * #rotateImageLeft(Path)}.
+   * pass itself. The output keeps the input format (unknown {@code .tmp} suffix → ImageMagick
+   * writes with the reader's format), exactly like {@link #rotateImageLeft(Path)}.
    */
   public boolean enhanceImage(Path imageFile) {
     int[] dims = measureDimensions(imageFile);
@@ -253,7 +252,8 @@ public class ThumbnailService {
     String gamma = String.format(java.util.Locale.ROOT, "%.3f", enhanceGammaFor(mean));
     String maskGreyMix = Integer.toString(100 - BRILLIANCE_PERCENT);
     String definitionArgs =
-        String.format(java.util.Locale.ROOT, "0,%.3f,%.3f,0", -DEFINITION_GAIN, 1 + DEFINITION_GAIN);
+        String.format(
+            java.util.Locale.ROOT, "0,%.3f,%.3f,0", -DEFINITION_GAIN, 1 + DEFINITION_GAIN);
     Path tempFile = imageFile.getParent().resolve(imageFile.getFileName().toString() + ".tmp");
     List<String> cmd =
         List.of(
@@ -261,25 +261,62 @@ public class ThumbnailService {
             "-quiet",
             imageFile.toAbsolutePath().toString() + "[0]",
             // 1. black/white point per channel
-            "-channel", "RGB", "-contrast-stretch", "0.2%x0.2%", "+channel",
+            "-channel",
+            "RGB",
+            "-contrast-stretch",
+            "0.2%x0.2%",
+            "+channel",
             // 2. exposure
-            "-gamma", gamma,
+            "-gamma",
+            gamma,
             // 3. global midtone contrast
-            "-sigmoidal-contrast", "2.5x50%",
+            "-sigmoidal-contrast",
+            "2.5x50%",
             // 4. brilliance: inverted, blurred luminance, soft-light blended
-            "(", "+clone", "-scale", "10%", "-colorspace", "Gray", "-negate", "-blur", "0x8",
-            "-fill", "gray50", "-colorize", maskGreyMix, "-colorspace", "sRGB",
-            "-resize", fullSize, ")",
-            "-compose", "SoftLight", "-composite",
+            "(",
+            "+clone",
+            "-scale",
+            "10%",
+            "-colorspace",
+            "Gray",
+            "-negate",
+            "-blur",
+            "0x8",
+            "-fill",
+            "gray50",
+            "-colorize",
+            maskGreyMix,
+            "-colorspace",
+            "sRGB",
+            "-resize",
+            fullSize,
+            ")",
+            "-compose",
+            "SoftLight",
+            "-composite",
             // 5. definition: (1+k)*image - k*blurred(image)
-            "(", "+clone", "-scale", "10%", "-blur", "0x4", "-resize", fullSize, ")",
-            "-define", "compose:args=" + definitionArgs,
-            "-compose", "Mathematics", "-composite", "-clamp",
+            "(",
+            "+clone",
+            "-scale",
+            "10%",
+            "-blur",
+            "0x4",
+            "-resize",
+            fullSize,
+            ")",
+            "-define",
+            "compose:args=" + definitionArgs,
+            "-compose",
+            "Mathematics",
+            "-composite",
+            "-clamp",
             // 6. saturation
-            "-modulate", "100,112,100",
+            "-modulate",
+            "100,112,100",
             tempFile.toAbsolutePath().toString());
     try {
-      log.info("✨ Enhancing: {} (mean luminance {}, gamma {})", imageFile.getFileName(), mean, gamma);
+      log.info(
+          "✨ Enhancing: {} (mean luminance {}, gamma {})", imageFile.getFileName(), mean, gamma);
       long started = System.nanoTime();
       ProcessRunner.Result r = ProcessRunner.run(cmd, 120, TimeUnit.SECONDS);
       if (r.success() && tempFile.toFile().exists()) {
@@ -425,8 +462,8 @@ public class ThumbnailService {
   /**
    * The {@code -gamma} value that moves an image's mean luminance toward mid-grey — softened to
    * half the correction and clamped to {@code [0.85, 1.3]}, so the result reads as "a bit better
-   * exposed" and never as a different photo. A mean of exactly 0 or 1 (or NaN) yields 1.0: there
-   * is nothing to correct toward.
+   * exposed" and never as a different photo. A mean of exactly 0 or 1 (or NaN) yields 1.0: there is
+   * nothing to correct toward.
    */
   static double enhanceGammaFor(double meanLuminance) {
     if (!(meanLuminance > 0.0) || !(meanLuminance < 1.0)) {

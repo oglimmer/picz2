@@ -10,10 +10,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.JobType;
 import com.oglimmer.photoupload.entity.ProcessingStatus;
 import com.oglimmer.photoupload.entity.User;
+import com.oglimmer.photoupload.exception.JobQueueSaturatedException;
 import com.oglimmer.photoupload.exception.ResourceGoneException;
 import com.oglimmer.photoupload.exception.ResourceNotFoundException;
 import com.oglimmer.photoupload.exception.ValidationException;
@@ -27,8 +29,6 @@ import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
 import com.oglimmer.photoupload.storage.BackendStorage;
-import com.oglimmer.photoupload.config.JobsProperties;
-import com.oglimmer.photoupload.exception.JobQueueSaturatedException;
 import java.nio.file.Path;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,10 +98,10 @@ class FileStorageServiceEnhanceTest {
   }
 
   /**
-   * Backpressure on the re-processing paths (2026-09-06). A bulk enhance over a large album used
-   * to enqueue a job per photo with nothing in the way — the ingest paths had a guard on this
-   * same threshold since Phase 4, these did not. Refusing is safe here in a way it is not for an
-   * upload: the asset keeps the derivatives it already has.
+   * Backpressure on the re-processing paths (2026-09-06). A bulk enhance over a large album used to
+   * enqueue a job per photo with nothing in the way — the ingest paths had a guard on this same
+   * threshold since Phase 4, these did not. Refusing is safe here in a way it is not for an upload:
+   * the asset keeps the derivatives it already has.
    */
   @Test
   void enhanceIsRefusedWhenTheQueueIsAtTheThreshold() {

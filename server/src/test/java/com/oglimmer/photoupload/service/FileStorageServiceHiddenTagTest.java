@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
 
 import com.oglimmer.photoupload.config.FileStorageProperties;
+import com.oglimmer.photoupload.config.JobsProperties;
 import com.oglimmer.photoupload.entity.Album;
 import com.oglimmer.photoupload.entity.FileMetadata;
 import com.oglimmer.photoupload.entity.ImageTag;
@@ -23,7 +24,6 @@ import com.oglimmer.photoupload.repository.SlideshowRecordingRepository;
 import com.oglimmer.photoupload.repository.StorageBackendRepository;
 import com.oglimmer.photoupload.repository.TagRepository;
 import com.oglimmer.photoupload.security.UserContext;
-import com.oglimmer.photoupload.config.JobsProperties;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;

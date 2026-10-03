@@ -46,10 +46,10 @@ public class AuthController {
   }
 
   /**
-   * Logs the browser in (D78). The request itself is Basic-authenticated — that is the one and
-   * only time the web app sends the password — and the answer is a session token the browser
-   * keeps instead of it. The same fields as {@code /check} ride along so the client needs one
-   * round-trip, not two.
+   * Logs the browser in (D78). The request itself is Basic-authenticated — that is the one and only
+   * time the web app sends the password — and the answer is a session token the browser keeps
+   * instead of it. The same fields as {@code /check} ride along so the client needs one round-trip,
+   * not two.
    */
   @PostMapping("/sessions")
   public ResponseEntity<SessionResponse> createSession() {
