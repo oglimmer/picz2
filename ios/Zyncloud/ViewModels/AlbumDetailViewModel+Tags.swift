@@ -445,7 +445,35 @@ extension AlbumDetailViewModel {
 
     func endSelecting() {
         isSelecting = false
+        isFindingDuplicates = false
         selectedPhotoIds = []
+    }
+
+    /// The photos "Find Duplicates" shows: those whose name another photo also carries, with a
+    /// JPEG and a HEIC of the same name counted as one (see ``DuplicateNames``).
+    var duplicatePhotos: [Photo] {
+        DuplicateNames.duplicates(in: photos)
+    }
+
+    /// What the grid offers to pick from: the duplicates while finding them, otherwise everything.
+    var selectablePhotos: [Photo] {
+        isFindingDuplicates ? duplicatePhotos : photos
+    }
+
+    /// Opens the duplicate view with every copy but the first already picked, so one Delete keeps
+    /// one of each. An album with no duplicates says so instead of opening an empty grid.
+    func beginFindingDuplicates() {
+        let extras = DuplicateNames.extraCopies(in: photos)
+        guard !extras.isEmpty else {
+            alertState = AlertState(
+                title: "No Duplicates",
+                message: "No two photos in this album share a name.",
+            )
+            return
+        }
+        selectedPhotoIds = extras
+        isFindingDuplicates = true
+        isSelecting = true
     }
 
     func toggleSelection(of photo: Photo) {
@@ -456,8 +484,10 @@ extension AlbumDetailViewModel {
         }
     }
 
+    /// Picks what is on screen. While finding duplicates that is only the duplicates — "All"
+    /// must never reach the photos the grid is hiding.
     func selectAllPhotos() {
-        selectedPhotoIds = Set(photos.map(\.id))
+        selectedPhotoIds = Set(selectablePhotos.map(\.id))
     }
 
     private func reportNotAuthenticated() {

@@ -68,6 +68,10 @@ class AlbumDetailViewModel: ViewModelProtocol {
     /// reload — a stored `Photo` would go stale, an id does not.
     @Published var selectedPhotoIds: Set<Int> = []
 
+    /// True while "Find Duplicates" narrows the grid to photos that share a name. A kind of
+    /// picking: ``isSelecting`` is on with it, and ``endSelecting()`` ends both.
+    @Published var isFindingDuplicates: Bool = false
+
     /// True while a bulk rotate or delete is running, so the selection bar can go quiet and a
     /// second tap cannot start the same work on top of itself.
     @Published private(set) var isBulkWorking: Bool = false

@@ -169,7 +169,10 @@ struct AlbumDetailView: View {
                 uploadBanner
             }
 
-            if viewModel.isArrangingByHand {
+            // Always flat: the day-and-place layout would scatter the copies of one name.
+            if viewModel.isFindingDuplicates {
+                photoGrid
+            } else if viewModel.isArrangingByHand {
                 arrangeByHandList
             } else if layoutMode == .days {
                 daysGallery
@@ -412,7 +415,8 @@ struct AlbumDetailView: View {
     /// True when every photo in the album is picked. Also what turns the whole-album shortcut
     /// on in the view model, so the label has to agree with it.
     private var allPhotosPicked: Bool {
-        !viewModel.photos.isEmpty && viewModel.selectedPhotoIds.count == viewModel.photos.count
+        let selectable = viewModel.selectablePhotos
+        return !selectable.isEmpty && viewModel.selectedPhotoIds.count == selectable.count
     }
 
     /// Picking works by tapping tiles, and the map has no tiles — it draws pins. So Select is
@@ -426,6 +430,10 @@ struct AlbumDetailView: View {
     private var selectionCountLabel: String {
         if viewModel.isBulkWorking {
             return "Working…"
+        }
+
+        if viewModel.isFindingDuplicates {
+            return "\(viewModel.selectedPhotoIds.count) of \(viewModel.duplicatePhotos.count) selected"
         }
 
         switch viewModel.selectedPhotoIds.count {
@@ -465,7 +473,7 @@ struct AlbumDetailView: View {
                 selectionAction(
                     title: allPhotosPicked ? "Clear" : "All",
                     systemImage: allPhotosPicked ? "xmark.circle" : "checklist",
-                    isEnabled: !viewModel.photos.isEmpty && !viewModel.isBulkWorking,
+                    isEnabled: !viewModel.selectablePhotos.isEmpty && !viewModel.isBulkWorking,
                 ) {
                     if allPhotosPicked {
                         viewModel.selectedPhotoIds = []
@@ -474,28 +482,31 @@ struct AlbumDetailView: View {
                     }
                 }
 
-                selectionAction(
-                    title: "Tag",
-                    systemImage: "tag",
-                    isEnabled: hasSelection && !viewModel.isApplyingTags && !viewModel.isBulkWorking,
-                ) {
-                    isBulkTagPresented = true
-                }
+                // Finding duplicates is for throwing the extra copies away: editing them is noise.
+                if !viewModel.isFindingDuplicates {
+                    selectionAction(
+                        title: "Tag",
+                        systemImage: "tag",
+                        isEnabled: hasSelection && !viewModel.isApplyingTags && !viewModel.isBulkWorking,
+                    ) {
+                        isBulkTagPresented = true
+                    }
 
-                selectionAction(
-                    title: "Enhance",
-                    systemImage: "wand.and.stars",
-                    isEnabled: viewModel.selectionHasEnhanceablePhoto && !viewModel.isBulkWorking,
-                ) {
-                    confirmingSelectionEnhance = true
-                }
+                    selectionAction(
+                        title: "Enhance",
+                        systemImage: "wand.and.stars",
+                        isEnabled: viewModel.selectionHasEnhanceablePhoto && !viewModel.isBulkWorking,
+                    ) {
+                        confirmingSelectionEnhance = true
+                    }
 
-                selectionAction(
-                    title: "Rotate",
-                    systemImage: "rotate.left",
-                    isEnabled: viewModel.selectionHasRotatablePhoto && !viewModel.isBulkWorking,
-                ) {
-                    viewModel.rotateSelection()
+                    selectionAction(
+                        title: "Rotate",
+                        systemImage: "rotate.left",
+                        isEnabled: viewModel.selectionHasRotatablePhoto && !viewModel.isBulkWorking,
+                    ) {
+                        viewModel.rotateSelection()
+                    }
                 }
 
                 selectionAction(
@@ -585,6 +596,14 @@ struct AlbumDetailView: View {
                 Label("Album Tags", systemImage: "tag")
             }
 
+            // The web's "Find duplicate names": opens picking with the extra copies picked.
+            Button {
+                viewModel.beginFindingDuplicates()
+            } label: {
+                Label("Find Duplicates", systemImage: "square.on.square")
+            }
+            .disabled(viewModel.photos.isEmpty)
+
             Button {
                 isNarrationPresented = true
             } label: {
@@ -668,7 +687,7 @@ struct AlbumDetailView: View {
                 emptyStateView
             } else {
                 LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(viewModel.photos) { photo in
+                    ForEach(viewModel.selectablePhotos) { photo in
                         photoTile(for: photo)
                     }
                 }
