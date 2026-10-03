@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,11 +73,68 @@ public class FfmpegService {
   private static final java.util.regex.Pattern ISO6709 =
       java.util.regex.Pattern.compile("^([+-]\\d{1,2}(?:\\.\\d+)?)([+-]\\d{1,3}(?:\\.\\d+)?)");
 
+  /**
+   * How hard the encoder works on one clip, chosen from the clip's length.
+   *
+   * <p>Length, not file size, because the wall clock follows the number of frames and a file's size
+   * does not: asset 10677 (3 min, 1080p60, 496 MB) and a 30 min HEVC clip of about 220 MB both ran
+   * into {@link #TRANSCODE_TIMEOUT_MINUTES} on 2026-09-29/30. Short clips keep the original
+   * settings, so nothing changes for the common case.
+   *
+   * <p>{@code fpsMax} caps the output rate without raising it: a 60 fps source comes out at 30, a
+   * 24 fps source stays at 24. iPhone slow-motion and 60 fps clips are where most of the frames
+   * come from, and the web player gains nothing from more than 30.
+   */
+  enum TranscodeProfile {
+    SHORT("medium", 1920, null),
+    LONG("veryfast", 1920, 30),
+    VERY_LONG("veryfast", 1280, 30);
+
+    final String preset;
+    final int maxWidth;
+    final Integer fpsMax;
+
+    TranscodeProfile(String preset, int maxWidth, Integer fpsMax) {
+      this.preset = preset;
+      this.maxWidth = maxWidth;
+      this.fpsMax = fpsMax;
+    }
+  }
+
+  /** Up to here a clip keeps the original settings: 60 s at 60 fps is ~15 min on the Pi. */
+  static final double SHORT_MAX_SECONDS = 60;
+
+  /** Past this a clip drops to 720p as well, so that ~30 min of footage still fits the limit. */
+  static final double LONG_MAX_SECONDS = 10 * 60;
+
+  /**
+   * Picks the profile for a clip. An unknown length gets {@link TranscodeProfile#LONG}: guessing
+   * short risks the timeout, guessing long only costs a little quality.
+   */
+  static TranscodeProfile profileFor(Double durationSeconds) {
+    if (durationSeconds == null) {
+      return TranscodeProfile.LONG;
+    }
+    if (durationSeconds <= SHORT_MAX_SECONDS) {
+      return TranscodeProfile.SHORT;
+    }
+    if (durationSeconds <= LONG_MAX_SECONDS) {
+      return TranscodeProfile.LONG;
+    }
+    return TranscodeProfile.VERY_LONG;
+  }
+
   public boolean transcodeVideo(Path originalFile, Path outputPath) {
     File outputFile = outputPath.toFile();
     outputFile.getParentFile().mkdirs();
 
-    List<String> cmd =
+    Double durationSeconds = probeDurationSeconds(originalFile);
+    TranscodeProfile profile = profileFor(durationSeconds);
+    log.info(
+        "Transcode profile {} for {} ({} s)", profile, originalFile.getFileName(), durationSeconds);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.addAll(
         List.of(
             "ffmpeg",
             "-i",
@@ -94,14 +152,20 @@ public class FfmpegService {
             // web-playable derivative. The failure is silent: the job still completes DONE.
             "-pix_fmt",
             "yuv420p",
-            // Cap the web derivative at 1080p. A 4K (3840x2160) iPhone clip encoded at native
-            // resolution made x264 hold ~50 lookahead frames of 12 MiB each, which pushed the
-            // worker past its 2 GiB limit and got the pod OOMKilled — repeatedly, because the
-            // job was retried onto the other replica (asset 6720, 2026-08-23). Scaling down
-            // only ever shrinks: min(1920,iw) leaves sub-1080p sources untouched, and -2 keeps
-            // the aspect ratio while forcing an even height (x264 rejects odd dimensions).
+            // Cap the web derivative at 1080p (720p for VERY_LONG). A 4K (3840x2160) iPhone clip
+            // encoded at native resolution made x264 hold ~50 lookahead frames of 12 MiB each,
+            // which pushed the worker past its 2 GiB limit and got the pod OOMKilled —
+            // repeatedly, because the job was retried onto the other replica (asset 6720,
+            // 2026-08-23). Scaling down only ever shrinks: min(maxWidth,iw) leaves smaller
+            // sources untouched, and -2 keeps the aspect ratio while forcing an even height
+            // (x264 rejects odd dimensions).
             "-vf",
-            "scale='min(1920,iw)':-2",
+            "scale='min(" + profile.maxWidth + ",iw)':-2"));
+    if (profile.fpsMax != null) {
+      cmd.addAll(List.of("-fpsmax", String.valueOf(profile.fpsMax)));
+    }
+    cmd.addAll(
+        List.of(
             // rc-lookahead is the dominant x264 buffer; 'medium' defaults to 40 frames. 20 is
             // a second, resolution-independent guard so an unexpectedly large source cannot
             // reach the old footprint again. Quality cost at this bitrate is negligible.
@@ -113,7 +177,7 @@ public class FfmpegService {
             "-threads",
             TRANSCODE_THREADS,
             "-preset",
-            "medium",
+            profile.preset,
             "-c:a",
             "aac",
             "-b:a",
@@ -121,7 +185,7 @@ public class FfmpegService {
             "-movflags",
             "+faststart",
             "-y",
-            outputPath.toAbsolutePath().toString());
+            outputPath.toAbsolutePath().toString()));
 
     try {
       log.debug(
@@ -141,6 +205,48 @@ public class FfmpegService {
     } catch (IOException e) {
       log.error("IO error during transcode for {}: {}", originalFile, e.getMessage());
       return false;
+    }
+  }
+
+  /**
+   * The clip's length in seconds from the container, or null when ffprobe cannot tell. Only used to
+   * pick a {@link TranscodeProfile}, so a failure here must never fail the transcode.
+   */
+  Double probeDurationSeconds(Path videoFile) {
+    List<String> cmd =
+        List.of(
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            videoFile.toAbsolutePath().toString());
+    try {
+      ProcessRunner.Result r = ProcessRunner.run(cmd, PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      return r.success() ? parseDuration(r.output()) : null;
+    } catch (IOException e) {
+      log.debug(
+          "Could not read video duration from {}: {}", videoFile.getFileName(), e.getMessage());
+      return null;
+    }
+  }
+
+  /**
+   * Parses ffprobe's bare {@code format=duration} value, e.g. "180.583333"; "N/A" gives null. Reads
+   * the last non-blank line, because ProcessRunner merges stderr into the output.
+   */
+  static Double parseDuration(String output) {
+    if (output == null || output.isBlank()) {
+      return null;
+    }
+    String[] lines = output.strip().split("\\R");
+    try {
+      double seconds = Double.parseDouble(lines[lines.length - 1].trim());
+      return seconds > 0 ? seconds : null;
+    } catch (NumberFormatException e) {
+      return null;
     }
   }
 
