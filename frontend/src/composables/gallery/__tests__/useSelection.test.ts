@@ -26,11 +26,13 @@ describe("useSelection", () => {
     expect([...sel.selectedFileIds.value].sort()).toEqual([1, 3]);
   });
 
-  it("handles Escape and Ctrl/Cmd+A", () => {
+  it("clears on Escape and leaves Ctrl/Cmd+A to the browser", () => {
     const files = ref([f(1), f(2)]);
     const sel = useSelection(files);
-    expect(sel.handleKeydown(new KeyboardEvent("keydown", { key: "a", ctrlKey: true }))).toBe(true);
-    expect(sel.selectedFileIds.value.size).toBe(2);
+    expect(sel.handleKeydown(new KeyboardEvent("keydown", { key: "a", metaKey: true }))).toBe(false);
+    expect(sel.handleKeydown(new KeyboardEvent("keydown", { key: "a", ctrlKey: true }))).toBe(false);
+    expect(sel.selectedFileIds.value.size).toBe(0);
+    sel.toggle(1, 0);
     expect(sel.handleKeydown(new KeyboardEvent("keydown", { key: "Escape" }))).toBe(true);
     expect(sel.selectedFileIds.value.size).toBe(0);
     // Escape with nothing selected is not ours to consume (the lightbox may want it).

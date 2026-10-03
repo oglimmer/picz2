@@ -6,8 +6,7 @@ export interface Selection {
   selectionActive: ComputedRef<boolean>;
   toggle: (fileId: number, index: number, shiftKey?: boolean) => void;
   clear: () => void;
-  selectAll: () => void;
-  /** Escape clears, Ctrl/Cmd+A selects everything. Returns true when it consumed the key. */
+  /** Escape clears. Returns true when it consumed the key. */
   handleKeydown: (event: KeyboardEvent) => boolean;
 }
 
@@ -40,21 +39,13 @@ export function useSelection(files: Ref<AlbumFile[]>): Selection {
     lastSelectedIndex.value = null;
   }
 
-  function selectAll(): void {
-    selectedFileIds.value = new Set(files.value.map((f) => f.id));
-  }
-
   function handleKeydown(event: KeyboardEvent): boolean {
     if (event.key === "Escape" && selectionActive.value) {
       clear();
       return true;
     }
-    if ((event.key === "a" || event.key === "A") && (event.ctrlKey || event.metaKey)) {
-      selectAll();
-      return true;
-    }
     return false;
   }
 
-  return { selectedFileIds, selectionActive, toggle, clear, selectAll, handleKeydown };
+  return { selectedFileIds, selectionActive, toggle, clear, handleKeydown };
 }
