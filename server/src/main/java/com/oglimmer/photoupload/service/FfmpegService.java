@@ -17,6 +17,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
@@ -209,8 +210,19 @@ public class FfmpegService {
   }
 
   /**
-   * The clip's length in seconds from the container, or null when ffprobe cannot tell. Only used to
-   * pick a {@link TranscodeProfile}, so a failure here must never fail the transcode.
+   * Where the thumbnail frame is taken: one second in, or the middle of a clip shorter than two
+   * seconds. Seeking past the end gives ffmpeg no frame and an empty output (asset 10908, 0.73 s).
+   */
+  static double thumbnailSeekSeconds(Double durationSeconds) {
+    if (durationSeconds == null) {
+      return 1.0;
+    }
+    return Math.min(1.0, durationSeconds / 2);
+  }
+
+  /**
+   * The clip's length in seconds from the container, or null when ffprobe cannot tell. Used to pick
+   * a {@link TranscodeProfile} and the thumbnail frame, so a failure here must never fail either.
    */
   Double probeDurationSeconds(Path videoFile) {
     List<String> cmd =
@@ -258,7 +270,8 @@ public class FfmpegService {
         List.of(
             "ffmpeg",
             "-ss",
-            "1",
+            String.format(
+                Locale.ROOT, "%.3f", thumbnailSeekSeconds(probeDurationSeconds(videoFile))),
             "-i",
             videoFile.toAbsolutePath().toString(),
             "-vframes",
