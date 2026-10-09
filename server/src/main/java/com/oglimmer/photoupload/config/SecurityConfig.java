@@ -79,7 +79,7 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/public/subscription/**")
                     .permitAll()
-                    .requestMatchers("/", "/actuator/health/**", "/actuator/info")
+                    .requestMatchers("/", "/api/health", "/actuator/health/**", "/actuator/info")
                     .permitAll()
                     .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                     .permitAll()

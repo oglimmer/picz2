@@ -488,6 +488,8 @@ helm upgrade photo-upload ./helm/photo-upload --reuse-values --set retention.ori
 
 The MinIO circuit breaker is wired into `MinioHealthIndicator`: when it OPENs, K8s removes the api pod from the Service for the duration of the outage.
 
+For an external monitor, use `GET https://<host>/api/health`. It goes through the existing `/api` Ingress path to the api pod, needs no login and returns `{"status":"UP"}` with 200. It returns 503 when the full actuator health is `DOWN` or `OUT_OF_SERVICE`. `/actuator/*` lives on the management port 8081, which the Ingress does not route.
+
 ## Storage model
 
 Every album names the storage its bytes live in (`albums.storage_backend_id`). By default that is
