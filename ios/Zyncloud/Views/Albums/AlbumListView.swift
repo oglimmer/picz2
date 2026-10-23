@@ -30,12 +30,24 @@ struct AlbumListView: View {
     /// keeps the two switches apart as well.
     @AppStorage("albumGridSize") private var gridSize: GridSizeMode = .medium
 
+    /// The album that was open when the app was last used, or 0 for the album list. Written on
+    /// every push and pop, read once per launch to open that album again.
+    @AppStorage("lastOpenAlbumId") private var lastOpenAlbumId: Int = 0
+
+    /// What is pushed on top of the album list. Value-based so the last album can be put back
+    /// without a tap.
+    @State private var path: [AlbumRoute] = []
+
+    /// Set once the stored album has been looked for, so a later refresh never pushes it again
+    /// after the user went back to the list.
+    @State private var didRestoreLastAlbum = false
+
     private var columns: [GridItem] {
         AdaptiveGrid.cardColumns(horizontalSizeClass, size: gridSize)
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 if viewModel.isLoading, viewModel.albums.isEmpty {
                     ProgressView("Loading albums...")
@@ -57,11 +69,7 @@ struct AlbumListView: View {
                             if isReordering {
                                 reorderableTile(for: album)
                             } else {
-                                NavigationLink(destination: AlbumDetailView(
-                                    album: album,
-                                    onDeleted: { viewModel.albums.removeAll { $0.id == album.id } },
-                                    onChanged: { viewModel.replace($0) },
-                                )) {
+                                NavigationLink(value: AlbumRoute(albumId: album.id)) {
                                     card(for: album)
                                 }
                                 .buttonStyle(PlainButtonStyle())
@@ -73,6 +81,21 @@ struct AlbumListView: View {
             }
             .gridZoom($gridSize)
             .navigationTitle("Albums")
+            .navigationDestination(for: AlbumRoute.self) { route in
+                if let album = viewModel.albums.first(where: { $0.id == route.albumId }) {
+                    AlbumDetailView(
+                        album: album,
+                        onDeleted: { viewModel.albums.removeAll { $0.id == album.id } },
+                        onChanged: { viewModel.replace($0) },
+                    )
+                }
+            }
+            .onChange(of: path) { _, newPath in
+                lastOpenAlbumId = newPath.last?.albumId ?? 0
+            }
+            .onChange(of: viewModel.albums) { _, albums in
+                restoreLastAlbum(from: albums)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(
@@ -147,6 +170,19 @@ struct AlbumListView: View {
                     viewModel.fetchAlbums()
                 }
             }
+        }
+    }
+
+    /// Opens the album from the last session, once, as soon as the first list arrives. An album
+    /// that is gone by now (deleted on the web, another account) is forgotten instead.
+    private func restoreLastAlbum(from albums: [Album]) {
+        guard !didRestoreLastAlbum, !albums.isEmpty else { return }
+        didRestoreLastAlbum = true
+        guard lastOpenAlbumId != 0, path.isEmpty else { return }
+        if albums.contains(where: { $0.id == lastOpenAlbumId }) {
+            path = [AlbumRoute(albumId: lastOpenAlbumId)]
+        } else {
+            lastOpenAlbumId = 0
         }
     }
 
@@ -243,6 +279,12 @@ struct AlbumListView: View {
         }
         .padding()
     }
+}
+
+/// A pushed album. Its own type rather than a bare `Int`, so no other value pushed on this stack
+/// can be mistaken for an album id.
+private struct AlbumRoute: Hashable {
+    let albumId: Int
 }
 
 // MARK: - Album Card View
