@@ -2,6 +2,20 @@ import { ref, type Ref } from "vue";
 import { useApi } from "./useApi";
 import { readCookie, writeCookie } from "../utils/cookies";
 
+/** One photo in the owner's "most looked-at" list (D90). */
+export interface ImageViewStat {
+  fileId: number;
+  publicToken: string;
+  originalName: string;
+  mimeType: string;
+  /** Clicked in the grid or on the map. */
+  opens: number;
+  /** Reached with next/previous while already full screen. */
+  walkIns: number;
+  /** Distinct visitors who looked at it full screen. */
+  viewers: number;
+}
+
 export interface AnalyticsStats {
   analyticsPaused: boolean;
   totalEvents: number;
@@ -10,6 +24,12 @@ export interface AnalyticsStats {
   filterChanges: number;
   audioPlays: number;
   filterTagCounts: Record<string, number>;
+  imageOpens: number;
+  imageWalkIns: number;
+  imagesViewed: number;
+  imagesInAlbum: number;
+  /** Busiest first, at most 50. */
+  topImages: ImageViewStat[];
 }
 
 export interface AnalyticsComposable {
@@ -119,6 +139,11 @@ export function useAnalytics(): AnalyticsComposable {
       filterChanges: data.filterChanges || 0,
       audioPlays: data.audioPlays || 0,
       filterTagCounts: data.filterTagCounts || {},
+      imageOpens: data.imageOpens || 0,
+      imageWalkIns: data.imageWalkIns || 0,
+      imagesViewed: data.imagesViewed || 0,
+      imagesInAlbum: data.imagesInAlbum || 0,
+      topImages: data.topImages || [],
     };
   }
 

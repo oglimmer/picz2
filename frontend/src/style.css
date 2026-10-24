@@ -1700,6 +1700,68 @@ body.landing-page .app-footer { display: none; }
 }
 .bar-list-note { margin-top: var(--sp-3); font-size: .75rem; color: var(--c-text-3); }
 
+/* Per-photo looks (D90): one stacked bar per photo, two parts of one total. The pair is a
+   categorical one (orange accent, blue) checked for colour-blind separation; the legend and the
+   number beside each bar mean nothing rests on colour alone. */
+.image-views-figures { margin-bottom: var(--sp-4); }
+.figure-value-of { font-size: .875rem; font-weight: 500; color: var(--c-text-2); }
+.image-views-summary { font-size: .8125rem; color: var(--c-text-2); margin-bottom: var(--sp-3); }
+.image-views-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+  font-size: .75rem;
+  color: var(--c-text-2);
+}
+.image-views-key { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.image-views-swatch { width: 10px; height: 10px; border-radius: 2px; }
+.image-views-swatch--opens,
+.image-views-seg--opens { background: var(--c-accent); }
+.image-views-swatch--walks,
+.image-views-seg--walks { background: #3A78B8; }
+.image-views-list { list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+.image-views-row {
+  display: grid;
+  grid-template-columns: 2.5ch 40px 1fr auto;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.image-views-rank {
+  font-size: .75rem;
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.image-views-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm, 4px);
+  object-fit: cover;
+  background: var(--c-surface-alt);
+}
+.image-views-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.image-views-name {
+  font-size: .8125rem;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-views-bar { display: flex; gap: 2px; height: 8px; min-width: 3px; }
+.image-views-seg { flex-basis: 0; min-width: 2px; height: 100%; }
+.image-views-seg:last-child { border-radius: 0 4px 4px 0; }
+.image-views-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: .8125rem;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+.image-views-people { font-size: .6875rem; color: var(--c-text-3); }
+.image-views-more { margin-top: var(--sp-3); }
+
 .danger-strip {
   display: flex;
   align-items: center;

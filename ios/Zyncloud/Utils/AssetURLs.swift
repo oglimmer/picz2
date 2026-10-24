@@ -8,8 +8,13 @@ import Foundation
 enum AssetURLs {
     /// The grid-sized rendition.
     static func thumbnail(for photo: Photo) -> URL? {
+        thumbnail(token: photo.publicToken)
+    }
+
+    /// The grid-sized rendition, for a list that carries only the token (the analytics ranking).
+    static func thumbnail(token: String) -> URL? {
         var components = URLComponents(
-            url: AppConfiguration.apiBaseURL.appendingPathComponent("api/i/\(photo.publicToken)"),
+            url: AppConfiguration.apiBaseURL.appendingPathComponent("api/i/\(token)"),
             resolvingAgainstBaseURL: false,
         )
         components?.queryItems = [URLQueryItem(name: "size", value: "thumbnail")]

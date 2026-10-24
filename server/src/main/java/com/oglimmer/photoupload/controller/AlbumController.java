@@ -13,6 +13,7 @@ import com.oglimmer.photoupload.model.AnalyticsStatsResponse;
 import com.oglimmer.photoupload.model.BulkTagResponse;
 import com.oglimmer.photoupload.model.FileInfo;
 import com.oglimmer.photoupload.model.FilesResponse;
+import com.oglimmer.photoupload.model.ImageViewsRequest;
 import com.oglimmer.photoupload.model.MapView;
 import com.oglimmer.photoupload.model.MapViewRequest;
 import com.oglimmer.photoupload.model.MessageResponse;
@@ -182,6 +183,21 @@ public class AlbumController {
         MessageResponse.builder().success(true).message("Analytics logged").build();
 
     return ResponseEntity.ok(response);
+  }
+
+  /**
+   * One batch of full-screen looks from the share page (D90). The browser counts locally and sends
+   * the pile with a keep-alive request when the lightbox closes, the tab hides, or half a minute
+   * passes — not one request per photo.
+   */
+  @PostMapping("/public/{token}/analytics/image-views")
+  public ResponseEntity<Void> logPublicImageViews(
+      @PathVariable String token,
+      @RequestBody ImageViewsRequest batch,
+      HttpServletRequest request) {
+    Album albumEntity = albumService.requirePublishedByShareToken(token);
+    analyticsService.logImageViews(albumEntity, batch, request);
+    return ResponseEntity.noContent().build();
   }
 
   @GetMapping("/{id}/analytics")

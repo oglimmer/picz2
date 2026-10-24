@@ -167,6 +167,121 @@
           </p>
         </section>
 
+        <!--
+          Per-photo looks (D90). Two measures of one thing — how a visitor got to the photo — so
+          each row is one stacked bar: opened from the grid, then walked to inside the lightbox.
+          The numbers beside it are the table view; the hover title spells the row out.
+        -->
+        <section
+          v-if="stats.imagesInAlbum > 0"
+          class="bar-list-section"
+        >
+          <h2 class="section-title">
+            Photos looked at full screen
+          </h2>
+
+          <div class="figure-row image-views-figures">
+            <div class="figure-tile">
+              <p class="figure-value">
+                {{ stats.imagesViewed.toLocaleString() }}
+                <span class="figure-value-of">of {{ stats.imagesInAlbum.toLocaleString() }}</span>
+              </p>
+              <p class="figure-label">
+                Photos looked at
+              </p>
+            </div>
+            <div class="figure-tile">
+              <p class="figure-value">
+                {{ stats.imageOpens.toLocaleString() }}
+              </p>
+              <p class="figure-label">
+                Opened by a click
+              </p>
+            </div>
+            <div class="figure-tile">
+              <p class="figure-value">
+                {{ stats.imageWalkIns.toLocaleString() }}
+              </p>
+              <p class="figure-label">
+                Walked through
+              </p>
+            </div>
+          </div>
+
+          <p
+            v-if="stats.imagesViewed === 0"
+            class="bar-list-note"
+          >
+            Nobody has looked at a photo full screen yet.
+          </p>
+
+          <template v-else>
+            <p class="image-views-summary">
+              {{ coverageSentence }}
+            </p>
+
+            <div
+              class="image-views-legend"
+              aria-hidden="true"
+            >
+              <span class="image-views-key"><span class="image-views-swatch image-views-swatch--opens" />Opened by a click</span>
+              <span class="image-views-key"><span class="image-views-swatch image-views-swatch--walks" />Walked through</span>
+            </div>
+
+            <ol class="image-views-list">
+              <li
+                v-for="(row, index) in visibleImageRows"
+                :key="row.fileId"
+                class="image-views-row"
+                :title="row.tooltip"
+              >
+                <span class="image-views-rank">{{ index + 1 }}</span>
+                <img
+                  v-if="row.thumbUrl"
+                  class="image-views-thumb"
+                  :src="row.thumbUrl"
+                  :alt="row.originalName"
+                  loading="lazy"
+                >
+                <span
+                  v-else
+                  class="image-views-thumb"
+                />
+                <div class="image-views-main">
+                  <span class="image-views-name">{{ row.originalName }}</span>
+                  <div
+                    class="image-views-bar"
+                    :style="{ width: row.width + '%' }"
+                  >
+                    <span
+                      v-if="row.opens > 0"
+                      class="image-views-seg image-views-seg--opens"
+                      :style="{ flexGrow: row.opens }"
+                    />
+                    <span
+                      v-if="row.walkIns > 0"
+                      class="image-views-seg image-views-seg--walks"
+                      :style="{ flexGrow: row.walkIns }"
+                    />
+                  </div>
+                </div>
+                <span class="image-views-value">
+                  <strong>{{ row.total.toLocaleString() }}</strong>
+                  <span class="image-views-people">{{ row.viewers }} {{ row.viewers === 1 ? 'person' : 'people' }}</span>
+                </span>
+              </li>
+            </ol>
+
+            <button
+              v-if="imageRows.length > IMAGE_ROWS"
+              class="action-link image-views-more"
+              @click="showAllImages = !showAllImages"
+            >
+              {{ showAllImages ? 'Show fewer' : `Show top ${imageRows.length}` }}
+            </button>
+          </template>
+        </section>
+
         <section class="danger-strip">
           <div class="danger-strip-copy">
             <h2 class="section-title">
@@ -193,6 +308,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAlbums } from '../composables/useAlbums'
+import { useApi } from '../composables/useApi'
 import { useAnalytics, type AnalyticsStats } from '../composables/useAnalytics'
 import { useNotifications } from '../composables/useNotifications'
 import { useConfirm } from '../composables/useConfirm'
@@ -209,6 +325,7 @@ const { loadAlbumById } = useAlbums()
 const { getAlbumStatistics, resetAlbumAnalytics, setAnalyticsPaused } = useAnalytics()
 const { success, error: showError } = useNotifications()
 const { confirm: confirmDialog } = useConfirm()
+const { getImageUrl } = useApi()
 
 const album = ref<Album | null>(null)
 const stats = ref<AnalyticsStats | null>(null)
@@ -239,6 +356,45 @@ const rankedFilters = computed(() => {
     width: Math.max(2, Math.round((r.count / max) * 100)),
     share: Math.round((r.count / total) * 100)
   }))
+})
+
+/** The most looked-at photos, scaled against the busiest one. */
+const IMAGE_ROWS = 10
+const showAllImages = ref(false)
+
+const imageRows = computed(() => {
+  const rows = stats.value?.topImages ?? []
+  const max = rows.reduce((m, r) => Math.max(m, r.opens + r.walkIns), 0) || 1
+  return rows.map(r => {
+    const total = r.opens + r.walkIns
+    return {
+      ...r,
+      total,
+      width: Math.max(2, Math.round((total / max) * 100)),
+      thumbUrl: getImageUrl(r, 'thumb'),
+      tooltip:
+        `${r.originalName}: opened ${r.opens.toLocaleString()} ${r.opens === 1 ? 'time' : 'times'}, ` +
+        `walked through ${r.walkIns.toLocaleString()} ${r.walkIns === 1 ? 'time' : 'times'}, ` +
+        `by ${r.viewers} ${r.viewers === 1 ? 'person' : 'people'}`
+    }
+  })
+})
+
+const visibleImageRows = computed(() =>
+  showAllImages.value ? imageRows.value : imageRows.value.slice(0, IMAGE_ROWS)
+)
+
+/** What share of the album anyone looked at, and how many photos nobody did. */
+const coverageSentence = computed(() => {
+  const s = stats.value
+  if (!s) return ''
+  const viewed = Math.min(s.imagesViewed, s.imagesInAlbum)
+  const share = Math.round((viewed / s.imagesInAlbum) * 100)
+  const never = s.imagesInAlbum - viewed
+  if (never === 0) return `Every photo was looked at full screen at least once.`
+  return `Visitors looked at ${share}% of the album up close. ${never.toLocaleString()} ${
+    never === 1 ? 'photo was' : 'photos were'
+  } never opened.`
 })
 
 onMounted(async () => {
@@ -277,7 +433,7 @@ async function togglePaused() {
 
 async function handleReset() {
   const confirmed = await confirmDialog(
-    'Reset analytics for this album?\n\nEvery recorded visit, page view, filter change and audio play will be deleted. Your photos are not affected.\n\nThis cannot be undone.',
+    'Reset analytics for this album?\n\nEvery recorded visit, page view, filter change, audio play and photo view will be deleted. Your photos are not affected.\n\nThis cannot be undone.',
     { type: 'danger', confirmText: 'Reset analytics' }
   )
   if (!confirmed) return

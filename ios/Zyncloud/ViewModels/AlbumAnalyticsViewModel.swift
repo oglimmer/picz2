@@ -100,7 +100,7 @@ class AlbumAnalyticsViewModel: ViewModelProtocol {
     func showResetConfirmation() {
         alertState = .confirmation(
             title: "Reset analytics?",
-            message: "Every recorded visit, page view, filter change and audio play for this "
+            message: "Every recorded visit, page view, filter change, audio play and photo view for this "
                 + "album is deleted. Your photos are not affected.\n\nThis cannot be undone.",
             confirmTitle: "Reset",
             confirmAction: { [weak self] in

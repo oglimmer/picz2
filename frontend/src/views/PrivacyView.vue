@@ -81,7 +81,9 @@
         We do not use third‑party analytics. Analytics events are handled on our servers. If you
         accept analytics cookies, we use a `visitor_id` cookie. If you decline, we do not set
         analytics cookies; we may still process IP address and user-agent to derive a short-lived
-        pseudonymous identifier for aggregated statistics and service security. You can object to
+        pseudonymous identifier for aggregated statistics and service security. On a public
+        gallery we also count which photos are opened full screen, so the owner can see which
+        pictures people looked at; these counts carry the same identifier. You can object to
         processing based on legitimate interests (see Section 10).
       </p>
 

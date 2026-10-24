@@ -264,6 +264,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, useTemplateRef 
 import { ApiError, useApi } from '@/composables/useApi'
 import { useSettings } from '@/composables/useSettings'
 import { useAnalytics } from '@/composables/useAnalytics'
+import { useImageViewBeacon } from '@/composables/useImageViewBeacon'
 import { usePresentationGroups } from '@/composables/usePresentationGroups'
 import { useLightboxNavigation } from '@/composables/useLightboxNavigation'
 import { usePlaybackControls } from '@/composables/usePlaybackControls'
@@ -331,8 +332,22 @@ const files = computed(() =>
     : allFilesUnfiltered.value
 )
 
-const { selectedFile, open: openImage, next: navigateNext, previous: navigatePrevious } =
-  useLightboxNavigation(files)
+// Which photos visitors look at full screen (D90). A click on a tile or a map pin is an open;
+// next/previous inside the lightbox is a walk-in. Slideshow playback moves the lightbox without
+// either, so a recorded tour does not count as the visitor looking.
+const imageViews = useImageViewBeacon(() => props.shareToken)
+
+const {
+  selectedFile,
+  open: openLightboxAt,
+  next: navigateNext,
+  previous: navigatePrevious
+} = useLightboxNavigation(files, (file) => imageViews.recordWalkIn(file))
+
+function openImage(file: AlbumFile) {
+  imageViews.recordOpen(file)
+  openLightboxAt(file)
+}
 
 /**
  * The photo a text card (D86) is drawn over, blurred: the next actual picture after it in the
@@ -518,6 +533,8 @@ function closeLightbox() {
     controlsVisible.value = true
   }
   selectedFile.value = null
+  // A closed lightbox is the end of one look through the album: send it now.
+  imageViews.flush()
 }
 
 async function handleConsent(accepted: boolean) {

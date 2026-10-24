@@ -48,6 +48,60 @@ struct AlbumAnalyticsTests {
         #expect(stats.filterTagCounts.isEmpty)
     }
 
+    // MARK: - Photos looked at (D90)
+
+    @Test func photoLooksDecode() throws {
+        let stats = try decode("""
+        {"success":true,"imageOpens":5,"imageWalkIns":12,"imagesViewed":3,"imagesInAlbum":10,
+         "topImages":[{"fileId":4,"publicToken":"tok","originalName":"beach.jpg",
+                       "mimeType":"image/jpeg","opens":3,"walkIns":9,"viewers":2}]}
+        """)
+
+        #expect(stats.imageOpens == 5)
+        #expect(stats.imageWalkIns == 12)
+        #expect(stats.imagesViewed == 3)
+        #expect(stats.imagesInAlbum == 10)
+        #expect(stats.topImages.first?.total == 12)
+        #expect(stats.topImages.first?.viewers == 2)
+    }
+
+    /// A server from before the photo counters answers without them: zeros, not an error.
+    @Test func missingPhotoLooksReadAsZero() throws {
+        let stats = try decode(#"{"success":true,"pageViews":3}"#)
+
+        #expect(stats.imagesInAlbum == 0)
+        #expect(stats.topImages.isEmpty)
+    }
+
+    @Test func coverageCountsTheNeverOpened() {
+        let stats = AlbumAnalytics(imagesViewed: 3, imagesInAlbum: 8)
+
+        #expect(stats.imagesNeverViewed == 5)
+        #expect(stats.viewedShare == 38)
+    }
+
+    /// A photo looked at and hidden later stays "viewed" but leaves the album count, so viewed can
+    /// exceed the album. That must not read as a negative or as more than everything.
+    @Test func coverageIsClampedWhenViewedExceedsTheAlbum() {
+        let stats = AlbumAnalytics(imagesViewed: 9, imagesInAlbum: 8)
+
+        #expect(stats.imagesNeverViewed == 0)
+        #expect(stats.viewedShare == 100)
+    }
+
+    @Test func photoBarsAreScaledAgainstTheBusiestPhoto() {
+        let busy = AlbumAnalytics.ImageViews(
+            fileId: 1, publicToken: "a", originalName: "a", mimeType: nil, opens: 4, walkIns: 6, viewers: 1,
+        )
+        let quiet = AlbumAnalytics.ImageViews(
+            fileId: 2, publicToken: "b", originalName: "b", mimeType: nil, opens: 0, walkIns: 5, viewers: 1,
+        )
+        let stats = AlbumAnalytics(topImages: [busy, quiet])
+
+        #expect(stats.lookFraction(busy) == 1)
+        #expect(stats.lookFraction(quiet) == 0.5)
+    }
+
     // MARK: - Ranking the filters
 
     @Test func filtersAreRankedBusiestFirst() {
